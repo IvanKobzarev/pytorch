@@ -17,6 +17,7 @@
 #include "caffe2/core/logging.h"
 #include "caffe2/utils/fixed_divisor.h"
 #include "caffe2/utils/threadpool/pthreadpool.h"
+#include "caffe2/utils/android_trace.h"
 
 
 static inline size_t divide_round_up(size_t dividend, size_t divisor) {
@@ -322,6 +323,7 @@ void pthreadpool_compute_4d_tiled(
     size_t tile_j,
     size_t tile_k,
     size_t tile_l) {
+  caffe2::ATrace _t("pthreadpool_compute_4d_tiled()");
   if (threadpool == NULL) {
     /* No thread pool provided: execute function sequentially on the calling
      * thread */

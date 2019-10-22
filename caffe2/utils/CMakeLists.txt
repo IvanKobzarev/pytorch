@@ -5,6 +5,7 @@ if (INTERN_BUILD_MOBILE AND NOT BUILD_CAFFE2_MOBILE)
     utils/threadpool/pthreadpool_impl.cc
     utils/threadpool/ThreadPool.cc
     utils/threadpool/ThreadPoolMobile.cc
+    utils/android_trace.cpp
   )
   set(Caffe2_CPU_SRCS ${Caffe2_CPU_SRCS} PARENT_SCOPE)
   return()

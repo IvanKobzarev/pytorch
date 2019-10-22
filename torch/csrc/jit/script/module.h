@@ -7,6 +7,7 @@
 #include <torch/csrc/jit/named_value.h>
 #include <torch/csrc/jit/passes/shape_analysis.h>
 #include <torch/csrc/jit/source_range.h>
+#include <caffe2/utils/android_trace.h>
 
 #include <torch/csrc/WindowsTorchApiMacro.h>
 #include <torch/csrc/api/include/torch/ordered_dict.h>
@@ -137,6 +138,7 @@ struct TORCH_API Module {
   }
 
   IValue forward(std::vector<IValue> inputs) {
+    caffe2::ATrace s("Module::forward()");
     return get_method("forward")(std::move(inputs));
   }
 
@@ -191,6 +193,7 @@ struct TORCH_API Module {
   // each module owns its method. The reference returned here
   // is guarenteed to stay valid until this module has been destroyed
   Method get_method(const std::string& name) const {
+    caffe2::ATrace s("Module::get_method");
     if (auto method = find_method(name)) {
       return *method;
     }

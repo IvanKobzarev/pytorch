@@ -16,6 +16,7 @@
 #include <torch/csrc/jit/passes/bailout_graph.h>
 #include <torch/csrc/jit/script/compilation_unit.h>
 #include <torch/csrc/jit/script/jit_exception.h>
+#include <caffe2/utils/android_trace.h>
 
 #include <exception>
 #include <iostream>
@@ -830,6 +831,7 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
   }
 
   bool runImpl(Stack& stack) {
+    caffe2::ATrace("InterpreterStateImpl::runImpl");
     // if we have never run before, then we might have to return the
     // stack when we suspend, record where it starts so we return the right
     // stack

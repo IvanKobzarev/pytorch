@@ -9,6 +9,7 @@
 #include <torch/csrc/jit/script/compiler.h>
 #include <torch/csrc/jit/script/error_report.h>
 #include <torch/csrc/jit/script/schema_matching.h>
+#include <caffe2/utils/android_trace.h>
 
 namespace torch {
 namespace jit {

@@ -179,6 +179,7 @@ libtorch_sources = [
     "torch/csrc/utils/byte_order.cpp",
     "torch/csrc/utils/tensor_flatten.cpp",
     "torch/csrc/utils/variadic.cpp",
+    "caffe2/utils/android_trace.cpp"
 ]
 
 libtorch_cuda_sources = [

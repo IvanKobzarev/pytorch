@@ -6,6 +6,7 @@
 #include <ATen/native/quantized/cpu/fbgemm_utils.h>
 #include <ATen/native/quantized/cpu/qnnpack_utils.h>
 #include <caffe2/utils/threadpool/ThreadPoolMobile.h>
+#include <caffe2/utils/android_trace.h>
 #include <cmath>
 
 namespace at {
@@ -73,6 +74,7 @@ class QConv2dInt8 final : public c10::OperatorKernel {
       int64_t stride_dims,
       int64_t padding_dims,
       int64_t dilation_dims) {
+    caffe2::ATrace _t("qconv::QConv2dInt8()");
     TORCH_CHECK(
         act_dims == 4,
         "quantized::conv2d(): Expected activation tensor to have 4 dimensions.");
@@ -285,6 +287,7 @@ class QConv2dInt8 final : public c10::OperatorKernel {
       int64_t groups,
       double output_scale,
       int64_t output_zero_point) {
+    caffe2::ATrace _t("qconv::qnnpack_conv()");
     conv_checks(
         act.ndimension(), stride.size(), padding.size(), dilation.size());
 

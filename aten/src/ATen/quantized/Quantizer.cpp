@@ -7,6 +7,7 @@
 #include <ATen/quantized/QTensorImpl.h>
 #include <ATen/core/Tensor.h>
 #include <typeinfo>
+#include <caffe2/utils/android_trace.h>
 
 #ifdef USE_FBGEMM
 #include <fbgemm/QuantUtils.h>
@@ -115,6 +116,7 @@ void quantize_vec(double scale, int64_t zero_point, const float *src, T *dst, si
 
 template <typename T>
 Tensor quantize_tensor(Tensor rtensor, Tensor qtensor, double scale, int64_t zero_point) {
+  caffe2::ATrace __trace("quantize_tensor");
   auto fn_name = "quantize_tensor";
   checkFloatCPUTensor(fn_name, rtensor);
   checkQuantizedCPUTensor<T>(fn_name, qtensor);
