@@ -1,4 +1,5 @@
-include ':app', ':pytorch_android', ':fbjni', ':pytorch_android_torchvision'
+include ':app', ':pytorch_android', ':fbjni', ':pytorch_android_torchvision', 'test_app'
 
 project(':fbjni').projectDir = file('libs/fbjni_local')
 project(':pytorch_android_torchvision').projectDir = file('pytorch_android_torchvision')
+project(':test_app').projectDir = file('test_app/app')
