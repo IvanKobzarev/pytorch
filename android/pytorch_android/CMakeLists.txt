@@ -87,6 +87,7 @@ if (ANDROID_ABI)
   import_static_lib(libeigen_blas)
   import_static_lib(libcpuinfo)
   import_static_lib(libclog)
+  import_static_lib(libagpu)
 
     # Link most things statically on Android.
   target_link_libraries(pytorch_jni
@@ -102,6 +103,7 @@ if (ANDROID_ABI)
       libeigen_blas
       libcpuinfo
       libclog
+      libagpu
   )
 
 else()

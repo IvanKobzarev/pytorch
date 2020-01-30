@@ -362,6 +362,21 @@ if(USE_PYTORCH_QNNPACK)
   endif()
 endif()
 
+if(USE_AGPU)
+  message(DEBUG "cmake/Dependencies.cmake USE_AGPU ON")
+  set(AGPU_SOURCE_DIR "${PROJECT_SOURCE_DIR}/android/agpu" CACHE STRING "AGPU source directory")
+  set(AGPU_LIBRARY_TYPE "static" CACHE STRING "")
+
+  add_subdirectory(
+    "${AGPU_SOURCE_DIR}"
+    "${CONFU_DEPENDENCIES_BINARY_DIR}/agpu")
+  set_property(TARGET agpu PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+  list(APPEND Caffe2_DEPENDENCY_LIBS agpu)
+else()
+  message(DEBUG "cmake/Dependencies.cmake USE_AGPU OFF")
+endif()
+
 # ---[ NNPACK
 if(USE_NNPACK)
   include(${CMAKE_CURRENT_LIST_DIR}/External/nnpack.cmake)

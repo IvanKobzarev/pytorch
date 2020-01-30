@@ -1,4 +1,5 @@
 #include <limits>
+#include <typeinfo>
 #include <ATen/ATen.h>
 #include <ATen/NativeFunctions.h>
 #include <ATen/native/cpu/DepthwiseConvKernel.h>
@@ -9,6 +10,12 @@
 #if AT_NNPACK_ENABLED()
 #include "nnpack.h"
 #endif
+
+#include "agpu.h"
+//#include <android/log.h>
+//#define TAG "AAA"
+//#define ALOGI(...)                                                             \
+//    __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 
 static const int MIOPEN_DIM_MAX = 4;
 
@@ -583,7 +590,7 @@ at::Tensor _convolution(
   int64_t dim = k - 2;
 
   TORCH_CHECK(dim > 0, "weight should have at least three dimensions");
-
+  std::cout << "_convolution output_padding_" << output_padding_ << " ti:" << typeid(output_padding_).name();
   ConvParams params;
   params.stride = expand_param_if_needed(stride_, "stride", dim);
   params.padding = expand_param_if_needed(padding_, "padding", dim);
@@ -594,6 +601,9 @@ at::Tensor _convolution(
   params.benchmark = benchmark;
   params.deterministic = deterministic;
   params.cudnn_enabled = cudnn_enabled;
+  
+  //ALOGI("agpu_test():%s", agpu_test());
+  std::cout << "_convolution params:" << params << std::endl;
 
   check_shape_forward(input, weight, bias, params, input_is_mkldnn);
 
