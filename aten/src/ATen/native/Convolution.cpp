@@ -770,6 +770,36 @@ at::Tensor _convolution_nogroup(
             input, weight, kernel_size, bias,
             stride, padding, dilation);
       } else {  /* dim == 4, non-dilated */
+        
+        std::cout << "---AGPU---CONV()" << std::endl;
+        auto is = input.sizes();
+        std::vector<int64_t> os = conv_output_size(input_sizes, weight.sizes(), padding, stride, dilation);
+        //typeMeta = caffe2::TypeMeta::Make<float>();
+        at::Tensor output = at::empty(os, input.options());
+        const float* inputData = (float*) input.data_ptr();
+        float* outputData = (float*) output.data_ptr();
+        uint32_t input_n = is[0];
+        uint32_t input_c = is[1];
+        uint32_t input_h = is[2];
+        uint32_t input_w = is[3];
+
+        const float* weightData = (float*) weight.data_ptr();
+        auto ws = weight.sizes();
+        uint32_t kernel_c = ws[
+        uint32_t kernel_h,
+        uint32_t kernel_w,
+
+
+        agpu_conv2d(
+
+        std::cout << "---AGPU---CONV()$" << std::endl;
+        
+        //return torch::from_blob(
+        //    outputData, 
+        //    torch::IntArrayRef(shapeVec),
+        //    at::TensorOptions(typeMeta));
+
+        return output;
         if (params.use_nnpack(input)) {
 #if AT_NNPACK_ENABLED()
           return at::_nnpack_spatial_convolution(
