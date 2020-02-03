@@ -771,9 +771,8 @@ at::Tensor _convolution_nogroup(
             input, weight, kernel_size, bias,
             stride, padding, dilation);
       } else {  /* dim == 4, non-dilated */
-        bool useAgpu = false;
-        bool useAgpuG = at::getUseAgpu();
-        std::cout << "III useAgpuG:" << useAgpuG << std::endl;
+        bool useAgpu = at::getUseAgpu();
+        std::cout << "III useAgpu:" << useAgpu << std::endl;
         if (useAgpu) { 
           std::cout << "---AGPU---CONV()" << std::endl;
           auto is = input.sizes();

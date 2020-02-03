@@ -3,6 +3,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <stdio.h>
+#include <iostream>
 
 #include "agpu.h"
 #include "shader.h"
@@ -15,6 +17,58 @@ namespace agpu {
 
 const char* agpu_test() {
   return "GPUGPUGPU";
+}
+
+void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
+  std::cout << m;
+ 
+  if (rank == 0) {
+    std::cout << *t;
+  } else if (rank == 1 || rank == 2) {
+    char fbuf[12];
+    uint32_t rows = rank == 1 ? 1 : dims[0];
+    uint32_t cols = rank == 1 ? dims[0] : dims[1];
+    for (uint32_t i = 0; i < rows; i++) {
+      std::cout << "\n";
+      for (uint32_t j = 0; j < cols; j++) {
+        sprintf(t[i * cols + j], fbuf);
+        std::cout << fbuf << " ";
+      }
+    }
+  } else if (rank == 3) {
+    std::cout << " dims:(";
+    for(uint32_t i = 0; i < rank; i++) {
+      std::cout << dims[i]  << " ";
+    }
+    std::cout << ")";
+    uint32_t d0 = dims[0];
+    uint32_t d12size = dims[1] * dims[2];
+    for (uint32_t i = 0; i < d0; i++) {
+      char s[80];
+      sprintf(s, "[%d, *, *]", i);
+      agpu_print(s, t + i * d12size, 2, dims + 1);
+    }
+  } else if (rank == 4) {
+    std::cout << " dims:(";
+    for(uint32_t i = 0; i < rank; i++) {
+      std::cout << dims[i]  << " ";
+    }
+    std::cout << ")";
+    uint32_t d0 = dims[0];
+    uint32_t d1 = dims[1];
+    uint32_t d23size = dims[2]*dims[3];
+    for (uint32_t i = 0; i < d0; i++) {
+      for (uint32_t j = 0; j < d1; j++) {
+        char s[80];
+        sprintf(s, "[%d, %d, *, *]", i, j);
+        agpu_print(s, t + (i*d0 + j) * d23size, 2, dims + 2);
+      }
+    } 
+  } else {
+    //TODO: support print r > 4
+    assert(false);
+  }
+  std::cout << std::endl;
 }
 
 #ifndef __ANDROID__
@@ -460,6 +514,10 @@ void agpu_conv2d(
       dilation_w,
       groups);
 
+  uint32_t idims[4] = {input_n, input_c, input_h, input_w};
+  agpu_print("input:", input, 4, idims);
+  
+  
   uint32_t totalWeightSize =
       ALIGN_UP4(kernel_c) * ALIGN_UP4(input_c) * kernel_h * kernel_w;
 

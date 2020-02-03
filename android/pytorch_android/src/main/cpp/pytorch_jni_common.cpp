@@ -617,10 +617,6 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
   }
   
   static void test(facebook::jni::alias_ref<jclass>) {
-    static int n = 0;
-    bool useAgpu = (++n % 2) == 0;
-    ALOGI("III jni set useAgpu:%d", useAgpu);
-    at::AgpuGuard g{useAgpu};
 
     ALOGI("----------------");
     ALOGI("----------------");
@@ -695,7 +691,23 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
     
     int64_t groups = 1;
     torch::nn::functional::Conv2dFuncOptions o = torch::nn::functional::Conv2dFuncOptions().stride(1).padding(0);
-    auto output = at::conv2d(
+    
+    ALOGI("III set useAgpu false");
+    at::setUseAgpu(false);
+    auto outputC = at::conv2d(
+        input, 
+        weight, 
+        bias, 
+        c10::IntArrayRef{1}, // stride  
+        c10::IntArrayRef{0}, // padding
+        c10::IntArrayRef{1}, // dilation
+        groups);
+    log("outputC.sizes: ", outputC.sizes());
+    log("outputC: ", outputC);
+
+    ALOGI("III set useAgpu true");
+    at::setUseAgpu(true);
+    auto outputT = at::conv2d(
         input, 
         weight, 
         bias, 
@@ -704,9 +716,14 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
         c10::IntArrayRef{1}, // dilation
         groups);
     
-    log("output.sizes: ", output.sizes());
-    log("output: ", output);
+    log("outputT.sizes: ", outputT.sizes());
+    log("outputT: ", outputT);
     
+    bool eq = torch::equal(outputC, outputT);
+    ALOGI("outputC eq outputT:%d", eq);
+    assert(eq);
+
+
     ALOGI("=================");
     ALOGI("=================");
     ALOGI("=================");
