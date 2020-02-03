@@ -600,11 +600,116 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
     javaClassStatic()->registerNatives({
         makeNativeMethod(
             "nativeSetNumThreads", PyTorchAndroidJni::setNumThreads),
+        makeNativeMethod(
+            "nativeTest", PyTorchAndroidJni::test),
     });
   }
 
   static void setNumThreads(facebook::jni::alias_ref<jclass>, jint numThreads) {
     caffe2::mobile_threadpool()->setNumThreads(numThreads);
+  }
+
+  template<typename T>
+  static void log(const char* m, T t) {
+    std::ostringstream os;
+    os << t << std::endl;
+    ALOGI("%s %s", m, os.str().c_str());
+  }
+  
+  static void test(facebook::jni::alias_ref<jclass>) {
+    static int n = 0;
+    bool useAgpu = (++n % 2) == 0;
+    ALOGI("III jni set useAgpu:%d", useAgpu);
+    at::AgpuGuard g{useAgpu};
+
+    ALOGI("----------------");
+    ALOGI("----------------");
+    ALOGI("----------------");
+    ALOGI("PyTorchJni::test");
+    auto input = torch::tensor(// 1, 3, 3, 3
+      {
+        {
+          // c_0
+          {
+            {1, 2, 3},
+            {4, 5, 6},
+            {7, 8, 9},
+          },
+          // c_1
+          {
+            {101, 102, 103},
+            {104, 105, 106},
+            {107, 108, 109},
+          },
+          // c_2
+          {
+            {1001, 1002, 1003},
+            {1004, 1005, 1006},
+            {1007, 1008, 1009},
+          },
+        }
+      }, torch::kFloat);
+
+    auto weight = torch::tensor(
+      {//2, 3, 2, 2
+        // oc_0 (f_0)
+        {
+          { // oc_0 c_0
+            {1, 0},
+            {0, 0},
+          },
+          { // oc_0 c_1
+            {0, 1},
+            {0, 0},
+          },
+          { // oc_0 c_2
+            {0, 0},
+            {1, 0},
+          }
+        },
+        // oc_1 (f_1)
+        {
+          { // oc_1 c_0
+            {-1, 0},
+            {0, 0},
+          },
+          { // oc_1 c_1
+            {0, -1},
+            {0, 0},
+          },
+          { // oc_1 c_2
+            {0, 0},
+            {-1, 0},
+          }
+        },
+      }, torch::kFloat);
+    auto bias = torch::tensor({0, 0}, torch::kFloat);
+    log("input sizes:", input.sizes());
+    log("input:", input);
+
+    log("w sizes:", weight.sizes());
+    log("w:", weight);
+    
+    log("b sizes:", bias.sizes());
+    log("b:", bias);
+    
+    int64_t groups = 1;
+    torch::nn::functional::Conv2dFuncOptions o = torch::nn::functional::Conv2dFuncOptions().stride(1).padding(0);
+    auto output = at::conv2d(
+        input, 
+        weight, 
+        bias, 
+        c10::IntArrayRef{1}, // stride  
+        c10::IntArrayRef{0}, // padding
+        c10::IntArrayRef{1}, // dilation
+        groups);
+    
+    log("output.sizes: ", output.sizes());
+    log("output: ", output);
+    
+    ALOGI("=================");
+    ALOGI("=================");
+    ALOGI("=================");
   }
 
   static int pfd[2];
@@ -628,7 +733,7 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
       if (buf[rdsz - 1] == '\n')
         --rdsz;
       buf[rdsz] = 0;
-      __android_log_write(ANDROID_LOG_DEBUG, "pytorch-stdOut", buf);
+      __android_log_write(ANDROID_LOG_INFO, "cout", buf);
     }
     return 0;
   }

@@ -59,9 +59,13 @@ endif()
 target_compile_options(pytorch_jni PRIVATE
   -fexceptions
 )
+message(STATUS "libtorch_include_DIR: ${libtorch_include_DIR}")
 
 target_include_directories(pytorch_jni PUBLIC
-    ${libtorch_include_DIR}
+  ${libtorch_include_DIR}
+  ${libtorch_include_DIR}/torch/csrc/api/include
+  #$ENV{LIBTORCH_HOME}/include/torch/csrc/api/include
+  #$ENV{LIBTORCH_HOME}/include
 )
 
 set(fbjni_DIR ${CMAKE_CURRENT_LIST_DIR}/../libs/fbjni/)
@@ -104,6 +108,8 @@ if (ANDROID_ABI)
       libcpuinfo
       libclog
       libagpu
+      EGL
+      GLESv3
   )
 
 else()

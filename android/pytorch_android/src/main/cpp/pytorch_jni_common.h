@@ -1,14 +1,15 @@
 #include <fbjni/fbjni.h>
-#include <torch/csrc/api/include/torch/types.h>
+#include <torch/torch.h>
+#include <ATen/AgpuUtils.h>
 
 #include "cmake_macros.h"
 
 #ifdef __ANDROID__
 #include <android/log.h>
 #define ALOGI(...) \
-  __android_log_print(ANDROID_LOG_INFO, "pytorch-jni", __VA_ARGS__)
+  __android_log_print(ANDROID_LOG_INFO, "XXX", __VA_ARGS__)
 #define ALOGE(...) \
-  __android_log_print(ANDROID_LOG_ERROR, "pytorch-jni", __VA_ARGS__)
+  __android_log_print(ANDROID_LOG_ERROR, "XXX", __VA_ARGS__)
 #endif
 
 #if defined(TRACE_ENABLED) && defined(__ANDROID__)

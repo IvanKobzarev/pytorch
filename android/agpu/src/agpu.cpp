@@ -37,10 +37,10 @@ void agpu_conv2d(
     uint32_t dilation_h,
     uint32_t dilation_w,
     uint32_t groups,
-    float* output) {
-}
+    float* output) {}
 
 #else
+
 class AGLBuffer {
  public:
   AGLBuffer(GLsizeiptr size, GLenum type = GL_SHADER_STORAGE_BUFFER) {
@@ -322,7 +322,6 @@ std::unique_ptr<AGLProgram> getProgram(
   return getProgramWithPrefix(content, prefix);
 }
 
-
 void wait() {
 #ifdef USE_GL_FINISH
   glFinish();
@@ -444,6 +443,23 @@ void agpu_conv2d(
     uint32_t dilation_w,
     uint32_t groups,
     float* output) {
+  AGPU_PRINT(
+      "agpu_conv2d(input nchw %d %d %d %d kernel chw %d %d %d stride hw %d %d i_pad hw %d %d dilation %d %d groups %d",
+      input_n,
+      input_c,
+      input_h,
+      input_w,
+      kernel_c,
+      kernel_h,
+      kernel_w,
+      stride_h,
+      stride_w,
+      input_padding_h,
+      input_padding_w,
+      dilation_h,
+      dilation_w,
+      groups);
+
   uint32_t totalWeightSize =
       ALIGN_UP4(kernel_c) * ALIGN_UP4(input_c) * kernel_h * kernel_w;
 
@@ -623,4 +639,3 @@ void agpu_conv2d(
 }
 #endif
 } // namespace agpu
-

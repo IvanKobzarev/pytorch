@@ -5,6 +5,7 @@
 #include <ATen/native/cpu/DepthwiseConvKernel.h>
 #include <ATen/native/utils/ParamUtils.h>
 #include <ATen/native/ConvUtils.h>
+#include <ATen/AgpuUtils.h>
 
 #include <ATen/Config.h>
 #if AT_NNPACK_ENABLED()
@@ -770,36 +771,53 @@ at::Tensor _convolution_nogroup(
             input, weight, kernel_size, bias,
             stride, padding, dilation);
       } else {  /* dim == 4, non-dilated */
-        
-        std::cout << "---AGPU---CONV()" << std::endl;
-        auto is = input.sizes();
-        std::vector<int64_t> os = conv_output_size(input_sizes, weight.sizes(), padding, stride, dilation);
-        //typeMeta = caffe2::TypeMeta::Make<float>();
-        at::Tensor output = at::empty(os, input.options());
-        const float* inputData = (float*) input.data_ptr();
-        float* outputData = (float*) output.data_ptr();
-        uint32_t input_n = is[0];
-        uint32_t input_c = is[1];
-        uint32_t input_h = is[2];
-        uint32_t input_w = is[3];
+        bool useAgpu = false;
+        bool useAgpuG = at::getUseAgpu();
+        std::cout << "III useAgpuG:" << useAgpuG << std::endl;
+        if (useAgpu) { 
+          std::cout << "---AGPU---CONV()" << std::endl;
+          auto is = input.sizes();
+          auto ws = weight.sizes();
+          std::cout << "input.sizes() " << input.sizes() << " weight.sizes() " << weight.sizes();
+          std::vector<int64_t> os = conv_output_size(is, ws, padding, stride, dilation);
+          at::Tensor output = at::empty(os, input.options());
+          const float* inputData = (float*) input.data_ptr();
+          const float* biasData = (float*) bias.data_ptr();
+          float* outputData = (float*) output.data_ptr();
+          uint32_t input_n = is[0];
+          uint32_t input_c = is[1];
+          uint32_t input_h = is[2];
+          uint32_t input_w = is[3];
 
-        const float* weightData = (float*) weight.data_ptr();
-        auto ws = weight.sizes();
-        uint32_t kernel_c = ws[
-        uint32_t kernel_h,
-        uint32_t kernel_w,
+          const float* weightData = (float*) weight.data_ptr();
+          uint32_t kernel_c = ws[0];
+          uint32_t kernel_d = ws[1];
+          uint32_t kernel_h = ws[2];
+          uint32_t kernel_w = ws[3];
+          std::cout << "input nchw:" << input_n << " " << input_c << " " << input_h << " " << input_w << std::endl;
 
+          std::cout << "weight cdhw:" << kernel_c << " " << kernel_d << " " << kernel_h << " " << kernel_w << std::endl;
+          
+          agpu::agpu_conv2d(
+              inputData,
+              input_n,
+              input_c,
+              input_h,
+              input_w,
+              weightData,
+              kernel_c,
+              kernel_h,
+              kernel_w,
+              biasData,
+              stride[0], stride[1],
+              padding[0], padding[1],
+              dilation[0], dilation[1],
+              1 /* groups */,
+              outputData);
 
-        agpu_conv2d(
-
-        std::cout << "---AGPU---CONV()$" << std::endl;
-        
-        //return torch::from_blob(
-        //    outputData, 
-        //    torch::IntArrayRef(shapeVec),
-        //    at::TensorOptions(typeMeta));
-
-        return output;
+          std::cout << "---AGPU---CONV()$" << std::endl;
+          return output;
+        }
         if (params.use_nnpack(input)) {
 #if AT_NNPACK_ENABLED()
           return at::_nnpack_spatial_convolution(

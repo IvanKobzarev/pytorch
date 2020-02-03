@@ -34,11 +34,14 @@ public class MainActivity extends AppCompatActivity {
   private final Runnable mModuleForwardRunnable = new Runnable() {
     @Override
     public void run() {
-      final Result result = doModuleForward();
+      //final Result result = doModuleForward();
+      Log.i(TAG, "---nativeTest()");
+      PyTorchAndroid.nativeTest();
+      Log.i(TAG, "===nativeTest()");
       runOnUiThread(new Runnable() {
         @Override
         public void run() {
-          handleResult(result);
+          //handleResult(result);
           if (mBackgroundHandler != null) {
             mBackgroundHandler.post(mModuleForwardRunnable);
           }
