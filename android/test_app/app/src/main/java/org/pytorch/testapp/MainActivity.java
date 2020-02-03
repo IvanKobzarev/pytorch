@@ -42,9 +42,9 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void run() {
           //handleResult(result);
-          if (mBackgroundHandler != null) {
-            mBackgroundHandler.post(mModuleForwardRunnable);
-          }
+          //if (mBackgroundHandler != null) {
+          //  mBackgroundHandler.post(mModuleForwardRunnable);
+          //}
         }
       });
     }

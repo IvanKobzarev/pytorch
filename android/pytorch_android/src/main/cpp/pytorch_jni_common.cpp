@@ -682,10 +682,8 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
     auto bias = torch::tensor({0, 0}, torch::kFloat);
     log("input sizes:", input.sizes());
     log("input:", input);
-
     log("w sizes:", weight.sizes());
     log("w:", weight);
-    
     log("b sizes:", bias.sizes());
     log("b:", bias);
     

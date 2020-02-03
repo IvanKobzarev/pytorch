@@ -1,10 +1,10 @@
 #include <cassert>
+#include <cstdio>
+#include <iostream>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
-#include <stdio.h>
-#include <iostream>
 
 #include "agpu.h"
 #include "shader.h"
@@ -20,8 +20,9 @@ const char* agpu_test() {
 }
 
 void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
+  static const char* kFloatFormat = "%8.1f";
   std::cout << m;
- 
+
   if (rank == 0) {
     std::cout << *t;
   } else if (rank == 1 || rank == 2) {
@@ -31,14 +32,14 @@ void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
     for (uint32_t i = 0; i < rows; i++) {
       std::cout << "\n";
       for (uint32_t j = 0; j < cols; j++) {
-        sprintf(t[i * cols + j], fbuf);
+        sprintf(fbuf, kFloatFormat, t[i * cols + j]);
         std::cout << fbuf << " ";
       }
     }
   } else if (rank == 3) {
     std::cout << " dims:(";
-    for(uint32_t i = 0; i < rank; i++) {
-      std::cout << dims[i]  << " ";
+    for (uint32_t i = 0; i < rank; i++) {
+      std::cout << dims[i] << " ";
     }
     std::cout << ")";
     uint32_t d0 = dims[0];
@@ -50,22 +51,22 @@ void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
     }
   } else if (rank == 4) {
     std::cout << " dims:(";
-    for(uint32_t i = 0; i < rank; i++) {
-      std::cout << dims[i]  << " ";
+    for (uint32_t i = 0; i < rank; i++) {
+      std::cout << dims[i] << " ";
     }
     std::cout << ")";
     uint32_t d0 = dims[0];
     uint32_t d1 = dims[1];
-    uint32_t d23size = dims[2]*dims[3];
+    uint32_t d23size = dims[2] * dims[3];
     for (uint32_t i = 0; i < d0; i++) {
       for (uint32_t j = 0; j < d1; j++) {
         char s[80];
         sprintf(s, "[%d, %d, *, *]", i, j);
-        agpu_print(s, t + (i*d0 + j) * d23size, 2, dims + 2);
+        agpu_print(s, t + (i * d0 + j) * d23size, 2, dims + 2);
       }
-    } 
+    }
   } else {
-    //TODO: support print r > 4
+    // TODO: support print r > 4
     assert(false);
   }
   std::cout << std::endl;
@@ -94,6 +95,94 @@ void agpu_conv2d(
     float* output) {}
 
 #else
+
+class AGLContext {
+ public:
+  AGLContext() {
+    if (!(eglGetCurrentContext() != EGL_NO_CONTEXT)) {
+      display_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+      if (display_ == EGL_NO_DISPLAY) {
+        AGPU_PRINT("eglGetDisplay error !!! \n");
+        isCreateError_ = true;
+      }
+      int majorVersion;
+      int minorVersion;
+      eglInitialize(display_, &majorVersion, &minorVersion);
+      EGLint numConfigs;
+      static const EGLint configAttribs[] = {EGL_SURFACE_TYPE,
+                                             EGL_PBUFFER_BIT,
+                                             EGL_RENDERABLE_TYPE,
+                                             EGL_OPENGL_ES2_BIT,
+                                             EGL_RED_SIZE,
+                                             8,
+                                             EGL_GREEN_SIZE,
+                                             8,
+                                             EGL_BLUE_SIZE,
+                                             8,
+                                             EGL_ALPHA_SIZE,
+                                             8,
+                                             EGL_NONE};
+
+      EGLConfig surfaceConfig;
+      if (!eglChooseConfig(
+              display_, configAttribs, &surfaceConfig, 1, &numConfigs)) {
+        eglMakeCurrent(
+            display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        eglTerminate(display_);
+        display_ = EGL_NO_DISPLAY;
+        AGPU_PRINT("eglChooseConfig error !!! \n");
+        isCreateError_ = true;
+      }
+
+      static const EGLint contextAttribs[] = {
+          EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+      context_ =
+          eglCreateContext(display_, surfaceConfig, NULL, contextAttribs);
+      static const EGLint surfaceAttribs[] = {
+          EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+      surface_ =
+          eglCreatePbufferSurface(display_, surfaceConfig, surfaceAttribs);
+      eglMakeCurrent(display_, surface_, surface_, context_);
+      eglBindAPI(EGL_OPENGL_ES_API);
+      int major;
+      glGetIntegerv(GL_MAJOR_VERSION, &major);
+      if (major < 3) {
+        isCreateError_ = true;
+      }
+    } else {
+      context_ = EGL_NO_CONTEXT;
+      AGPU_PRINT("eglGetCurrentContext() != EGL_NO_CONTEXT \n");
+      isCreateError_ = true;
+    }
+  }
+
+  ~AGLContext() {
+    if (display_ != EGL_NO_DISPLAY) {
+      if (context_ != EGL_NO_CONTEXT) {
+        eglDestroyContext(display_, context_);
+        context_ = EGL_NO_CONTEXT;
+      }
+      if (surface_ != EGL_NO_SURFACE) {
+        eglDestroySurface(display_, surface_);
+        surface_ = EGL_NO_SURFACE;
+      }
+      eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+      eglTerminate(display_);
+      display_ = EGL_NO_DISPLAY;
+    }
+    eglReleaseThread();
+  }
+
+  bool isCreateError() const {
+    return isCreateError_;
+  }
+
+ private:
+  EGLContext context_;
+  EGLDisplay display_;
+  EGLSurface surface_;
+  bool isCreateError_{false};
+};
 
 class AGLBuffer {
  public:
@@ -385,6 +474,7 @@ void wait() {
 }
 
 void compute(int dim1, int dim2, int dim3) {
+  AGPU_PRINT("compute(%d %d %d)", dim1, dim2, dim3);
   wait();
   glDispatchCompute(dim1, dim2, dim3);
 }
@@ -396,10 +486,11 @@ void device2host(
     int d2,
     int d3,
     bool outputAlign4) {
+  AGPU_PRINT("device2host(%d %d %d align %d)", d1, d2, d3, outputAlign4);
   wait();
   auto depthQuad = UP_DIV(d3, 4);
   auto size = depthQuad * 4 * d1 * d2 * sizeof(float);
-  auto buffer = std::make_unique<AGLBuffer>(sizeof(float) * size);
+  auto buffer = std::make_unique<AGLBuffer>(size);
 
   auto program = outputAlign4
       ? getProgram(
@@ -442,9 +533,13 @@ void host2device(
     int h,
     int w,
     bool inputData4Aligned) {
+  AGPU_PRINT(
+      "device2host(c %d h %d w %d align %d)", c, h, w, inputData4Aligned);
+
   int c_4 = UP_DIV(c, 4);
   auto size = ROUND_UP(c, 4) * w * h * sizeof(float);
-
+  AGPU_PRINT("device2host c_4:%d", c_4);
+  AGPU_PRINT("device2host ROUND_UP(c, 4):%d", ROUND_UP(c, 4));
   auto buffer = std::make_unique<AGLBuffer>(sizeof(float) * size);
 
   auto d_output = buffer->map(GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
@@ -478,6 +573,8 @@ void host2device(
   AGL_CHECK_ERROR;
 }
 
+static std::unique_ptr<AGLContext> glContext;
+
 void agpu_conv2d(
     const float* input,
     uint32_t input_n,
@@ -498,6 +595,32 @@ void agpu_conv2d(
     uint32_t groups,
     float* output) {
   AGPU_PRINT(
+      "%s",
+      std::string{R"(
+            .-"""-.
+           /       \
+           \       /
+    .-"""-.-`.-.-.<  _
+   /      _,-\ ()()_/:)
+   \     / ,  `     `|
+    '-..-| \-.,___,  /
+          \ `-.__/  /
+     jgs / `-.__.-\`
+        / /|    ___\
+       ( ( |.-"`   `'\
+        \ \/    {}{}  |
+         \|           /
+          \        , /
+          ( __`;-;'__`)
+          `//'`   `||`
+         _//       ||
+ .-"-._,(__)     .(__).-""-.
+/          \    /           \
+\          /    \           /
+ `'-------`      `--------'`
+)"}
+          .c_str());
+  AGPU_PRINT(
       "agpu_conv2d(input nchw %d %d %d %d kernel chw %d %d %d stride hw %d %d i_pad hw %d %d dilation %d %d groups %d",
       input_n,
       input_c,
@@ -514,14 +637,31 @@ void agpu_conv2d(
       dilation_w,
       groups);
 
+  static const int once = []() {
+    AGPU_PRINT("Creating GLContext...");
+    glContext = std::make_unique<AGLContext>();
+    if (!glContext) {
+      AGPU_PRINT("ERROR Failed to create GLContext");
+      assert(false);
+    }
+    AGPU_PRINT("GLContext created ok");
+    return 0;
+  }();
+  ((void)once);
+
   uint32_t idims[4] = {input_n, input_c, input_h, input_w};
   agpu_print("input:", input, 4, idims);
-  
-  
+  uint32_t kdims[4] = {kernel_c, input_c, kernel_h, kernel_w};
+  agpu_print("kernel:", weights, 4, kdims);
+  uint32_t bdims[1] = {kernel_c};
+  agpu_print("bias:", bias, 1, bdims);
+
   uint32_t totalWeightSize =
       ALIGN_UP4(kernel_c) * ALIGN_UP4(input_c) * kernel_h * kernel_w;
+  AGPU_PRINT("totalWeightSize:%d", totalWeightSize);
 
-  auto biasBuffer = std::make_unique<AGLBuffer>(sizeof(float) * kernel_c);
+  auto biasBuffer =
+      std::make_unique<AGLBuffer>(sizeof(float) * ALIGN_UP4(kernel_c));
   float* biasPtr = (float*)(biasBuffer->map(
       GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT));
   if (biasPtr) {
@@ -532,15 +672,20 @@ void agpu_conv2d(
 
   auto kernelBuffer =
       std::make_unique<AGLBuffer>(sizeof(float) * totalWeightSize);
-  int unit = 4;
-  int unit2 = unit * unit;
+  const int unit = 4;
+  const int unit2 = unit * unit;
 
-  int alignedWeightSize = UP_DIV(input_c, unit) * kernel_w * kernel_h * unit2;
-  int oc_4 = UP_DIV(kernel_c, unit);
+  const int alignedWeightSize =
+      UP_DIV(input_c, unit) * kernel_w * kernel_h * unit2;
+  const int oc_4 = UP_DIV(kernel_c, unit);
+  AGPU_PRINT("alignedWeightSize:%d", alignedWeightSize);
+  AGPU_PRINT("oc_4:%d", oc_4);
 
   float* kernelPtr = (float*)(kernelBuffer->map(
       GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT));
+
   if (kernelPtr) {
+    memset(kernelPtr, 0, sizeof(float) * totalWeightSize);
     const float* src = weights;
     float* dst = kernelPtr;
     int cur = 0;
@@ -554,7 +699,7 @@ void agpu_conv2d(
         int d_4 = d / unit;
         float* dst_d = dst_b + d_4 * kernel_w * kernel_h * unit2;
         for (int y = 0; y < kernel_h; ++y) {
-          float* dst_y = dst_d + y * kernel_h * unit2;
+          float* dst_y = dst_d + y * kernel_w * unit2;
           for (int x = 0; x < kernel_w; ++x) {
             float* dst_x = dst_y + x * unit2;
             dst_x[unit * my + mx] = src[cur++];
@@ -565,7 +710,14 @@ void agpu_conv2d(
   }
   kernelBuffer->unmap();
 
+  uint32_t rkdims[4] = {kernel_h, kernel_w, 4, 4};
+  agpu_print("repacked kernel", kernelPtr, 4, rkdims);
+
   int ic_4 = UP_DIV(input_c, unit);
+  AGPU_PRINT("ic_4:%d", ic_4);
+
+  AGPU_PRINT(
+      "kernelTexture(%d, %d, %d)", ic_4 * unit, oc_4, kernel_w * kernel_h);
   auto kernelTexture = std::make_unique<AGLTexture>(
       ic_4 * unit,
       oc_4,
@@ -575,7 +727,7 @@ void agpu_conv2d(
       false);
 
   auto transform = getProgram(
-      "transform_kernel_image_adreno", glsl_kernel2image_adreno_glsl);
+      "glsl_kernel2image_adreno_glsl", glsl_kernel2image_adreno_glsl);
   transform->useProgram();
   glBindImageTexture(
       0, kernelTexture->id(), 0, GL_TRUE, 0, GL_WRITE_ONLY, getTextureFormat());
@@ -602,7 +754,7 @@ void agpu_conv2d(
 
   // onResize
   std::vector<std::string> prefix;
-  prefix.push_back("#define RELU");
+  // prefix.push_back("#define RELU");
 
   auto dstDepthQuad = UP_DIV(kernel_c, 4);
 
@@ -636,15 +788,20 @@ void agpu_conv2d(
     os << "#define ZLOCAL " << localSize[2];
     prefix.push_back(os.str());
   }
+  AGPU_PRINT("localSize:%d %d %d", localSize[0], localSize[1], localSize[2]);
 
   // general convolution, no 1x1 separation
   auto program = getProgram("convolution", glsl_convolution_glsl, prefix);
 
   // onExecute
-  int output_c = kernel_c;
-  int output_w = ((input_w - kernel_w + input_padding_w) / stride_w) + 1;
-  int output_h = ((input_h - kernel_h + input_padding_h) / stride_h) + 1;
-
+  uint32_t output_w = ((input_w - kernel_w + input_padding_w) / stride_w) + 1;
+  uint32_t output_h = ((input_h - kernel_h + input_padding_h) / stride_h) + 1;
+  AGPU_PRINT(
+      "output size: output_w:%d output_h:%d oc_4:%d kernel_c:%d",
+      output_w,
+      output_h,
+      oc_4,
+      kernel_c);
   auto outputTexture = std::make_unique<AGLTexture>(
       output_w, output_h, oc_4, getTextureFormat(), GL_TEXTURE_3D, false);
 
@@ -681,19 +838,23 @@ void agpu_conv2d(
   glUniform1i(8, unit);
   AGL_CHECK_ERROR;
 
+  AGPU_PRINT("convolution compute()");
   compute(
       UP_DIV(output_w, unit * localSize[0]),
       UP_DIV(output_h, localSize[1]),
       UP_DIV(oc_4, localSize[2]));
-
   AGL_CHECK_ERROR;
+
   device2host(
       outputTexture->id(),
       output,
-      kernel_c,
-      output_h,
       output_w,
+      output_h,
+      kernel_c,
       false /* align */);
+  AGPU_PRINT("out h:%d w:%d", output_h, output_w);
+  uint32_t odims[4] = {input_n, kernel_c, output_h, output_w};
+  agpu_print("output:", output, 4, odims);
 }
 #endif
 } // namespace agpu

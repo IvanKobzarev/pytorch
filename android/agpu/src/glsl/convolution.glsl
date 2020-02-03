@@ -27,6 +27,7 @@ void main()
     {
         ivec3 pos = ivec3(gl_GlobalInvocationID)*ivec3(uUnroll, 1, 1);
         int kernelX = uKernelSize.x;
+        int kernelY = uKernelSize.y;
         ivec3 inputSize = uInputSize;
         ivec2 s0 = pos.xy*uStride-uPad;
         int fx, fy, fz;
@@ -36,13 +37,13 @@ void main()
         vec4 color2 = color;
         vec4 color3 = color;
         vec4 color4 = color;
-        int kernelY = pos.z;
+        int kY = pos.z;
         for (fy=sfxy.y; fy<efxy.y; ++fy)
         {
             int sy = fy*uDilate.y + s0.y;
             for (fx=0; fx<kernelX; ++fx)
             {
-                int kernelZ = fx + fy*kernelX;
+                int kZ = fx + fy*kernelX;
                 int sx1 = fx*uDilate.x + s0.x;
                 int sx2 = sx1 + uStride.x;
                 int sx3 = sx1 + uStride.x * 2;
@@ -54,11 +55,11 @@ void main()
                 fz = 0;
                 for (; fz<inputSize.z; ++fz)
                 {
-                    int kernelX = 4*fz;
-                    vec4 k0 = texelFetch(uKernel, ivec3(4*fz + 0, pos.z, fx + fy*kernelX), 0);
-                    vec4 k1 = texelFetch(uKernel, ivec3(4*fz + 1, pos.z, fx + fy*kernelX), 0);
-                    vec4 k2 = texelFetch(uKernel, ivec3(4*fz + 2, pos.z, fx + fy*kernelX), 0);
-                    vec4 k3 = texelFetch(uKernel, ivec3(4*fz + 3, pos.z, fx + fy*kernelX), 0);
+                    int kX = 4*fz;
+                    vec4 k0 = texelFetch(uKernel, ivec3(kX+0, kY, kZ), 0);
+                    vec4 k1 = texelFetch(uKernel, ivec3(kX+1, kY, kZ), 0);
+                    vec4 k2 = texelFetch(uKernel, ivec3(kX+2, kY, kZ), 0);
+                    vec4 k3 = texelFetch(uKernel, ivec3(kX+3, kY, kZ), 0);
 
                     mat4 k = mat4(k0, k1, k2, k3);
 

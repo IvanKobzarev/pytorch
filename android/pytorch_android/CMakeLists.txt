@@ -64,8 +64,6 @@ message(STATUS "libtorch_include_DIR: ${libtorch_include_DIR}")
 target_include_directories(pytorch_jni PUBLIC
   ${libtorch_include_DIR}
   ${libtorch_include_DIR}/torch/csrc/api/include
-  #$ENV{LIBTORCH_HOME}/include/torch/csrc/api/include
-  #$ENV{LIBTORCH_HOME}/include
 )
 
 set(fbjni_DIR ${CMAKE_CURRENT_LIST_DIR}/../libs/fbjni/)
@@ -75,7 +73,12 @@ add_subdirectory(${fbjni_DIR} ${fbjni_BUILD_DIR})
 
 if (ANDROID_ABI)
 
-  function(import_static_lib name)
+set(agpu_DIR ${CMAKE_CURRENT_LIST_DIR}/../agpu/)
+set(agpu_BUILD_DIR ${CMAKE_BINARY_DIR}/agpu/${BUILD_SUBDIR})
+
+add_subdirectory(${agpu_DIR} ${agpu_BUILD_DIR})
+
+function(import_static_lib name)
     add_library(${name} STATIC IMPORTED)
     set_property(
         TARGET ${name}
@@ -91,7 +94,7 @@ if (ANDROID_ABI)
   import_static_lib(libeigen_blas)
   import_static_lib(libcpuinfo)
   import_static_lib(libclog)
-  import_static_lib(libagpu)
+  #import_static_lib(libagpu)
 
     # Link most things statically on Android.
   target_link_libraries(pytorch_jni
@@ -107,7 +110,8 @@ if (ANDROID_ABI)
       libeigen_blas
       libcpuinfo
       libclog
-      libagpu
+      #libagpu
+      agpu
       EGL
       GLESv3
   )
