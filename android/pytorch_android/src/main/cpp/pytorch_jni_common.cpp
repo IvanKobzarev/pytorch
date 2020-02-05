@@ -600,8 +600,7 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
     javaClassStatic()->registerNatives({
         makeNativeMethod(
             "nativeSetNumThreads", PyTorchAndroidJni::setNumThreads),
-        makeNativeMethod(
-            "nativeTest", PyTorchAndroidJni::test),
+        makeNativeMethod("nativeTest", PyTorchAndroidJni::test),
     });
   }
 
@@ -609,154 +608,161 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
     caffe2::mobile_threadpool()->setNumThreads(numThreads);
   }
 
-  template<typename T>
+  template <typename T>
   static void log(const char* m, T t) {
     std::ostringstream os;
     os << t << std::endl;
     ALOGI("%s %s", m, os.str().c_str());
   }
-  
-  static void test(facebook::jni::alias_ref<jclass>, jint t) {
 
+  static void test(facebook::jni::alias_ref<jclass>, jint t) {
     ALOGI("----------------");
     ALOGI("----------------");
     ALOGI("----------------");
     ALOGI("PyTorchJni::test %d", t);
     if (t == 1) {
-    auto input = torch::tensor(// 1, 3, 3, 3
-      {
-        {
-          // c_0
-          {
-            {1, 2, 3},
-            {4, 5, 6},
-            {7, 8, 9},
-          },
-          // c_1
-          {
-            {101, 102, 103},
-            {104, 105, 106},
-            {107, 108, 109},
-          },
-          // c_2
-          {
-            {1001, 1002, 1003},
-            {1004, 1005, 1006},
-            {1007, 1008, 1009},
-          },
-        }
-      }, torch::kFloat);
+      auto input = torch::tensor( // 1, 3, 3, 3
+          {{
+              // c_0
+              {
+                  {1, 2, 3},
+                  {4, 5, 6},
+                  {7, 8, 9},
+              },
+              // c_1
+              {
+                  {101, 102, 103},
+                  {104, 105, 106},
+                  {107, 108, 109},
+              },
+              // c_2
+              {
+                  {1001, 1002, 1003},
+                  {1004, 1005, 1006},
+                  {1007, 1008, 1009},
+              },
+          }},
+          torch::kFloat);
 
-    auto weight = torch::tensor(
-      {//2, 3, 2, 2
-        // oc_0 (f_0)
-        {
-          { // oc_0 c_0
-            {1, 0},
-            {0, 0},
+      auto weight = torch::tensor(
+          {
+              // 2, 3, 2, 2
+              // oc_0 (f_0)
+              {{
+                   // oc_0 c_0
+                   {1, 0},
+                   {0, 0},
+               },
+               {
+                   // oc_0 c_1
+                   {0, 1},
+                   {0, 0},
+               },
+               {
+                   // oc_0 c_2
+                   {0, 0},
+                   {1, 0},
+               }},
+              // oc_1 (f_1)
+              {{
+                   // oc_1 c_0
+                   {-1, 0},
+                   {0, 0},
+               },
+               {
+                   // oc_1 c_1
+                   {0, -1},
+                   {0, 0},
+               },
+               {
+                   // oc_1 c_2
+                   {0, 0},
+                   {-1, 0},
+               }},
           },
-          { // oc_0 c_1
-            {0, 1},
-            {0, 0},
-          },
-          { // oc_0 c_2
-            {0, 0},
-            {1, 0},
-          }
-        },
-        // oc_1 (f_1)
-        {
-          { // oc_1 c_0
-            {-1, 0},
-            {0, 0},
-          },
-          { // oc_1 c_1
-            {0, -1},
-            {0, 0},
-          },
-          { // oc_1 c_2
-            {0, 0},
-            {-1, 0},
-          }
-        },
-      }, torch::kFloat);
-    auto bias = torch::tensor({0, 0}, torch::kFloat);
-    log("input sizes:", input.sizes());
-    log("input:", input);
-    log("w sizes:", weight.sizes());
-    log("w:", weight);
-    log("b sizes:", bias.sizes());
-    log("b:", bias);
-    
-    int64_t groups = 1;
-    torch::nn::functional::Conv2dFuncOptions o = torch::nn::functional::Conv2dFuncOptions().stride(1).padding(0);
-    
-    ALOGI("III set useAgpu false");
-    at::setUseAgpu(false);
-    auto outputC = at::conv2d(
-        input, 
-        weight, 
-        bias, 
-        c10::IntArrayRef{1}, // stride  
-        c10::IntArrayRef{0}, // padding
-        c10::IntArrayRef{1}, // dilation
-        groups);
-    log("outputC.sizes: ", outputC.sizes());
-    log("outputC: ", outputC);
+          torch::kFloat);
+      auto bias = torch::tensor({0, 0}, torch::kFloat);
+      log("input sizes:", input.sizes());
+      log("input:", input);
+      log("w sizes:", weight.sizes());
+      log("w:", weight);
+      log("b sizes:", bias.sizes());
+      log("b:", bias);
 
-    ALOGI("III set useAgpu true");
-    at::setUseAgpu(true);
-    auto outputT = at::conv2d(
-        input, 
-        weight, 
-        bias, 
-        c10::IntArrayRef{1}, // stride  
-        c10::IntArrayRef{0}, // padding
-        c10::IntArrayRef{1}, // dilation
-        groups);
-    
-    log("outputT.sizes: ", outputT.sizes());
-    log("outputT: ", outputT);
-    
-    bool eq = torch::equal(outputC, outputT);
-    ALOGI("outputC eq outputT:%d", eq);
-    assert(eq);
+      int64_t groups = 1;
+      torch::nn::functional::Conv2dFuncOptions o =
+          torch::nn::functional::Conv2dFuncOptions().stride(1).padding(0);
+
+      ALOGI("III set useAgpu false");
+      at::setUseAgpu(false);
+      auto outputC = at::conv2d(
+          input,
+          weight,
+          bias,
+          c10::IntArrayRef{1}, // stride
+          c10::IntArrayRef{0}, // padding
+          c10::IntArrayRef{1}, // dilation
+          groups);
+      log("outputC.sizes: ", outputC.sizes());
+      log("outputC: ", outputC);
+
+      ALOGI("III set useAgpu true");
+      at::setUseAgpu(true);
+      auto outputT = at::conv2d(
+          input,
+          weight,
+          bias,
+          c10::IntArrayRef{1}, // stride
+          c10::IntArrayRef{0}, // padding
+          c10::IntArrayRef{1}, // dilation
+          groups);
+
+      log("outputT.sizes: ", outputT.sizes());
+      log("outputT: ", outputT);
+
+      bool eq = torch::equal(outputC, outputT);
+      ALOGI("outputC eq outputT:%d", eq);
+      assert(eq);
     } else if (t == 2) { // add2
-      auto a = torch::tensor(//1, 2, 2, 3
-      {
-        {
-          {1, 2, 3},
-          {4, 5, 6},
-        },
-        {
-          {11, 12, 13},
-          {14, 15, 16},
-        },
-      }, torch::kFloat);
-      auto b = torch::tensor(//1, 2, 2, 3
-      {
-        {
-          {101, 102, 103},
-          {104, 105, 106},
-        },
-        {
-          {111, 112, 113},
-          {114, 115, 116},
-        },
-      }, torch::kFloat);
+      auto a = torch::tensor( // 1, 2, 2, 3
+          {
+              {
+                  {1, 2, 3},
+                  {4, 5, 6},
+              },
+              {
+                  {11, 12, 13},
+                  {14, 15, 16},
+              },
+          },
+          torch::kFloat);
+      auto b = torch::tensor( // 1, 2, 2, 3
+          {
+              {
+                  {101, 102, 103},
+                  {104, 105, 106},
+              },
+              {
+                  {111, 112, 113},
+                  {114, 115, 116},
+              },
+          },
+          torch::kFloat);
 
       std::cout << "a:\n" << a << std::endl;
       std::cout << "b:\n" << b << std::endl;
-      
+
       ALOGI("III set useAgpu false");
       at::setUseAgpu(false);
       auto outputC = torch::add(a, b);
-      std::cout << "outputC:\n"<< outputC << std::endl;
+      log("outputC.sizes: ", outputC.sizes());
+      log("outputC: ", outputC);
 
       ALOGI("III set useAgpu true");
       at::setUseAgpu(true);
       auto outputT = torch::add(a, b);
-      std::cout << "outputT:\n"<< outputT << std::endl;
+      log("outputT.sizes: ", outputT.sizes());
+      log("outputT: ", outputT);
 
       bool eq = torch::equal(outputC, outputT);
       ALOGI("outputC eq outputT:%d", eq);

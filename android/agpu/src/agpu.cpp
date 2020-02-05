@@ -23,6 +23,10 @@ void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
   static const char* kFloatFormat = "%8.1f";
   std::cout << m;
 
+  for (auto i = 0; i < rank; ++i) {
+    assert(dims[i] < 16);
+  }
+
   if (rank == 0) {
     std::cout << *t;
   } else if (rank == 1 || rank == 2) {
@@ -452,6 +456,11 @@ std::unique_ptr<AGLProgram> getProgramWithPrefix(
     tc << s << "\n";
   }
   tc << content;
+
+  AGPU_PRINT(
+      "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n%s\n<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<",
+      tc.str().c_str());
+
   return std::make_unique<AGLProgram>(tc.str());
 }
 
@@ -878,9 +887,9 @@ void agpu_add2t(
     uint32_t w,
     float* output) {
   AGPU_PRINT("agpu_add2t(input dims{%d %d %d %d}", n, c, h, w);
-  uint32_t dims[3] = {c, h, w};
-  agpu_print("input0:", input0, 3, dims);
-  agpu_print("input1:", input1, 3, dims);
+  uint32_t dims[4] = {n, c, h, w};
+  agpu_print("input0:", input0, 4, dims);
+  agpu_print("input1:", input1, 4, dims);
 
   initContext();
 
@@ -896,7 +905,39 @@ void agpu_add2t(
   auto outputTexture = std::make_unique<AGLTexture>(
       w, h, c_4, getTextureFormat(), GL_TEXTURE_3D, false);
 
-  auto program = getProgram("glsl_binary_add_glsl", glsl_binary_add_glsl);
+  int localSize[3];
+  int setLocalSizeX = 8;
+  int setLocalSizeY = 8;
+  int setLocalSizeZ = 1;
+  std::vector<std::string> prefix;
+  GLint maxLocalSizeX, maxLocalSizeY, maxLocalSizeZ;
+
+  glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 0, &maxLocalSizeX);
+  glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 1, &maxLocalSizeY);
+  glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 2, &maxLocalSizeZ);
+
+  localSize[0] = setLocalSizeX < maxLocalSizeX ? setLocalSizeX : maxLocalSizeX;
+  localSize[1] = setLocalSizeY < maxLocalSizeY ? setLocalSizeY : maxLocalSizeY;
+  localSize[2] = setLocalSizeZ < maxLocalSizeZ ? setLocalSizeZ : maxLocalSizeZ;
+  {
+    std::ostringstream os;
+    os << "#define XLOCAL " << localSize[0];
+    prefix.push_back(os.str());
+  }
+  {
+    std::ostringstream os;
+    os << "#define YLOCAL " << localSize[1];
+    prefix.push_back(os.str());
+  }
+  {
+    std::ostringstream os;
+    os << "#define ZLOCAL " << localSize[2];
+    prefix.push_back(os.str());
+  }
+  AGPU_PRINT("localSize:%d %d %d", localSize[0], localSize[1], localSize[2]);
+
+  auto program =
+      getProgram("glsl_binary_add_glsl", glsl_binary_add_glsl, prefix);
   program->useProgram();
   glBindImageTexture(
       0, outputTexture->id(), 0, GL_TRUE, 0, GL_WRITE_ONLY, getTextureFormat());
@@ -916,16 +957,13 @@ void agpu_add2t(
   }
   glUniform4i(3, w, h, c_4, 1);
   AGL_CHECK_ERROR;
-  int localSize[3];
 
-  int setLocalSizeX = 8;
-  int setLocalSizeY = 8;
-  int setLocalSizeZ = 1;
   compute(
       UP_DIV(w, localSize[0]),
       UP_DIV(h, localSize[1]),
       UP_DIV(c_4, localSize[2]));
   device2host(outputTexture->id(), output, w, h, c, false /* align */);
+
   agpu_print("output:", output, 4, dims);
 }
 #endif
