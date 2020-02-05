@@ -1,4 +1,21 @@
 #include "shader.h"
+const char* glsl_binary_add_glsl = 
+"layout(FORMAT, binding=0) writeonly uniform PRECISION image3D uOutput;\n"
+"layout(location=1) uniform mediump sampler3D uInput0;\n"
+"layout(location=2) uniform mediump sampler3D uInput1;\n"
+"layout(location=3) uniform ivec4 imgSize;\n"
+"layout (local_size_x = XLOCAL, local_size_y = YLOCAL, local_size_z = ZLOCAL) in;\n"
+"void main()\n"
+"{\n"
+"    ivec3 pos = ivec3(gl_GlobalInvocationID);\n"
+"    ivec3 inSize = imgSize.xyz;\n"
+"    if(all(lessThan(pos, inSize)))\n"
+"    {\n"
+"        vec4 sum = texelFetch(uInput0, pos, 0) + texelFetch(uInput1, pos, 0);\n"
+"        imageStore(uOutput, pos, sum);\n"
+"    }\n"
+"}\n"
+;
 const char* glsl_image_to_nchw_buffer_glsl = 
 "layout(FORMAT, binding=0) readonly uniform PRECISION image3D uImage;\n"
 "layout(binding=1) writeonly buffer destBuffer{\n"

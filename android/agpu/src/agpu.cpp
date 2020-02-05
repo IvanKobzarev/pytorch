@@ -94,6 +94,15 @@ void agpu_conv2d(
     uint32_t groups,
     float* output) {}
 
+void agpu_add2t(
+    const float* input0,
+    const float* input1,
+    uint32_t n,
+    uint32_t c,
+    uint32_t h,
+    uint32_t w,
+    float* output) {}
+
 #else
 
 class AGLContext {
@@ -575,6 +584,20 @@ void host2device(
 
 static std::unique_ptr<AGLContext> glContext;
 
+void initContext() {
+  static const int once = []() {
+    AGPU_PRINT("Creating GLContext...");
+    glContext = std::make_unique<AGLContext>();
+    if (!glContext) {
+      AGPU_PRINT("ERROR Failed to create GLContext");
+      assert(false);
+    }
+    AGPU_PRINT("GLContext created ok");
+    return 0;
+  }();
+  ((void)once);
+}
+
 void agpu_conv2d(
     const float* input,
     uint32_t input_n,
@@ -636,18 +659,7 @@ void agpu_conv2d(
       dilation_h,
       dilation_w,
       groups);
-
-  static const int once = []() {
-    AGPU_PRINT("Creating GLContext...");
-    glContext = std::make_unique<AGLContext>();
-    if (!glContext) {
-      AGPU_PRINT("ERROR Failed to create GLContext");
-      assert(false);
-    }
-    AGPU_PRINT("GLContext created ok");
-    return 0;
-  }();
-  ((void)once);
+  initContext();
 
   uint32_t idims[4] = {input_n, input_c, input_h, input_w};
   agpu_print("input:", input, 4, idims);
@@ -855,6 +867,66 @@ void agpu_conv2d(
   AGPU_PRINT("out h:%d w:%d", output_h, output_w);
   uint32_t odims[4] = {input_n, kernel_c, output_h, output_w};
   agpu_print("output:", output, 4, odims);
+}
+
+void agpu_add2t(
+    const float* input0,
+    const float* input1,
+    uint32_t n,
+    uint32_t c,
+    uint32_t h,
+    uint32_t w,
+    float* output) {
+  AGPU_PRINT("agpu_add2t(input dims{%d %d %d %d}", n, c, h, w);
+  uint32_t dims[3] = {c, h, w};
+  agpu_print("input0:", input0, 3, dims);
+  agpu_print("input1:", input1, 3, dims);
+
+  initContext();
+
+  int c_4 = UP_DIV(c, 4);
+
+  auto input0Texture = std::make_unique<AGLTexture>(
+      w, h, c_4, getTextureFormat(), GL_TEXTURE_3D, false);
+  host2device(input0Texture->id(), input0, c, h, w, false /* align */);
+  auto input1Texture = std::make_unique<AGLTexture>(
+      w, h, c_4, getTextureFormat(), GL_TEXTURE_3D, false);
+  host2device(input1Texture->id(), input1, c, h, w, false /* align */);
+
+  auto outputTexture = std::make_unique<AGLTexture>(
+      w, h, c_4, getTextureFormat(), GL_TEXTURE_3D, false);
+
+  auto program = getProgram("glsl_binary_add_glsl", glsl_binary_add_glsl);
+  program->useProgram();
+  glBindImageTexture(
+      0, outputTexture->id(), 0, GL_TRUE, 0, GL_WRITE_ONLY, getTextureFormat());
+  {
+    int texId = 0;
+    glActiveTexture(GL_TEXTURE0 + texId);
+    glUniform1i(1, texId);
+    glBindTexture(GL_TEXTURE_3D, input0Texture->id());
+    AGL_CHECK_ERROR;
+  }
+  {
+    int texId = 1;
+    glActiveTexture(GL_TEXTURE0 + texId);
+    glUniform1i(2, texId);
+    glBindTexture(GL_TEXTURE_3D, input1Texture->id());
+    AGL_CHECK_ERROR;
+  }
+  glUniform4i(3, w, h, c_4, 1);
+  AGL_CHECK_ERROR;
+  int localSize[3];
+
+  int setLocalSizeX = 8;
+  int setLocalSizeY = 8;
+  int setLocalSizeZ = 1;
+  compute(
+      UP_DIV(w, localSize[0]),
+      UP_DIV(h, localSize[1]),
+      UP_DIV(c_4, localSize[2]));
+  device2host(outputTexture->id(), output, w, h, c, false /* align */);
+  agpu_print("output:", output, 4, dims);
 }
 #endif
 } // namespace agpu

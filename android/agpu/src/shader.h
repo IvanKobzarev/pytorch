@@ -1,4 +1,5 @@
 #pragma once
+extern const char* glsl_binary_add_glsl;
 extern const char* glsl_image_to_nchw_buffer_glsl;
 extern const char* glsl_convolution_glsl;
 extern const char* glsl_kernel2image_adreno_glsl;
