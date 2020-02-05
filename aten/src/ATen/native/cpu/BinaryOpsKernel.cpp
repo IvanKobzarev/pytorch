@@ -14,6 +14,20 @@ namespace {
 using namespace vec256;
 
 void add_kernel(TensorIterator& iter, Scalar alpha_scalar) {
+  std::cout << "III add_kernel" << std::endl;
+  std::cout 
+    << "\nscalar:" << alpha_scalar
+    << "\niter.numel():"<< iter.numel() 
+    << "\niter.shape():"<< iter.shape() 
+    << "\niter.ntesors():"<< iter.ntensors() 
+    << "\niter.ninputs():"<< iter.ninputs() 
+    << "\niter.noutputs():"<< iter.noutputs() 
+    << "\niter.num_output_elements():"<< iter.num_output_elements() 
+    << std::endl;
+
+  for (uint32_t i = 0; i < iter.ntensors(); ++i) {
+    std::cout << "iter.tensor(" << i << "):\n" << iter.tensor(i) << std::endl; 
+  }
   if (iter.dtype() == ScalarType::Bool) {
       using scalar_t = bool;
       auto alpha = alpha_scalar.to<scalar_t>();
@@ -30,6 +44,8 @@ void add_kernel(TensorIterator& iter, Scalar alpha_scalar) {
         });
       });
   }
+
+  std::cout << "\nadd_kernel$ iter.tensor(0):"<< iter.tensor(0) << std::endl;
 }
 
 void atan2_kernel(TensorIterator& iter) {

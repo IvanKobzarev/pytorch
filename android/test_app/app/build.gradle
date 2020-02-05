@@ -35,6 +35,13 @@ android {
     }
     flavorDimensions "model", "build", "activity"
     productFlavors {
+        mbf {
+            dimension "model"
+            applicationIdSuffix ".mbf"
+            buildConfigField("String", "MODULE_ASSET_NAME", "\"mn2fp32.pt\"")
+            addManifestPlaceholders([APP_NAME: "MBF"])
+            buildConfigField("String", "LOGCAT_TAG", "\"pytorch-mbf\"")
+        }
         mbq {
             dimension "model"
             applicationIdSuffix ".mbq"
