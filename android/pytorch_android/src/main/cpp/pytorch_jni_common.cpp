@@ -723,7 +723,8 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
       bool eq = torch::equal(outputC, outputT);
       ALOGI("outputC eq outputT:%d", eq);
       assert(eq);
-    } else if (t == 2) { // add2
+    } else
+    if (t == 2) { // add2
       auto a = torch::tensor( // 1, 2, 2, 3
           {
               {
@@ -761,6 +762,37 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
       ALOGI("III set useAgpu true");
       at::setUseAgpu(true);
       auto outputT = torch::add(a, b);
+      log("outputT.sizes: ", outputT.sizes());
+      log("outputT: ", outputT);
+
+      bool eq = torch::equal(outputC, outputT);
+      ALOGI("outputC eq outputT:%d", eq);
+      assert(eq);
+    } else
+    if (t == 3) {
+      auto a = torch::tensor( // 1, 2, 2, 3
+          {
+              {
+                  {1, 2, 3},
+                  {4, 5, 6},
+              },
+              {
+                  {11, 12, 13},
+                  {14, 15, 16},
+              },
+          },
+          torch::kFloat);
+      std::cout << "a:\n" << a << std::endl;
+
+      ALOGI("III set useAgpu false");
+      at::setUseAgpu(false);
+      auto outputC = at::threshold(a, 3, 0);
+      log("outputC.sizes: ", outputC.sizes());
+      log("outputC: ", outputC);
+
+      ALOGI("III set useAgpu true");
+      at::setUseAgpu(true);
+      auto outputT = at::threshold(a, 3, 0);
       log("outputT.sizes: ", outputT.sizes());
       log("outputT: ", outputT);
 

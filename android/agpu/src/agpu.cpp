@@ -15,10 +15,6 @@
 
 namespace agpu {
 
-const char* agpu_test() {
-  return "GPUGPUGPU";
-}
-
 void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
   static const char* kFloatFormat = "%8.1f";
   std::cout << m;
@@ -77,6 +73,7 @@ void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
 }
 
 #ifndef __ANDROID__
+// not android
 
 void agpu_conv2d(
     const float* input,
@@ -339,9 +336,9 @@ class AGLTexture {
   GLenum textureFormat_{GL_RGBA32F};
 }; // class AGLTexture
 
-class AGLProgram {
+class AGLShader {
  public:
-  AGLProgram(const std::string& computeShader) {
+  AGLShader(const std::string& computeShader) {
     shaderId_ = glCreateShader(GL_COMPUTE_SHADER);
     AGL_CHECK_ERROR;
     const char* _ver[1];
@@ -353,7 +350,6 @@ class AGLProgram {
     // if (!res) FUNC_PRINT_ALL(mVertex.c_str(), s);
     assert(res);
 
-    /*Create Program*/
     programId_ = glCreateProgram();
     AGL_CHECK_ERROR;
     glAttachShader(programId_, shaderId_);
@@ -379,7 +375,7 @@ class AGLProgram {
     }
   }
 
-  ~AGLProgram() {
+  ~AGLShader() {
     glDeleteShader(shaderId_);
     glDeleteProgram(programId_);
     AGL_CHECK_ERROR;
@@ -437,7 +433,7 @@ class AGLProgram {
 
   unsigned int shaderId_ = 0;
   unsigned int programId_ = 0;
-}; // class AGLProgram
+}; // class AGLShader
 
 GLenum getTextureFormat() {
   return GL_RGBA32F;
@@ -447,11 +443,11 @@ std::string getImageFormat() {
   return "rgba32f";
 }
 
-std::unique_ptr<AGLProgram> getProgramWithPrefix(
+std::unique_ptr<AGLShader> getProgramWithPrefix(
     const char* content,
     const std::vector<std::string>& prefix) {
   std::ostringstream tc;
-  tc << AGLProgram::getHead(getImageFormat());
+  tc << AGLShader::getHead(getImageFormat());
   for (auto& s : prefix) {
     tc << s << "\n";
   }
@@ -461,22 +457,22 @@ std::unique_ptr<AGLProgram> getProgramWithPrefix(
       "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n%s\n<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<",
       tc.str().c_str());
 
-  return std::make_unique<AGLProgram>(tc.str());
+  return std::make_unique<AGLShader>(tc.str());
 }
 
-std::unique_ptr<AGLProgram> getProgram(const char* content) {
+std::unique_ptr<AGLShader> getProgram(const char* content) {
   std::ostringstream tc;
-  tc << AGLProgram::getHead(getImageFormat()) << content;
-  return std::make_unique<AGLProgram>(tc.str());
+  tc << AGLShader::getHead(getImageFormat()) << content;
+  return std::make_unique<AGLShader>(tc.str());
 }
 
-std::unique_ptr<AGLProgram> getProgram(
+std::unique_ptr<AGLShader> getProgram(
     const std::string&,
     const char* content) {
   return getProgram(content);
 }
 
-std::unique_ptr<AGLProgram> getProgram(
+std::unique_ptr<AGLShader> getProgram(
     const std::string&,
     const char* content,
     const std::vector<std::string>& prefix) {
@@ -607,6 +603,45 @@ void initContext() {
   ((void)once);
 }
 
+void addCompGroupSizeDefines(
+    std::vector<std::string>& header,
+    int* compGroupSize,
+    int compGroupSizeX,
+    int compGroupSizeY,
+    int compGroupSizeZ) {
+
+  GLint maxCompGroupSizeX, maxCompGroupSizeY, maxCompGroupSizeZ;
+  glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 0, &maxCompGroupSizeX);
+  glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 1, &maxCompGroupSizeY);
+  glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 2, &maxCompGroupSizeZ);
+
+  compGroupSize[0] = compGroupSizeX < maxCompGroupSizeX
+        ? compGroupSizeX
+        : maxCompGroupSizeX;
+  compGroupSize[1] = compGroupSizeY < maxCompGroupSizeY
+        ? compGroupSizeY
+        : maxCompGroupSizeY;
+  compGroupSize[2] = compGroupSizeZ < maxCompGroupSizeZ
+        ? compGroupSizeZ
+        : maxCompGroupSizeZ;
+  {
+    std::ostringstream os;
+    os << "#define XLOCAL " << compGroupSize[0];
+    header.push_back(os.str());
+  }
+  {
+    std::ostringstream os;
+    os << "#define YLOCAL " << compGroupSize[1];
+    header.push_back(os.str());
+  }
+  {
+    std::ostringstream os;
+    os << "#define ZLOCAL " << compGroupSize[2];
+    header.push_back(os.str());
+  }
+  AGPU_PRINT("compGroupSize(%d %d %d)", compGroupSize[0], compGroupSize[1], compGroupSize[2]);
+}
+
 void agpu_conv2d(
     const float* input,
     uint32_t input_n,
@@ -626,32 +661,6 @@ void agpu_conv2d(
     uint32_t dilation_w,
     uint32_t groups,
     float* output) {
-  AGPU_PRINT(
-      "%s",
-      std::string{R"(
-            .-"""-.
-           /       \
-           \       /
-    .-"""-.-`.-.-.<  _
-   /      _,-\ ()()_/:)
-   \     / ,  `     `|
-    '-..-| \-.,___,  /
-          \ `-.__/  /
-     jgs / `-.__.-\`
-        / /|    ___\
-       ( ( |.-"`   `'\
-        \ \/    {}{}  |
-         \|           /
-          \        , /
-          ( __`;-;'__`)
-          `//'`   `||`
-         _//       ||
- .-"-._,(__)     .(__).-""-.
-/          \    /           \
-\          /    \           /
- `'-------`      `--------'`
-)"}
-          .c_str());
   AGPU_PRINT(
       "agpu_conv2d(input nchw %d %d %d %d kernel chw %d %d %d stride hw %d %d i_pad hw %d %d dilation %d %d groups %d",
       input_n,
@@ -735,8 +744,6 @@ void agpu_conv2d(
   agpu_print("repacked kernel", kernelPtr, 4, rkdims);
 
   int ic_4 = UP_DIV(input_c, unit);
-  AGPU_PRINT("ic_4:%d", ic_4);
-
   AGPU_PRINT(
       "kernelTexture(%d, %d, %d)", ic_4 * unit, oc_4, kernel_w * kernel_h);
   auto kernelTexture = std::make_unique<AGLTexture>(
@@ -773,46 +780,12 @@ void agpu_conv2d(
       false /* input not aligned */);
   // inputTexture done
 
-  // onResize
-  std::vector<std::string> prefix;
-  // prefix.push_back("#define RELU");
-
   auto dstDepthQuad = UP_DIV(kernel_c, 4);
+  int compGroupSize[3];
+  std::vector<std::string> header;
+  addCompGroupSizeDefines(header, compGroupSize, 1, 1, dstDepthQuad);
 
-  int localSize[3];
-
-  int setLocalSizeX = 1;
-  int setLocalSizeY = 1;
-  int setLocalSizeZ = dstDepthQuad;
-
-  GLint maxLocalSizeX, maxLocalSizeY, maxLocalSizeZ;
-
-  glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 0, &maxLocalSizeX);
-  glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 1, &maxLocalSizeY);
-  glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 2, &maxLocalSizeZ);
-
-  localSize[0] = setLocalSizeX < maxLocalSizeX ? setLocalSizeX : maxLocalSizeX;
-  localSize[1] = setLocalSizeY < maxLocalSizeY ? setLocalSizeY : maxLocalSizeY;
-  localSize[2] = setLocalSizeZ < maxLocalSizeZ ? setLocalSizeZ : maxLocalSizeZ;
-  {
-    std::ostringstream os;
-    os << "#define XLOCAL " << localSize[0];
-    prefix.push_back(os.str());
-  }
-  {
-    std::ostringstream os;
-    os << "#define YLOCAL " << localSize[1];
-    prefix.push_back(os.str());
-  }
-  {
-    std::ostringstream os;
-    os << "#define ZLOCAL " << localSize[2];
-    prefix.push_back(os.str());
-  }
-  AGPU_PRINT("localSize:%d %d %d", localSize[0], localSize[1], localSize[2]);
-
-  // general convolution, no 1x1 separation
-  auto program = getProgram("convolution", glsl_convolution_glsl, prefix);
+  auto program = getProgram("convolution", glsl_convolution_glsl, header);
 
   // onExecute
   uint32_t output_w = ((input_w - kernel_w + input_padding_w) / stride_w) + 1;
@@ -861,9 +834,9 @@ void agpu_conv2d(
 
   AGPU_PRINT("convolution compute()");
   compute(
-      UP_DIV(output_w, unit * localSize[0]),
-      UP_DIV(output_h, localSize[1]),
-      UP_DIV(oc_4, localSize[2]));
+      UP_DIV(output_w, unit * compGroupSize[0]),
+      UP_DIV(output_h, compGroupSize[1]),
+      UP_DIV(oc_4, compGroupSize[2]));
   AGL_CHECK_ERROR;
 
   device2host(
@@ -905,36 +878,9 @@ void agpu_add2t(
   auto outputTexture = std::make_unique<AGLTexture>(
       w, h, c_4, getTextureFormat(), GL_TEXTURE_3D, false);
 
-  int localSize[3];
-  int setLocalSizeX = 8;
-  int setLocalSizeY = 8;
-  int setLocalSizeZ = 1;
+  int compGroupSize[3];
   std::vector<std::string> prefix;
-  GLint maxLocalSizeX, maxLocalSizeY, maxLocalSizeZ;
-
-  glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 0, &maxLocalSizeX);
-  glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 1, &maxLocalSizeY);
-  glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 2, &maxLocalSizeZ);
-
-  localSize[0] = setLocalSizeX < maxLocalSizeX ? setLocalSizeX : maxLocalSizeX;
-  localSize[1] = setLocalSizeY < maxLocalSizeY ? setLocalSizeY : maxLocalSizeY;
-  localSize[2] = setLocalSizeZ < maxLocalSizeZ ? setLocalSizeZ : maxLocalSizeZ;
-  {
-    std::ostringstream os;
-    os << "#define XLOCAL " << localSize[0];
-    prefix.push_back(os.str());
-  }
-  {
-    std::ostringstream os;
-    os << "#define YLOCAL " << localSize[1];
-    prefix.push_back(os.str());
-  }
-  {
-    std::ostringstream os;
-    os << "#define ZLOCAL " << localSize[2];
-    prefix.push_back(os.str());
-  }
-  AGPU_PRINT("localSize:%d %d %d", localSize[0], localSize[1], localSize[2]);
+  addCompGroupSizeDefines(prefix, compGroupSize, 8, 8, 1);
 
   auto program =
       getProgram("glsl_binary_add_glsl", glsl_binary_add_glsl, prefix);
@@ -959,12 +905,67 @@ void agpu_add2t(
   AGL_CHECK_ERROR;
 
   compute(
-      UP_DIV(w, localSize[0]),
-      UP_DIV(h, localSize[1]),
-      UP_DIV(c_4, localSize[2]));
+      UP_DIV(w, compGroupSize[0]),
+      UP_DIV(h, compGroupSize[1]),
+      UP_DIV(c_4, compGroupSize[2]));
   device2host(outputTexture->id(), output, w, h, c, false /* align */);
 
   agpu_print("output:", output, 4, dims);
 }
+
+void agpu_threshold(
+    const float* input,
+    uint32_t n,
+    uint32_t c,
+    uint32_t h,
+    uint32_t w,
+    float threshold,
+    float value,
+    float* output) {
+
+  AGPU_PRINT("agpu_threshold(input dims{%d %d %d %d}", n, c, h, w);
+  uint32_t dims[4] = {n, c, h, w};
+  agpu_print("input:", input, 4, dims);
+
+  initContext();
+  int c_4 = UP_DIV(c, 4);
+  auto inputTexture = std::make_unique<AGLTexture>(
+      w, h, c_4, getTextureFormat(), GL_TEXTURE_3D, false);
+  host2device(inputTexture->id(), input, c, h, w, false /* align */);
+
+  auto outputTexture = std::make_unique<AGLTexture>(
+      w, h, c_4, getTextureFormat(), GL_TEXTURE_3D, false);
+
+  int compGroupSize[3];
+  std::vector<std::string> prefix;
+  addCompGroupSizeDefines(prefix, compGroupSize, 8, 8, 1);
+
+  auto program = getProgram("glsl_threshold_glsl", glsl_threshold_glsl, prefix);
+  program->useProgram();
+  glBindImageTexture(
+      0, outputTexture->id(), 0, GL_TRUE, 0, GL_WRITE_ONLY, getTextureFormat());
+  {
+    int texId = 0;
+    glActiveTexture(GL_TEXTURE0 + texId);
+    glUniform1i(1, texId);
+    glBindTexture(GL_TEXTURE_3D, inputTexture->id());
+    AGL_CHECK_ERROR;
+  }
+  glUniform4i(2, w, h, c_4, 1);
+  glUniform1f(3, threshold);
+  glUniform1f(4, value);
+
+  AGL_CHECK_ERROR;
+
+  compute(
+      UP_DIV(w, compGroupSize[0]),
+      UP_DIV(h, compGroupSize[1]),
+      UP_DIV(c_4, compGroupSize[2]));
+
+  device2host(outputTexture->id(), output, w, h, c, false /* align */);
+
+  agpu_print("output:", output, 4, dims);
+}
+
 #endif
 } // namespace agpu

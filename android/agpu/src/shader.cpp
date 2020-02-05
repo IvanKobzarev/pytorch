@@ -16,6 +16,24 @@ const char* glsl_binary_add_glsl =
 "    }\n"
 "}\n"
 ;
+const char* glsl_threshold_glsl = 
+"layout(FORMAT, binding=0) writeonly uniform PRECISION image3D uOutput;\n"
+"layout(location=1) uniform mediump sampler3D uInput;\n"
+"layout(location=2) uniform ivec3 uImgSize;\n"
+"layout(location=3) uniform float uThreshold;\n"
+"layout(location=4) uniform float uValue;\n"
+"layout (local_size_x = XLOCAL, local_size_y = YLOCAL, local_size_z = ZLOCAL) in;\n"
+"void main()\n"
+"{\n"
+"    ivec3 pos = ivec3(gl_GlobalInvocationID);\n"
+"    if(pos.x < uImgSize.x && pos.y < uImgSize.y && pos.z < uImgSize.z)\n"
+"    {\n"
+"      vec4 dataIn = texelFetch(uInput, pos, 0);\n"
+"      bvec4 lessThreshold = bvec4(lessThan(dataIn, vec4(uThreshold)));\n"
+"      imageStore(uOutput, pos, mix(dataIn, uValue, lessThreshold));\n"
+"    }\n"
+"}\n"
+;
 const char* glsl_image_to_nchw_buffer_glsl = 
 "layout(FORMAT, binding=0) readonly uniform PRECISION image3D uImage;\n"
 "layout(binding=1) writeonly buffer destBuffer{\n"

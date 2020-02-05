@@ -114,7 +114,43 @@ Tensor elu_backward(
 
 Tensor relu(const Tensor & self) {
   std::cout << "OOOP relu" << std::endl;
-  return at::threshold(self, 0, 0);
+  bool useAgpu = at::getUseAgpu();
+  if (!useAgpu) {
+    return at::threshold(self, 0, 0);
+  }
+  std::cout << "---AGPU---threshold()" << std::endl;
+  auto is = self.sizes();
+  std::cout << "input.dim():" << self.dim();
+  std::cout << "input.sizes():" << is;
+  int64_t d = self.dim();
+  uint32_t adims[4] = {1, 1, 1, 1 };
+  for (uint32_t i = 0; i < d; ++i) {
+    adims[3 - d + 1 + i] = is[i];
+  }
+
+  uint32_t input_n = adims[0];
+  uint32_t input_c = adims[1];
+  uint32_t input_h = adims[2];
+  uint32_t input_w = adims[3];
+
+  at::Tensor output = at::empty(is, self.options());
+  const float* inputData = (float*) self.data_ptr();
+  float* outputData = (float*) output.data_ptr();
+
+  agpu::agpu_threshold(
+    inputData,
+    input_n,
+    input_c,
+    input_h,
+    input_w,
+    0,
+    0,
+    outputData
+  );
+
+  std::cout << "output:\n" << output << std::endl;
+  std::cout << "---AGPU---threshold()$" << std::endl;
+  return output;
 }
 
 Tensor & relu_(Tensor & self) {

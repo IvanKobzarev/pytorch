@@ -2,14 +2,9 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include "agpu_gl_header.h"
 
 #ifdef __ANDROID__
-
-#include <EGL/egl.h>
-#include <GLES2/gl2.h>
-#include <GLES2/gl2ext.h>
-#include <GLES3/gl31.h>
-
 #include <android/log.h>
 #define AGPU_ERROR(format, ...) \
   __android_log_print(ANDROID_LOG_ERROR, "AGPU", format, ##__VA_ARGS__)
@@ -35,7 +30,7 @@
     assert(GL_NO_ERROR == error);                                             \
   }
 namespace agpu {
-const char* agpu_test();
+
 void agpu_conv2d(
     const float* input,
     uint32_t input_n,
@@ -63,6 +58,15 @@ void agpu_add2t(
     uint32_t c,
     uint32_t h,
     uint32_t w,
+    float* output);
+
+void agpu_threshold(
+    const float* input,
+    uint32_t n,
+    uint32_t c,
+    uint32_t h,
+    uint32_t w,
+    float threshold,
     float* output);
 
 } // namespace agpu
