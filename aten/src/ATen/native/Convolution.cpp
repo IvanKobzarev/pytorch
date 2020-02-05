@@ -602,7 +602,11 @@ at::Tensor _convolution(
   params.deterministic = deterministic;
   params.cudnn_enabled = cudnn_enabled;
   
-  std::cout << "_convolution params:" << params << std::endl;
+  std::cout << "OOOP _convolution";
+  if (params.groups > 1) {
+    std::cout << " dws";
+  }
+  std::cout << std::endl;
 
   check_shape_forward(input, weight, bias, params, input_is_mkldnn);
 
