@@ -591,7 +591,6 @@ at::Tensor _convolution(
   int64_t dim = k - 2;
 
   TORCH_CHECK(dim > 0, "weight should have at least three dimensions");
-  std::cout << "_convolution output_padding_" << output_padding_ << " ti:" << typeid(output_padding_).name();
   ConvParams params;
   params.stride = expand_param_if_needed(stride_, "stride", dim);
   params.padding = expand_param_if_needed(padding_, "padding", dim);

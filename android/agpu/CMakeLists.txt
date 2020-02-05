@@ -39,7 +39,11 @@ TARGET_INCLUDE_DIRECTORIES(agpu PUBLIC src)
 
 SET_TARGET_PROPERTIES(agpu PROPERTIES PUBLIC_HEADER src/agpu.h)
 
+if (ANDROID_ABI)
 target_link_libraries(agpu EGL GLESv3)
+else()
+target_link_libraries(agpu)
+endif()
 
 INSTALL(TARGETS agpu
    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

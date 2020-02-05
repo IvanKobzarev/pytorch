@@ -62,6 +62,7 @@ void batch_norm_cpu_inference_collect_linear_and_constant_terms(
     const Tensor& weight /* optional */, const Tensor& bias /* optional */,
     const Tensor& mean, const Tensor& variance, double eps) {
 
+  std::cout << "III batch_norm_cpu_inference_collect_linear_and_constant_terms" << std::endl;
   const scalar_t* weight_data = weight.defined() ? weight.data_ptr<scalar_t>() : nullptr;
   const scalar_t* bias_data = bias.defined() ? bias.data_ptr<scalar_t>() : nullptr;
   const scalar_t* mean_data = mean.data_ptr<scalar_t>();
@@ -95,7 +96,7 @@ template<typename scalar_t>
 void batch_norm_cpu_inference_contiguous(Tensor& output, const Tensor& input,
     const Tensor& weight /* optional */, const Tensor& bias /* optional */,
     const Tensor& mean, const Tensor& variance, double eps) {
-
+  std::cout << "III batch_norm_cpu_inference_contiguous" << std::endl;
   int64_t n_batch = input.size(0);
   int64_t n_channel = input.size(1);
   int64_t image_size = input.numel() / n_batch / n_channel;
