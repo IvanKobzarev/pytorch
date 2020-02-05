@@ -7,6 +7,7 @@
 #include <ATen/native/TensorIterator.h>
 #include <ATen/native/BinaryOps.h>
 #include <ATen/native/cpu/Loops.h>
+#include <ATen/AgpuUtils.h>
 
 namespace at { namespace native {
 namespace {
@@ -28,6 +29,30 @@ void add_kernel(TensorIterator& iter, Scalar alpha_scalar) {
   for (uint32_t i = 0; i < iter.ntensors(); ++i) {
     std::cout << "iter.tensor(" << i << "):\n" << iter.tensor(i) << std::endl; 
   }
+  
+  std::cout << "III useAgpu:" << useAgpu << std::endl;
+  if (useAgpu) { 
+    at::Tensor output = iter.tensor(0);
+    at::Tensor input0 = iter.tensor(1);
+    auto is = input0.sizes();
+    uint32_t input_n = is[0];
+    uint32_t input_c = is[1];
+    uint32_t input_h = is[2];
+    uint32_t input_w = is[3];
+    std::cout << "input nchw:" << input_n << " " << input_c << " " << input_h << " " << input_w << std::endl;
+    
+    at::Tensor input1 = iter.tensor(2);
+    agpu::agpu_add2t(
+        (float*)input0.data_ptr(),
+        (float*)input1.data_ptr(),
+        input_n,
+        input_c,
+        input_h,
+        input_w,
+        (float*)output.data_ptr());
+    std::cout << "\nadd_kernel$ iter.tensor(0):"<< iter.tensor(0) << std::endl;
+    return;
+  }
   if (iter.dtype() == ScalarType::Bool) {
       using scalar_t = bool;
       auto alpha = alpha_scalar.to<scalar_t>();
@@ -44,7 +69,6 @@ void add_kernel(TensorIterator& iter, Scalar alpha_scalar) {
         });
       });
   }
-
   std::cout << "\nadd_kernel$ iter.tensor(0):"<< iter.tensor(0) << std::endl;
 }
 

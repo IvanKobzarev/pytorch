@@ -602,7 +602,6 @@ at::Tensor _convolution(
   params.deterministic = deterministic;
   params.cudnn_enabled = cudnn_enabled;
   
-  //ALOGI("agpu_test():%s", agpu_test());
   std::cout << "_convolution params:" << params << std::endl;
 
   check_shape_forward(input, weight, bias, params, input_is_mkldnn);
