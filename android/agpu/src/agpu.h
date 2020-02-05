@@ -56,4 +56,13 @@ void agpu_conv2d(
     uint32_t groups,
     float* output);
 
+void agpu_add2t(
+    const float* input0,
+    const float* input1,
+    uint32_t n,
+    uint32_t c,
+    uint32_t h,
+    uint32_t w,
+    float* output);
+
 } // namespace agpu
