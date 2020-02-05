@@ -616,12 +616,13 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
     ALOGI("%s %s", m, os.str().c_str());
   }
   
-  static void test(facebook::jni::alias_ref<jclass>) {
+  static void test(facebook::jni::alias_ref<jclass>, jint t) {
 
     ALOGI("----------------");
     ALOGI("----------------");
     ALOGI("----------------");
-    ALOGI("PyTorchJni::test");
+    ALOGI("PyTorchJni::test %d", t);
+    if (t == 1) {
     auto input = torch::tensor(// 1, 3, 3, 3
       {
         {
@@ -720,7 +721,47 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
     bool eq = torch::equal(outputC, outputT);
     ALOGI("outputC eq outputT:%d", eq);
     assert(eq);
+    } else if (t == 2) { // add2
+      auto a = torch::tensor(//1, 2, 2, 3
+      {
+        {
+          {1, 2, 3},
+          {4, 5, 6},
+        },
+        {
+          {11, 12, 13},
+          {14, 15, 16},
+        },
+      }, torch::kFloat);
+      auto b = torch::tensor(//1, 2, 2, 3
+      {
+        {
+          {101, 102, 103},
+          {104, 105, 106},
+        },
+        {
+          {111, 112, 113},
+          {114, 115, 116},
+        },
+      }, torch::kFloat);
 
+      std::cout << "a:\n" << a << std::endl;
+      std::cout << "b:\n" << b << std::endl;
+      
+      ALOGI("III set useAgpu false");
+      at::setUseAgpu(false);
+      auto outputC = torch::add(a, b);
+      std::cout << "outputC:\n"<< outputC << std::endl;
+
+      ALOGI("III set useAgpu true");
+      at::setUseAgpu(true);
+      auto outputT = torch::add(a, b);
+      std::cout << "outputT:\n"<< outputT << std::endl;
+
+      bool eq = torch::equal(outputC, outputT);
+      ALOGI("outputC eq outputT:%d", eq);
+      assert(eq);
+    }
 
     ALOGI("=================");
     ALOGI("=================");

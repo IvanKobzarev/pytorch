@@ -30,14 +30,14 @@ public class MainActivity extends AppCompatActivity {
   private FloatBuffer mInputTensorBuffer;
   private Tensor mInputTensor;
   private StringBuilder mTextViewStringBuilder = new StringBuilder();
-  private final boolean NATIVE_TEST = false;
 
   private final Runnable mModuleForwardRunnable = new Runnable() {
     @Override
     public void run() {
-      if (NATIVE_TEST) {
+      Log.i(TAG, "BuildConfig.NATIVE_TEST:" + BuildConfig.NATIVE_TEST);
+      if (BuildConfig.NATIVE_TEST > 0) {
         Log.i(TAG, "---nativeTest()");
-        PyTorchAndroid.nativeTest();
+        PyTorchAndroid.nativeTest(BuildConfig.NATIVE_TEST);
         Log.i(TAG, "===nativeTest()");
       } else {
         final Result result = doModuleForward();
@@ -45,9 +45,9 @@ public class MainActivity extends AppCompatActivity {
           @Override
           public void run() {
             handleResult(result);
-            if (mBackgroundHandler != null) {
-              mBackgroundHandler.post(mModuleForwardRunnable);
-            }
+            //if (mBackgroundHandler != null) {
+            //  mBackgroundHandler.post(mModuleForwardRunnable);
+            //}
           }
         });
       }

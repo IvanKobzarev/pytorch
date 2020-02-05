@@ -26,6 +26,7 @@ android {
         buildConfigField("String", "MODULE_ASSET_NAME", "\"mobilenet2q.pt\"")
         buildConfigField("String", "LOGCAT_TAG", "@string/app_name")
         buildConfigField("long[]", "INPUT_TENSOR_SHAPE", "new long[]{1, 3, 224, 224}")
+        buildConfigField("int", "NATIVE_TEST", "0")
         addManifestPlaceholders([APP_NAME: "@string/app_name", MAIN_ACTIVITY: "org.pytorch.testapp.MainActivity"])
     }
     buildTypes {
@@ -35,6 +36,14 @@ android {
     }
     flavorDimensions "model", "build", "activity"
     productFlavors {
+        tst {
+            dimension "model"
+            applicationIdSuffix ".tst"
+            buildConfigField("int", "NATIVE_TEST", "2")
+            buildConfigField("String", "MODULE_ASSET_NAME", "\"mn2fp32.pt\"")
+            addManifestPlaceholders([APP_NAME: "TST"])
+            buildConfigField("String", "LOGCAT_TAG", "\"pytorch-tst\"")
+        }
         mbf {
             dimension "model"
             applicationIdSuffix ".mbf"
