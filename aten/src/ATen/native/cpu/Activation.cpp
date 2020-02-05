@@ -320,6 +320,7 @@ void shrink_backward_kernel(TensorIterator& iter, Scalar lambd) {
 }
 
 void hardtanh_backward_kernel(TensorIterator& iter, Scalar min, Scalar max) {
+  std::cout << "OOOP hardtanh_backward_kernel" << std::endl;
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(iter.dtype(), "hardshrink_backward_cpu", [&] {
     auto min_val = min.to<scalar_t>();
     auto max_val = max.to<scalar_t>();

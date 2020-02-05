@@ -16,24 +16,23 @@ namespace {
 using namespace vec256;
 
 void add_kernel(TensorIterator& iter, Scalar alpha_scalar) {
-  std::cout << "III add_kernel" << std::endl;
-  std::cout 
-    << "\nscalar:" << alpha_scalar
-    << "\niter.numel():"<< iter.numel() 
-    << "\niter.shape():"<< iter.shape() 
-    << "\niter.ntesors():"<< iter.ntensors() 
-    << "\niter.ninputs():"<< iter.ninputs() 
-    << "\niter.noutputs():"<< iter.noutputs() 
-    << "\niter.num_output_elements():"<< iter.num_output_elements() 
-    << std::endl;
-
-  for (uint32_t i = 0; i < iter.ntensors(); ++i) {
-    std::cout << "iter.tensor(" << i << "):\n" << iter.tensor(i) << std::endl; 
-  }
+  std::cout << "OOOP add_kernel" << std::endl;
   
   bool useAgpu = at::getUseAgpu();
-  std::cout << __FILE__ << "III useAgpu:" << useAgpu << std::endl;
   if (useAgpu && iter.tensor(1).dim() <= 4) {
+    std::cout 
+      << "\nscalar:" << alpha_scalar
+      << "\niter.numel():"<< iter.numel() 
+      << "\niter.shape():"<< iter.shape() 
+      << "\niter.ntesors():"<< iter.ntensors() 
+      << "\niter.ninputs():"<< iter.ninputs() 
+      << "\niter.noutputs():"<< iter.noutputs() 
+      << "\niter.num_output_elements():"<< iter.num_output_elements() 
+      << std::endl;
+    for (uint32_t i = 0; i < iter.ntensors(); ++i) {
+      std::cout << "iter.tensor(" << i << "):\n" << iter.tensor(i) << std::endl; 
+    }
+    std::cout << __FILE__ << "III useAgpu:" << useAgpu << std::endl;
     at::Tensor output = iter.tensor(0);
     at::Tensor input0 = iter.tensor(1);
     auto is = input0.sizes();
@@ -84,7 +83,6 @@ void add_kernel(TensorIterator& iter, Scalar alpha_scalar) {
         });
       });
   }
-  std::cout << "\nadd_kernel$ iter.tensor(0):"<< iter.tensor(0) << std::endl;
 }
 
 void atan2_kernel(TensorIterator& iter) {
