@@ -616,11 +616,17 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
   }
 
   static void test(facebook::jni::alias_ref<jclass>, jint t) {
-    ALOGI("----------------");
-    ALOGI("----------------");
-    ALOGI("----------------");
+    ALOGI("----------------test");
     ALOGI("PyTorchJni::test %d", t);
+
+    //static const int kTestConv = 1;
+    //static const int kTestAdd = 2;
+    //static const int kTestThreshold = 3;
     if (t == 1) {
+      std::cout << "*******************************"
+                << "ATEST_CONV"
+                << "*******************************"
+                << std::endl;
       auto input = torch::tensor( // 1, 3, 3, 3
           {{
               // c_0
@@ -683,11 +689,8 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
           torch::kFloat);
       auto bias = torch::tensor({0, 0}, torch::kFloat);
       log("input sizes:", input.sizes());
-      log("input:", input);
       log("w sizes:", weight.sizes());
-      log("w:", weight);
       log("b sizes:", bias.sizes());
-      log("b:", bias);
 
       int64_t groups = 1;
       torch::nn::functional::Conv2dFuncOptions o =
@@ -704,7 +707,6 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
           c10::IntArrayRef{1}, // dilation
           groups);
       log("outputC.sizes: ", outputC.sizes());
-      log("outputC: ", outputC);
 
       ALOGI("III set useAgpu true");
       at::setUseAgpu(true);
@@ -718,13 +720,16 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
           groups);
 
       log("outputT.sizes: ", outputT.sizes());
-      log("outputT: ", outputT);
 
       bool eq = torch::equal(outputC, outputT);
       ALOGI("outputC eq outputT:%d", eq);
       assert(eq);
     } else
     if (t == 2) { // add2
+      std::cout << "*******************************"
+                << "ATEST_ADD"
+                << "*******************************"
+                << std::endl;
       auto a = torch::tensor( // 1, 2, 2, 3
           {
               {
@@ -757,42 +762,44 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
       at::setUseAgpu(false);
       auto outputC = torch::add(a, b);
       log("outputC.sizes: ", outputC.sizes());
-      log("outputC: ", outputC);
 
       ALOGI("III set useAgpu true");
       at::setUseAgpu(true);
       auto outputT = torch::add(a, b);
       log("outputT.sizes: ", outputT.sizes());
-      log("outputT: ", outputT);
 
       bool eq = torch::equal(outputC, outputT);
       ALOGI("outputC eq outputT:%d", eq);
       assert(eq);
     } else
     if (t == 3) {
-      auto a = torch::tensor( // 1, 2, 2, 3
+      std::cout << "*******************************"
+                << "ATEST_THRESHOLD"
+                << "*******************************"
+                << std::endl;
+      auto input = torch::tensor( // 1, 2, 2, 3
           {
               {
-                  {1, 2, 3},
-                  {4, 5, 6},
+                  {1, -2, 3},
+                  {-4, 5, -6},
               },
               {
-                  {11, 12, 13},
-                  {14, 15, 16},
+                  {11, -12, 13},
+                  {-14, 15, -16},
               },
           },
           torch::kFloat);
-      std::cout << "a:\n" << a << std::endl;
-
+      log("input.sizes():", input.sizes());
+      log("input:", input);
       ALOGI("III set useAgpu false");
       at::setUseAgpu(false);
-      auto outputC = at::threshold(a, 3, 0);
+      auto outputC = at::relu(input);//, 3, 0);
       log("outputC.sizes: ", outputC.sizes());
       log("outputC: ", outputC);
 
       ALOGI("III set useAgpu true");
       at::setUseAgpu(true);
-      auto outputT = at::threshold(a, 3, 0);
+      auto outputT = at::relu(input);//, 3, 0);
       log("outputT.sizes: ", outputT.sizes());
       log("outputT: ", outputT);
 
@@ -800,10 +807,7 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
       ALOGI("outputC eq outputT:%d", eq);
       assert(eq);
     }
-
-    ALOGI("=================");
-    ALOGI("=================");
-    ALOGI("=================");
+    ALOGI("=================test");
   }
 
   static int pfd[2];

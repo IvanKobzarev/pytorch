@@ -118,6 +118,7 @@ class AGLContext {
       int majorVersion;
       int minorVersion;
       eglInitialize(display_, &majorVersion, &minorVersion);
+      AGPU_PRINT("GLContext: majorVersion:%d minorVersion:%d", majorVersion, minorVersion);
       EGLint numConfigs;
       static const EGLint configAttribs[] = {EGL_SURFACE_TYPE,
                                              EGL_PBUFFER_BIT,
@@ -156,6 +157,12 @@ class AGLContext {
       eglBindAPI(EGL_OPENGL_ES_API);
       int major;
       glGetIntegerv(GL_MAJOR_VERSION, &major);
+      int minor;
+      glGetIntegerv(GL_MINOR_VERSION, &minor);
+      AGPU_PRINT("GLContext: GL_MAJOR_VERSION:%d GL_MINOR_VERSION:%d", major, minor);
+      AGPU_PRINT("GLContext: GL_SHADING_LANGUAGE_VERSION:%s",
+          (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION));
+
       if (major < 3) {
         isCreateError_ = true;
       }
@@ -626,17 +633,17 @@ void addCompGroupSizeDefines(
         : maxCompGroupSizeZ;
   {
     std::ostringstream os;
-    os << "#define XLOCAL " << compGroupSize[0];
+    os << "#define COMP_GROUP_X " << compGroupSize[0];
     header.push_back(os.str());
   }
   {
     std::ostringstream os;
-    os << "#define YLOCAL " << compGroupSize[1];
+    os << "#define COMP_GROUP_Y " << compGroupSize[1];
     header.push_back(os.str());
   }
   {
     std::ostringstream os;
-    os << "#define ZLOCAL " << compGroupSize[2];
+    os << "#define COMP_GROUP_Z " << compGroupSize[2];
     header.push_back(os.str());
   }
   AGPU_PRINT("compGroupSize(%d %d %d)", compGroupSize[0], compGroupSize[1], compGroupSize[2]);
@@ -923,14 +930,15 @@ void agpu_threshold(
     float value,
     float* output) {
 
-  AGPU_PRINT("agpu_threshold(input dims{%d %d %d %d}", n, c, h, w);
+  AGPU_PRINT("agpu_threshold(input dims{%d %d %d %d} threshold:%f value:%f", n, c, h, w, threshold, value);
   uint32_t dims[4] = {n, c, h, w};
-  agpu_print("input:", input, 4, dims);
+  agpu_print("input:\n", input, 4, dims);
 
   initContext();
   int c_4 = UP_DIV(c, 4);
   auto inputTexture = std::make_unique<AGLTexture>(
       w, h, c_4, getTextureFormat(), GL_TEXTURE_3D, false);
+
   host2device(inputTexture->id(), input, c, h, w, false /* align */);
 
   auto outputTexture = std::make_unique<AGLTexture>(
@@ -942,6 +950,7 @@ void agpu_threshold(
 
   auto program = getProgram("glsl_threshold_glsl", glsl_threshold_glsl, prefix);
   program->useProgram();
+
   glBindImageTexture(
       0, outputTexture->id(), 0, GL_TRUE, 0, GL_WRITE_ONLY, getTextureFormat());
   {
@@ -951,10 +960,12 @@ void agpu_threshold(
     glBindTexture(GL_TEXTURE_3D, inputTexture->id());
     AGL_CHECK_ERROR;
   }
+
   glUniform4i(2, w, h, c_4, 1);
+  AGL_CHECK_ERROR;
+  //glUniform4i(3, w, h, c_4, 1);
   glUniform1f(3, threshold);
   glUniform1f(4, value);
-
   AGL_CHECK_ERROR;
 
   compute(
