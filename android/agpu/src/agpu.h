@@ -67,6 +67,7 @@ void agpu_threshold(
     uint32_t h,
     uint32_t w,
     float threshold,
+    float value,
     float* output);
 
 } // namespace agpu

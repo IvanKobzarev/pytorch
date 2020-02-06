@@ -7,6 +7,8 @@
 #include <ATen/native/TensorIterator.h>
 #include <ATen/Parallel.h>
 #include <ATen/core/DistributionsHelper.h>
+#include <agpu.h>
+#include <ATen/AgpuUtils.h>
 
 namespace at { namespace native {
 
