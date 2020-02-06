@@ -104,6 +104,16 @@ void agpu_add2t(
     uint32_t w,
     float* output) {}
 
+void agpu_threshold(
+    const float* input,
+    uint32_t n,
+    uint32_t c,
+    uint32_t h,
+    uint32_t w,
+    float threshold,
+    float value,
+    float* output){}
+
 #else
 
 class AGLContext {

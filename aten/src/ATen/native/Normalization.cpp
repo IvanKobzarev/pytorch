@@ -204,7 +204,7 @@ std::tuple<Tensor,Tensor,Tensor> batch_norm_cpu_transform_input_template(
       && (!bias.defined() || bias.is_contiguous())
       && running_mean.is_contiguous()
       && running_var.is_contiguous()) {
-
+    std::cout << "batch_norm0" << std::endl;
     Tensor output = at::empty_like(input, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
     batch_norm_cpu_inference_contiguous<scalar_t>(
       output, input, weight, bias, running_mean, running_var, eps);
@@ -217,6 +217,7 @@ std::tuple<Tensor,Tensor,Tensor> batch_norm_cpu_transform_input_template(
       && (!bias.defined() || bias.is_contiguous())
       && running_mean.is_contiguous()
       && running_var.is_contiguous()) {
+    std::cout << "batch_norm1" << std::endl;
 
     Tensor output = at::empty_like(input, at::MemoryFormat::ChannelsLast);
     batch_norm_cpu_inference_channels_last<scalar_t>(
@@ -224,6 +225,7 @@ std::tuple<Tensor,Tensor,Tensor> batch_norm_cpu_transform_input_template(
     return std::make_tuple(output, save_mean, save_invstd);
   }
 
+  std::cout << "batch_norm2" << std::endl;
   Tensor output = at::empty_like(input, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
 
   int64_t n_input = input.size(1);
@@ -265,6 +267,7 @@ template<typename scalar_t, template<typename T> class VarTransform>
 std::tuple<Tensor,Tensor> batch_norm_cpu_update_stats_template(
     const Tensor& input, const Tensor& running_mean, const Tensor& running_var,
     double momentum, double eps) {
+  std::cout << "batch_norm_cpu_update_stats_template" << std::endl;
 
   using accscalar_t = at::acc_type<scalar_t, false>;
 
@@ -629,6 +632,17 @@ std::tuple<Tensor, Tensor, Tensor> batch_norm_cpu(const Tensor& self, const Tens
 
   return AT_DISPATCH_FLOATING_TYPES(self.scalar_type(), "batch_norm", [&] {
       std::cout << "OOOP batch_norm_cpu" << std::endl;
+      std::cout 
+      << "BN self.sizes():\n" << self.sizes() << std::endl
+      << "BN weight.sizes():\n" << weight.sizes() << " "<< weight.defined() << std::endl
+      << "BN bias.sizes():\n" << bias.sizes() <<" "<< bias.defined() << std::endl
+      << "BN run_mean.sizes():\n" << running_mean.sizes() << " "<< running_mean.defined() << std::endl
+      << "BN run_mean:\n" << running_mean << std::endl
+      << "BN run_var.sizes():\n" << running_var.sizes() << " "<< running_var.defined() << std::endl
+      << "BN train:\n" << train << std::endl
+      << "BN momentum:\n" << momentum << std::endl
+      << "BN eps:\n" << eps << std::endl;
+
       if (!train) {
         return batch_norm_cpu_transform_input_template<scalar_t>(self, weight, bias, {}, {}, running_mean, running_var, train, eps);
       } else {
