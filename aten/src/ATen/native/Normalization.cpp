@@ -215,10 +215,10 @@ std::tuple<Tensor,Tensor,Tensor> batch_norm_cpu_transform_input_template(
         return std::make_tuple(output, save_mean, save_invstd);
     } else {
         std::cout << "---AGPU---batch_norm()" << std::endl;
-        auto is = self.sizes();
-        std::cout << "input.dim():" << self.dim();
+        auto is = input.sizes();
+        std::cout << "input.dim():" << input.dim();
         std::cout << "input.sizes():" << is;
-        int64_t d = self.dim();
+        int64_t d = input.dim();
         uint32_t adims[4] = {1, 1, 1, 1 };
         for (uint32_t i = 0; i < d; ++i) {
           adims[3 - d + 1 + i] = is[i];
@@ -230,7 +230,7 @@ std::tuple<Tensor,Tensor,Tensor> batch_norm_cpu_transform_input_template(
 
         Tensor output = at::empty_like(input, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
 
-        const float* inputData = (float*) self.data_ptr();
+        const float* inputData = (float*) input.data_ptr();
         float* outputData = (float*) output.data_ptr();
         float* weightData = (float*) weight.data_ptr();
         float* biasData = (float*) bias.data_ptr();
