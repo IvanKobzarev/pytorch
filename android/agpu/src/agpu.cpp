@@ -138,6 +138,7 @@ void agpu_batch_norm(
     const float eps,
     float* output) {}
 
+void agpu_bench() {}
 #else
 
 class AGLContext {
@@ -237,9 +238,9 @@ class AGLContext {
   bool isCreateError_{false};
 };
 
-class AGLBuffer {
+class AGLSSBuffer {
  public:
-  AGLBuffer(GLsizeiptr size, GLenum type = GL_SHADER_STORAGE_BUFFER) {
+  AGLSSBuffer(GLsizeiptr size, GLenum type = GL_SHADER_STORAGE_BUFFER) {
     type_ = type;
     assert(size > 0);
     glGenBuffers(1, &id_);
@@ -252,7 +253,7 @@ class AGLBuffer {
     size_ = size;
   }
 
-  ~AGLBuffer() {
+  ~AGLSSBuffer() {
     glDeleteBuffers(1, &id_);
     AGL_CHECK_ERROR;
   }
@@ -275,20 +276,16 @@ class AGLBuffer {
     return size_;
   }
 
-  GLuint getId() const {
-    return id_;
-  }
-
   void bindInProgram(int binding) {
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, getId());
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, id_);
     AGL_CHECK_ERROR;
   }
 
-  std::unique_ptr<AGLBuffer> static from(
+  std::unique_ptr<AGLSSBuffer> static from(
       const float* data,
       GLsizeiptr size,
       size_t sizeCopy) {
-    auto buffer = std::make_unique<AGLBuffer>(size);
+    auto buffer = std::make_unique<AGLSSBuffer>(size);
     float* bufferDataPtr =
         (float*)(buffer->map(GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT));
     if (!bufferDataPtr) {
@@ -300,7 +297,7 @@ class AGLBuffer {
     return buffer;
   }
 
-  std::unique_ptr<AGLBuffer> static from(const float* data, GLsizeiptr size) {
+  std::unique_ptr<AGLSSBuffer> static from(const float* data, GLsizeiptr size) {
     return from(data, size, size);
   }
 
@@ -308,7 +305,7 @@ class AGLBuffer {
   GLuint id_ = 0;
   GLsizeiptr size_;
   GLenum type_;
-}; // class AGLBuffer
+}; // class AGLSSBuffer
 
 class AGLTexture {
  public:
@@ -574,7 +571,7 @@ void device2host(
   wait();
   auto d2_4 = UP_DIV(d2, 4);
   auto size = d2_4 * 4 * d0 * d1 * sizeof(float);
-  auto buffer = std::make_unique<AGLBuffer>(size);
+  auto buffer = std::make_unique<AGLSSBuffer>(size);
 
   auto program = outputAlign4
       ? getProgram(
@@ -621,7 +618,7 @@ void host2device(
 
   const int c_4 = UP_DIV(c, 4);
   GLsizeiptr size = ROUND_UP(c, 4) * w * h * sizeof(float);
-  auto buffer = AGLBuffer::from(
+  auto buffer = AGLSSBuffer::from(
       inputData, size, inputData4Aligned ? size : c * h * w * sizeof(float));
 
   auto program = inputData4Aligned
@@ -747,13 +744,13 @@ void agpu_conv2d(
   uint32_t bdims[1] = {kernel_c};
   agpu_print("bias:", bias, 1, bdims);
 
-  auto biasBuffer = AGLBuffer::from(
+  auto biasBuffer = AGLSSBuffer::from(
       bias, sizeof(float) * ALIGN_UP4(kernel_c), sizeof(float) * kernel_c);
 
   const uint32_t kernelBufferSize =
       ALIGN_UP4(kernel_c) * ALIGN_UP4(input_c) * kernel_h * kernel_w;
   auto kernelBuffer =
-      std::make_unique<AGLBuffer>(sizeof(float) * kernelBufferSize);
+      std::make_unique<AGLSSBuffer>(sizeof(float) * kernelBufferSize);
 
   const int alignedKernelCSize =
       UP_DIV(input_c, unit) * kernel_w * kernel_h * unit2;
@@ -836,6 +833,20 @@ void agpu_conv2d(
       output_w, output_h, oc_4, getTextureFormat(), GL_TEXTURE_3D, false);
 
   convProgram->useProgram();
+
+  auto locInput = convProgram->getUniformLocation("uInput");
+  auto locKernel = convProgram->getUniformLocation("uKernel");
+  auto locPad = convProgram->getUniformLocation("uPad");
+  auto locKernelSize = convProgram->getUniformLocation("uKernelSize");
+  auto locUnroll = convProgram->getUniformLocation("uUnroll");
+  auto locInputSize = convProgram->getUniformLocation("uInputSize");
+  APRINT("LLL locInput:%d", locInput);
+  APRINT("LLL locKernel:%d", locKernel);
+  APRINT("LLL locPad:%d", locPad);
+  APRINT("LLL locKernelSize:%d", locKernelSize);
+  APRINT("LLL locUnroll:%d", locUnroll);
+  APRINT("LLL locInputSize:%d", locInputSize);
+
   // binding convolution {
   glBindImageTexture(
       0, outputTexture->id(), 0, GL_TRUE, 0, GL_WRITE_ONLY, getTextureFormat());
@@ -995,10 +1006,10 @@ void agpu_batch_norm(
       w, h, c_4, getTextureFormat(), GL_TEXTURE_3D, false);
 
   GLsizeiptr bufferSize = sizeof(float) * ALIGN_UP4(c);
-  auto weightBuffer = AGLBuffer::from(weight, bufferSize);
-  auto biasBuffer = AGLBuffer::from(bias, bufferSize);
-  auto meanBuffer = AGLBuffer::from(mean, bufferSize);
-  auto varianceBuffer = AGLBuffer::from(variance, bufferSize);
+  auto weightBuffer = AGLSSBuffer::from(weight, bufferSize);
+  auto biasBuffer = AGLSSBuffer::from(bias, bufferSize);
+  auto meanBuffer = AGLSSBuffer::from(mean, bufferSize);
+  auto varianceBuffer = AGLSSBuffer::from(variance, bufferSize);
 
   // computation work group
   int compGroupSize[3];

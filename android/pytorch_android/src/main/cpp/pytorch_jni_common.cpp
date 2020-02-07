@@ -5,6 +5,7 @@
 
 #include <fbjni/ByteBuffer.h>
 #include <fbjni/fbjni.h>
+#include <benchmark/benchmark.h>
 
 #include "pytorch_jni_common.h"
 #if defined(__ANDROID__)
@@ -625,6 +626,7 @@ static bool checkRtol(const at::Tensor& diff, const std::vector<at::Tensor> inpu
 static bool almostEqual(const at::Tensor& a, const at::Tensor& b) {
   return checkRtol(a - b, {a, b});
 }
+
   static void test(facebook::jni::alias_ref<jclass>, jint t) {
     ALOGI("----------------test");
     ALOGI("PyTorchJni::test %d", t);
@@ -869,6 +871,34 @@ static bool almostEqual(const at::Tensor& a, const at::Tensor& b) {
       assert(eq);
     }
     ALOGI("=================test");
+  }
+
+  static void BM_test(benchmark::State& state) {
+    std::cout << "bench_test" << std::endl;
+  }
+
+  //BENCHMARK(BM_test);
+
+  static void test_bench(facebook::jni::alias_ref<jclass>) {
+    std::vector<std::string> argsVec = {
+      "s1",
+      "s2"
+    };
+    int argc = argsVec.size();
+    char** argv = new char*[argc];
+    for(size_t i = 0; i < argc; i++) {
+        argv[i] = new char[argsVec[i].size() + 1];
+        std::strcpy(argv[i], argsVec[i].c_str());
+    }
+
+    benchmark::RegisterBenchmark("BM_test_name", BM_test);
+    benchmark::Initialize(&argc, argv);
+    benchmark::RunSpecifiedBenchmarks();
+
+    for(size_t i = 0; i < argc; i++) {
+      delete [] argv[i];
+    }
+    delete [] argv;
   }
 
   static int pfd[2];
