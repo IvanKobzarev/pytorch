@@ -9,6 +9,9 @@
 #include <ATen/native/TensorIterator.h>
 #include <ATen/native/cpu/Loops.h>
 
+#include <ATen/AgpuUtils.h>
+#include "agpu.h"
+
 #include <vector>
 
 static const int MIOPEN_DIM_MAX = 4;
@@ -204,11 +207,51 @@ std::tuple<Tensor,Tensor,Tensor> batch_norm_cpu_transform_input_template(
       && (!bias.defined() || bias.is_contiguous())
       && running_mean.is_contiguous()
       && running_var.is_contiguous()) {
-    std::cout << "batch_norm0" << std::endl;
-    Tensor output = at::empty_like(input, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
-    batch_norm_cpu_inference_contiguous<scalar_t>(
-      output, input, weight, bias, running_mean, running_var, eps);
-    return std::make_tuple(output, save_mean, save_invstd);
+    bool useAgpu = at::getUseAgpu();
+    if (!useAgpu) {
+        Tensor output = at::empty_like(input, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
+        batch_norm_cpu_inference_contiguous<scalar_t>(
+          output, input, weight, bias, running_mean, running_var, eps);
+        return std::make_tuple(output, save_mean, save_invstd);
+    } else {
+        std::cout << "---AGPU---batch_norm()" << std::endl;
+        auto is = self.sizes();
+        std::cout << "input.dim():" << self.dim();
+        std::cout << "input.sizes():" << is;
+        int64_t d = self.dim();
+        uint32_t adims[4] = {1, 1, 1, 1 };
+        for (uint32_t i = 0; i < d; ++i) {
+          adims[3 - d + 1 + i] = is[i];
+        }
+        uint32_t input_n = adims[0];
+        uint32_t input_c = adims[1];
+        uint32_t input_h = adims[2];
+        uint32_t input_w = adims[3];
+
+        Tensor output = at::empty_like(input, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
+
+        const float* inputData = (float*) self.data_ptr();
+        float* outputData = (float*) output.data_ptr();
+        float* weightData = (float*) weight.data_ptr();
+        float* biasData = (float*) bias.data_ptr();
+        float* meanData = (float*) running_mean.data_ptr();
+        float* varData = (float*) running_var.data_ptr();
+        float epsF = eps;
+        agpu::agpu_batch_norm(
+            inputData,
+            input_n,
+            input_c,
+            input_h,
+            input_w,
+            weightData,
+            biasData,
+            meanData,
+            varData,
+            eps,
+            outputData
+        );
+        std::cout << "---AGPU---batch_norm()$" << std::endl;
+    }
   }
 
   // Check if we should use the fast path for channel last memory format

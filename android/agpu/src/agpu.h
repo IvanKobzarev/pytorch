@@ -70,4 +70,17 @@ void agpu_threshold(
     float value,
     float* output);
 
+void agpu_batch_norm(
+    const float* input,
+    uint32_t n,
+    uint32_t c,
+    uint32_t h,
+    uint32_t w,
+    const float* weight,
+    const float* bias,
+    const float* mean,
+    const float* variance,
+    const float eps,
+    float* output);
+
 } // namespace agpu
