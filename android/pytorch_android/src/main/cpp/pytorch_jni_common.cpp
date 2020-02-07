@@ -615,6 +615,16 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
     ALOGI("%s %s", m, os.str().c_str());
   }
 
+static bool checkRtol(const at::Tensor& diff, const std::vector<at::Tensor> inputs) {
+  double maxValue = 0.0;
+  for (auto& tensor : inputs) {
+    maxValue = fmax(tensor.abs().max().item<float>(), maxValue);
+  }
+  return diff.abs().max().item<float>() < 2e-6 * maxValue;
+}
+static bool almostEqual(const at::Tensor& a, const at::Tensor& b) {
+  return checkRtol(a - b, {a, b});
+}
   static void test(facebook::jni::alias_ref<jclass>, jint t) {
     ALOGI("----------------test");
     ALOGI("PyTorchJni::test %d", t);
@@ -688,15 +698,15 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
           },
           torch::kFloat);
       auto bias = torch::tensor({0, 0}, torch::kFloat);
-      log("input sizes:", input.sizes());
-      log("w sizes:", weight.sizes());
-      log("b sizes:", bias.sizes());
+      log("C input sizes:", input.sizes());
+      log("C w sizes:", weight.sizes());
+      log("C b sizes:", bias.sizes());
 
       int64_t groups = 1;
       torch::nn::functional::Conv2dFuncOptions o =
           torch::nn::functional::Conv2dFuncOptions().stride(1).padding(0);
 
-      ALOGI("III set useAgpu false");
+      ALOGI("C set useAgpu false");
       at::setUseAgpu(false);
       auto outputC = at::conv2d(
           input,
@@ -706,9 +716,9 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
           c10::IntArrayRef{0}, // padding
           c10::IntArrayRef{1}, // dilation
           groups);
-      log("outputC.sizes: ", outputC.sizes());
+      log("C outputC.sizes: ", outputC.sizes());
 
-      ALOGI("III set useAgpu true");
+      ALOGI("C set useAgpu true");
       at::setUseAgpu(true);
       auto outputT = at::conv2d(
           input,
@@ -718,11 +728,10 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
           c10::IntArrayRef{0}, // padding
           c10::IntArrayRef{1}, // dilation
           groups);
-
-      log("outputT.sizes: ", outputT.sizes());
+      log("C outputT.sizes: ", outputT.sizes());
 
       bool eq = torch::equal(outputC, outputT);
-      ALOGI("outputC eq outputT:%d", eq);
+      ALOGI("C outputC eq outputT:%d", eq);
       assert(eq);
     } else
     if (t == 2) { // add2
@@ -755,21 +764,21 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
           },
           torch::kFloat);
 
-      std::cout << "a:\n" << a << std::endl;
-      std::cout << "b:\n" << b << std::endl;
+      std::cout << "A a:\n" << a << std::endl;
+      std::cout << "A b:\n" << b << std::endl;
 
-      ALOGI("III set useAgpu false");
+      ALOGI("A set useAgpu false");
       at::setUseAgpu(false);
       auto outputC = torch::add(a, b);
-      log("outputC.sizes: ", outputC.sizes());
+      log("A outputC.sizes: ", outputC.sizes());
 
-      ALOGI("III set useAgpu true");
+      ALOGI("A set useAgpu true");
       at::setUseAgpu(true);
       auto outputT = torch::add(a, b);
-      log("outputT.sizes: ", outputT.sizes());
+      log("A outputT.sizes: ", outputT.sizes());
 
       bool eq = torch::equal(outputC, outputT);
-      ALOGI("outputC eq outputT:%d", eq);
+      ALOGI("A outputC eq outputT:%d", eq);
       assert(eq);
     } else
     if (t == 3) {
@@ -789,22 +798,74 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
               },
           },
           torch::kFloat);
-      log("input.sizes():", input.sizes());
-      log("input:", input);
-      ALOGI("III set useAgpu false");
+      log("T input.sizes():", input.sizes());
+      log("T input:", input);
+      ALOGI("T set useAgpu false");
       at::setUseAgpu(false);
       auto outputC = at::relu(input);//, 3, 0);
-      log("outputC.sizes: ", outputC.sizes());
-      log("outputC: ", outputC);
+      log("T outputC.sizes: ", outputC.sizes());
+      log("T outputC: ", outputC);
 
       ALOGI("III set useAgpu true");
       at::setUseAgpu(true);
       auto outputT = at::relu(input);//, 3, 0);
-      log("outputT.sizes: ", outputT.sizes());
-      log("outputT: ", outputT);
+      ALOGI("T ===");
+      log("T input.sizes():", input.sizes());
+      log("T input:", input);
+      log("T outputC.sizes: ", outputC.sizes());
+      log("T outputC: ", outputC);
+      log("T outputT.sizes: ", outputT.sizes());
+      log("T outputT: ", outputT);
 
       bool eq = torch::equal(outputC, outputT);
-      ALOGI("outputC eq outputT:%d", eq);
+      ALOGI("T outputC eq outputT:%d", eq);
+      assert(eq);
+    } else
+    if (t == 4) {
+      std::cout << "*******************************"
+                << "ATEST_NORMALIZATION"
+                << "*******************************"
+                << std::endl;
+      auto input = torch::tensor( // 1, 2, 2, 3
+          {
+              {
+                  {1, -2, 3},
+                  {-4, 5, -6},
+              },
+              {
+                  {11, -12, 13},
+                  {-14, 15, -16},
+              },
+          },
+          torch::kFloat);
+      auto weight = torch::tensor({1, 2}, torch::kFloat);
+      auto bias = torch::tensor({3, 4}, torch::kFloat);
+      auto mean = torch::tensor({5, 6}, torch::kFloat);
+      auto var = torch::tensor({7, 8}, torch::kFloat);
+
+      log("N input.sizes():", input.sizes());
+      log("N input:", input);
+      ALOGI("N set useAgpu false");
+      at::setUseAgpu(false);
+      auto outputC = at::batch_norm(
+          input,
+          weight, bias, mean, var, false, 0.1, 0.00001, false);
+      log("N outputC.sizes: ", outputC.sizes());
+      log("N outputC: ", outputC);
+
+      ALOGI("N set useAgpu true");
+      at::setUseAgpu(true);
+      auto outputT = at::batch_norm(
+          input,
+          weight, bias, mean, var, false, 0.1, 0.00001, false);
+      at::setUseAgpu(false);
+      log("N outputC.sizes: ", outputC.sizes());
+      log("N outputC: ", outputC);
+      log("N outputT.sizes: ", outputT.sizes());
+      log("N outputT: ", outputT);
+
+      bool eq = almostEqual(outputC, outputT);
+      ALOGI("N outputC eq outputT:%d", eq);
       assert(eq);
     }
     ALOGI("=================test");

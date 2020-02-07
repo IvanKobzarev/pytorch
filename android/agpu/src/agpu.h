@@ -8,22 +8,22 @@
 #include <android/log.h>
 #define AGPU_ERROR(format, ...) \
   __android_log_print(ANDROID_LOG_ERROR, "AGPU", format, ##__VA_ARGS__)
-#define AGPU_PRINT(format, ...) \
+#define APRINT(format, ...) \
   __android_log_print(ANDROID_LOG_INFO, "AGPU", format, ##__VA_ARGS__)
 #else
-#define AGPU_PRINT(format, ...) printf(format, ##__VA_ARGS__)
+#define APRINT(format, ...) printf(format, ##__VA_ARGS__)
 #define AGPU_ERROR(format, ...) printf(format, ##__VA_ARGS__)
 #endif
 
-#define FUNC_PRINT(x) AGPU_PRINT(#x "=%d in %s, %d \n", x, __func__, __LINE__);
+#define FUNC_PRINT(x) APRINT(#x "=%d in %s, %d \n", x, __func__, __LINE__);
 #define FUNC_PRINT_ALL(x, type) \
-  AGPU_PRINT(#x "=" #type " %" #type " in %s, %d \n", x, __func__, __LINE__);
+  APRINT(#x "=" #type " %" #type " in %s, %d \n", x, __func__, __LINE__);
 
 #define AGL_CHECK_ERROR                                                       \
   {                                                                           \
     GLenum error = glGetError();                                              \
     if (GL_NO_ERROR != error) {                                               \
-      AGPU_PRINT(                                                             \
+      APRINT(                                                             \
           "File = %s Line = %d Func=%s\n", __FILE__, __LINE__, __FUNCTION__); \
       FUNC_PRINT_ALL(error, 0x);                                              \
     }                                                                         \

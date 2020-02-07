@@ -19,7 +19,7 @@ layout(location=11) uniform ivec3 uInputSize;
 #define UP_DIV(x, y) (((x)+(y)-1)/(y))
 
 //weight : oc ic h w -> oc/4, ic/4, ky kx ic4 oc4
-layout (local_size_x = COMP_GROUP_X, local_size_y = COMP_GROUP_Y, local_size_z = COMP_GROUP_Z) in;
+layout (local_size_x = WORKGROUP_X, local_size_y = WORKGROUP_Y, local_size_z = WORKGROUP_Z) in;
 
 void main()
 {

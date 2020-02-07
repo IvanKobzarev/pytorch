@@ -39,7 +39,7 @@ android {
         tst {
             dimension "model"
             applicationIdSuffix ".tst"
-            buildConfigField("int", "NATIVE_TEST", "3")
+            buildConfigField("int", "NATIVE_TEST", "4")
             buildConfigField("String", "MODULE_ASSET_NAME", "\"mn2fp32.pt\"")
             addManifestPlaceholders([APP_NAME: "TST"])
             buildConfigField("String", "LOGCAT_TAG", "\"pytorch-tst\"")
