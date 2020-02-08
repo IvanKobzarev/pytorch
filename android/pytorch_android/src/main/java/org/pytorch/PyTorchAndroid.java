@@ -40,5 +40,7 @@ public final class PyTorchAndroid {
 
   private static native void nativeSetNumThreads(int numThreads);
 
-  public static native void nativeTest(int t);
+  public static native void nativeTest(int x);
+
+  public static native void nativeBenchmark(int x);
 }

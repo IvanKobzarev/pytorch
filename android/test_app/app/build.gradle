@@ -36,6 +36,14 @@ android {
     }
     flavorDimensions "model", "build", "activity"
     productFlavors {
+        bench {
+            dimension "model"
+            applicationIdSuffix ".bench"
+            buildConfigField("int", "NATIVE_BENCHMARK", "1")
+            buildConfigField("String", "MODULE_ASSET_NAME", "\"mn2fp32.pt\"")
+            addManifestPlaceholders([APP_NAME: "BENCH"])
+            buildConfigField("String", "LOGCAT_TAG", "\"pytorch-bench\"")
+        }
         tst {
             dimension "model"
             applicationIdSuffix ".tst"

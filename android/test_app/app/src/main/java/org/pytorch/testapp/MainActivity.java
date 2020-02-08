@@ -35,7 +35,12 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public void run() {
       Log.i(TAG, "BuildConfig.NATIVE_TEST:" + BuildConfig.NATIVE_TEST);
-      if (BuildConfig.NATIVE_TEST > 0) {
+      Log.i(TAG, "BuildConfig.NATIVE_BENCHMARK:" + BuildConfig.NATIVE_BENCHMARK);
+      if (BuildConfig.NATIVE_BENCHMARK > 0) {
+        Log.i(TAG, "---nativeBenchmark{");
+        PyTorchAndroid.nativeBenchmark(BuildConfig.NATIVE_BENCHMARK);
+        Log.i(TAG, "===nativeBenchmark}");
+      } else if (BuildConfig.NATIVE_TEST > 0) {
         Log.i(TAG, "---nativeTest()");
         PyTorchAndroid.nativeTest(BuildConfig.NATIVE_TEST);
         Log.i(TAG, "===nativeTest()");

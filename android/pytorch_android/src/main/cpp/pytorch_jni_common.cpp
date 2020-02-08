@@ -602,6 +602,7 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
         makeNativeMethod(
             "nativeSetNumThreads", PyTorchAndroidJni::setNumThreads),
         makeNativeMethod("nativeTest", PyTorchAndroidJni::test),
+        makeNativeMethod("nativeBenchmark", PyTorchAndroidJni::benchmark),
     });
   }
 
@@ -875,14 +876,23 @@ static bool almostEqual(const at::Tensor& a, const at::Tensor& b) {
 
   static void BM_test(benchmark::State& state) {
     std::cout << "bench_test" << std::endl;
+    char* src = new char[state.range(0)];
+    char* dst = new char[state.range(0)];
+    memset(src, 'x', state.range(0));
+    for (auto _ : state)
+      memcpy(dst, src, state.range(0));
+    state.SetBytesProcessed(int64_t(state.iterations()) *
+                            int64_t(state.range(0)));
+    delete[] src;
+    delete[] dst;
   }
 
   //BENCHMARK(BM_test);
 
-  static void test_bench(facebook::jni::alias_ref<jclass>) {
+  static void benchmark(facebook::jni::alias_ref<jclass>, jint) {
+    BENCHMARK(BM_test)->Arg(8)->Arg(64)->Arg(512)->Arg(1<<10)->Arg(8<<10);
     std::vector<std::string> argsVec = {
-      "s1",
-      "s2"
+      "all",
     };
     int argc = argsVec.size();
     char** argv = new char*[argc];
@@ -891,7 +901,7 @@ static bool almostEqual(const at::Tensor& a, const at::Tensor& b) {
         std::strcpy(argv[i], argsVec[i].c_str());
     }
 
-    benchmark::RegisterBenchmark("BM_test_name", BM_test);
+    //benchmark::RegisterBenchmark("BM_test_name", BM_test);
     benchmark::Initialize(&argc, argv);
     benchmark::RunSpecifiedBenchmarks();
 
