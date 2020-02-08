@@ -40,10 +40,10 @@ public class MainActivity extends AppCompatActivity {
         Log.i(TAG, "---nativeBenchmark{");
         PyTorchAndroid.nativeBenchmark(BuildConfig.NATIVE_BENCHMARK);
         Log.i(TAG, "===nativeBenchmark}");
-      } else if (BuildConfig.NATIVE_TEST > 0) {
-        Log.i(TAG, "---nativeTest()");
+      } else if (BuildConfig.NATIVE_TEST >= 0) {
+        Log.i(TAG, "---nativeTest{");
         PyTorchAndroid.nativeTest(BuildConfig.NATIVE_TEST);
-        Log.i(TAG, "===nativeTest()");
+        Log.i(TAG, "===nativeTest}");
       } else {
         final Result result = doModuleForward();
         runOnUiThread(new Runnable() {

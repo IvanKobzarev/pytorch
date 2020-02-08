@@ -41,6 +41,7 @@ configure_file(
 file(GLOB pytorch_android_SOURCES
   ${pytorch_android_DIR}/pytorch_jni_jit.cpp
   ${pytorch_android_DIR}/pytorch_jni_common.cpp
+  ${pytorch_android_DIR}/pytorch_jni_agpu.cpp
   ${pytorch_android_DIR}/pytorch_jni_common.h
 )
 
