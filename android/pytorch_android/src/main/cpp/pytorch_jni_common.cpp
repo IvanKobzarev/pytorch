@@ -602,8 +602,8 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
     javaClassStatic()->registerNatives({
         makeNativeMethod(
             "nativeSetNumThreads", PyTorchAndroidJni::setNumThreads),
-        makeNativeMethod("nativeTest", PyTorchAndroidJni::test),
-        makeNativeMethod("nativeBenchmark", PyTorchAndroidJni::benchmark),
+        makeNativeMethod("nativeAgpuGTest", PyTorchAndroidJni::agpu_gtest),
+        makeNativeMethod("nativeAgpuGBench", PyTorchAndroidJni::agpu_gbench),
     });
   }
 
@@ -611,12 +611,16 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
     caffe2::mobile_threadpool()->setNumThreads(numThreads);
   }
 
-  static void test(facebook::jni::alias_ref<jclass>, jint x) {
-    pytorch_jni_agpu::test(x);
+  static void agpu_gtest(
+      facebook::jni::alias_ref<jclass>,
+      facebook::jni::alias_ref<jstring> args) {
+    pytorch_jni_agpu::gtest(args->toStdString());
   }
 
-  static void benchmark(facebook::jni::alias_ref<jclass>, jint x) {
-    pytorch_jni_agpu::benchmark(x);
+  static void agpu_gbench(
+      facebook::jni::alias_ref<jclass>,
+      facebook::jni::alias_ref<jstring> args) {
+    pytorch_jni_agpu::gbench(args->toStdString());
   }
 };
 #endif

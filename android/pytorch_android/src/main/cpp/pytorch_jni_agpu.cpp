@@ -8,6 +8,7 @@
 
 #include <ATen/AgpuUtils.h>
 #include <benchmark/benchmark.h>
+#include <gtest/gtest.h>
 #include <torch/torch.h>
 #include "pytorch_jni_agpu.h"
 
@@ -35,11 +36,12 @@ static bool checkRtol(
   }
   return diff.abs().max().item<float>() < 2e-6 * maxValue;
 }
+
 static bool almostEqual(const at::Tensor& a, const at::Tensor& b) {
   return checkRtol(a - b, {a, b});
 }
 
-void testConv() {
+TEST(conv, smoke) {
   std::cout << "*******************************"
             << "ATEST_CONV"
             << "*******************************" << std::endl;
@@ -142,7 +144,7 @@ void testConv() {
   ALOGI("ATEST_CONV PASSED");
 }
 
-void testAdd() {
+TEST(add, smoke) {
   std::cout << "*******************************"
             << "ATEST_ADD"
             << "*******************************" << std::endl;
@@ -190,7 +192,7 @@ void testAdd() {
   ALOGI("ATEST_ADD PASSED");
 }
 
-void testThreshold() {
+TEST(threshold, smoke) {
   std::cout << "*******************************"
             << "ATEST_THRESHOLD"
             << "*******************************" << std::endl;
@@ -231,7 +233,7 @@ void testThreshold() {
   ALOGI("ATEST_THRESHOLD PASSED");
 }
 
-void testNorm() {
+TEST(norm, smoke) {
   std::cout << "*******************************"
             << "ATEST_NORM"
             << "*******************************" << std::endl;
@@ -277,62 +279,93 @@ void testNorm() {
   ALOGI("ATEST_NORM PASSED");
 }
 
-void test(int x) {
-  switch (x) {
-    case 0:
-      testConv();
-      testAdd();
-      testThreshold();
-      testNorm();
-      return;
-    case 1:
-      testConv();
-      return;
-    case 2:
-      testAdd();
-      return;
-    case 3:
-      testThreshold();
-      return;
-    case 4:
-      testNorm();
-      return;
-  }
-  assert(false);
-}
+struct ArgsCV {
+  ArgsCV(const std::string& args) {
+    std::istringstream iss(args);
+    std::vector<std::string> argsVec(
+        std::istream_iterator<std::string>{iss},
+        std::istream_iterator<std::string>());
 
-void BM_test(benchmark::State& state) {
-  std::cout << "bench_test" << std::endl;
-  char* src = new char[state.range(0)];
-  char* dst = new char[state.range(0)];
-  memset(src, 'x', state.range(0));
-  for (auto _ : state)
-    memcpy(dst, src, state.range(0));
-  state.SetBytesProcessed(
-      int64_t(state.iterations()) * int64_t(state.range(0)));
-  delete[] src;
-  delete[] dst;
-}
-
-void benchmark(int x) {
-  BENCHMARK(BM_test)->Arg(8)->Arg(64)->Arg(512)->Arg(1 << 10)->Arg(8 << 10);
-  std::vector<std::string> argsVec = {
-      "all",
-  };
-  int argc = argsVec.size();
-  char** argv = new char*[argc];
-  for (size_t i = 0; i < argc; i++) {
-    argv[i] = new char[argsVec[i].size() + 1];
-    std::strcpy(argv[i], argsVec[i].c_str());
+    int argc = argsVec.size();
+    char** argv = new char*[argc];
+    for (size_t i = 0; i < argc; i++) {
+      argv[i] = new char[argsVec[i].size() + 1];
+      std::strcpy(argv[i], argsVec[i].c_str());
+      ALOGI("%s", argsVec[i].c_str());
+    }
+    c = argc;
+    v = argv;
   }
 
-  benchmark::Initialize(&argc, argv);
+  ArgsCV(int c, char** v) : c(c), v(v) {}
+
+  ~ArgsCV() {
+    for (size_t i = 0; i < c; i++) {
+      delete[] v[i];
+    }
+    delete[] v;
+  }
+
+  int c;
+  char** v;
+};
+
+void gtest(const std::string& args) {
+  ALOGI("pytorch_android_agpu::test(%s)", args.c_str());
+  auto argscv = ArgsCV{args};
+  ::testing::InitGoogleTest(&(argscv.c), argscv.v);
+  RUN_ALL_TESTS();
+}
+
+void BM_conv(benchmark::State& state) {
+  for (auto _ : state) {
+    const int64_t useAgpu = state.range(0);
+    const int64_t input_n = state.range(1);
+    const int64_t input_c = state.range(2);
+    const int64_t input_h = state.range(3);
+    const int64_t input_w = state.range(4);
+
+    const int64_t kernel_c = state.range(5);
+    const int64_t kernel_h = state.range(6);
+    const int64_t kernel_w = state.range(7);
+
+    if (useAgpu == 0) {
+      at::setUseAgpu(false);
+    } else {
+      at::setUseAgpu(true);
+    }
+
+    auto input =
+        torch::randn({input_n, input_c, input_h, input_w}, torch::kFloat);
+    auto w =
+        torch::randn({kernel_c, input_c, kernel_h, kernel_w}, torch::kFloat);
+    auto b = torch::randn({kernel_c}, torch::kFloat);
+    int64_t groups = 1;
+    torch::nn::functional::Conv2dFuncOptions o =
+        torch::nn::functional::Conv2dFuncOptions().stride(1).padding(0);
+    auto outputC = at::conv2d(
+        input,
+        w,
+        b,
+        c10::IntArrayRef{1}, // stride
+        c10::IntArrayRef{0}, // padding
+        c10::IntArrayRef{1}, // dilation
+        groups);
+  }
+}
+
+void gbench(const std::string& args) {
+  ALOGI("pytorch_android_agpu::bench(%s)", args.c_str());
+  auto argscv = ArgsCV{args};
+
+  BENCHMARK(BM_conv)
+      ->ArgNames({"AGPU", "N", "C", "H", "W", "KC", "KH", "KW"})
+      ->Iterations(10)
+      ->Args({0, 1, 3, 3, 3, 3, 2, 2})
+      ->Args({1, 1, 3, 3, 3, 3, 2, 2});
+
+  benchmark::Initialize(&(argscv.c), argscv.v);
   benchmark::RunSpecifiedBenchmarks();
-
-  for (size_t i = 0; i < argc; i++) {
-    delete[] argv[i];
-  }
-  delete[] argv;
 }
 
 int stdOutErrToLogcat() {
@@ -348,7 +381,7 @@ int stdOutErrToLogcat() {
           0,
           [](void*) -> void* {
             ssize_t s;
-            char b[128];
+            char b[256];
             while ((s = read(pfd[0], b, sizeof(b) - 1)) > 0) {
               if (b[s - 1] == '\n') {
                 --s;

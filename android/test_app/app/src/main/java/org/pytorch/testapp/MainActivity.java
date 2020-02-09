@@ -34,16 +34,12 @@ public class MainActivity extends AppCompatActivity {
   private final Runnable mModuleForwardRunnable = new Runnable() {
     @Override
     public void run() {
-      Log.i(TAG, "BuildConfig.NATIVE_TEST:" + BuildConfig.NATIVE_TEST);
-      Log.i(TAG, "BuildConfig.NATIVE_BENCHMARK:" + BuildConfig.NATIVE_BENCHMARK);
-      if (BuildConfig.NATIVE_BENCHMARK > 0) {
-        Log.i(TAG, "---nativeBenchmark{");
-        PyTorchAndroid.nativeBenchmark(BuildConfig.NATIVE_BENCHMARK);
-        Log.i(TAG, "===nativeBenchmark}");
-      } else if (BuildConfig.NATIVE_TEST >= 0) {
-        Log.i(TAG, "---nativeTest{");
-        PyTorchAndroid.nativeTest(BuildConfig.NATIVE_TEST);
-        Log.i(TAG, "===nativeTest}");
+      Log.i(TAG, "BuildConfig.AGPU_GTEST:" + BuildConfig.AGPU_GTEST);
+      Log.i(TAG, "BuildConfig.AGPU_GBENCH:" + BuildConfig.AGPU_GBENCH);
+      if (BuildConfig.AGPU_GTEST != null) {
+        PyTorchAndroid.nativeAgpuGTest(BuildConfig.AGPU_GTEST);
+      } else if (BuildConfig.AGPU_GBENCH != null) {
+        PyTorchAndroid.nativeAgpuGBench(BuildConfig.AGPU_GBENCH);
       } else {
         final Result result = doModuleForward();
         runOnUiThread(new Runnable() {

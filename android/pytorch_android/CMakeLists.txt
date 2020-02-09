@@ -63,11 +63,13 @@ target_compile_options(pytorch_jni PRIVATE
 message(STATUS "libtorch_include_DIR: ${libtorch_include_DIR}")
 
 set(benchmark_DIR ${CMAKE_CURRENT_LIST_DIR}/../libs/benchmark/)
+set(gtest_DIR ${CMAKE_CURRENT_LIST_DIR}/../libs/gtest/)
 
 target_include_directories(pytorch_jni PUBLIC
   ${libtorch_include_DIR}
   ${libtorch_include_DIR}/torch/csrc/api/include
   ${benchmark_DIR}/include
+  ${gtest_DIR}/include
 )
 
 set(fbjni_DIR ${CMAKE_CURRENT_LIST_DIR}/../libs/fbjni/)
@@ -106,6 +108,11 @@ set_property(
         PROPERTY IMPORTED_LOCATION
         ${benchmark_DIR}/lib/libbenchmark.a)
 
+ADD_LIBRARY(gtest STATIC IMPORTED)
+set_property(
+        TARGET gtest
+        PROPERTY IMPORTED_LOCATION
+        ${gtest_DIR}/lib/libgtest.a)
 
     # Link most things statically on Android.
   target_link_libraries(pytorch_jni
@@ -126,6 +133,7 @@ set_property(
       EGL
       GLESv3
       benchmark
+      gtest
   )
 
 else()

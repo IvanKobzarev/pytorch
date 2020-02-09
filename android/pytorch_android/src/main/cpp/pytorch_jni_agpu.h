@@ -2,6 +2,6 @@
 
 namespace pytorch_jni_agpu {
 int stdOutErrToLogcat();
-void test(int x);
-void benchmark(int x);
+void gtest(const std::string& args);
+void gbench(const std::string& args);
 } // namespace pytorch_jni_agpu
