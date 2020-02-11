@@ -457,7 +457,7 @@ static void BM_conv_args_MobileNetV2(benchmark::internal::Benchmark* b) {
 }
 
 void gbench_main(const std::string& args) {
-  ALOGI("pytorch_android_agpu::bench(%s)", args.c_str());
+  ALOGI("pytorch_android_agpu::gbench_main(%s)", args.c_str());
   auto argscv = ArgsCV{args};
   // TODO: --benchmark_filter for some reason does not work
   //  BENCHMARK_CAPTURE(BM_conv, mobilenet_v2, "MobileNet v2")
@@ -473,6 +473,44 @@ void gbench_main(const std::string& args) {
       ->Repetitions(10)
       ->Unit(benchmark::kMicrosecond)
       ->ReportAggregatesOnly(true)
+      ->UseRealTime();
+
+  benchmark::Initialize(&(argscv.c), argscv.v);
+  benchmark::RunSpecifiedBenchmarks();
+}
+
+torch::jit::script::Module module_;
+
+void BM_moduleForward(benchmark::State& state, const char* name) {
+  for (auto _ : state) {
+    state.PauseTiming();
+    const int64_t useAgpu = state.range(0);
+    if (useAgpu == 0) {
+      at::setUseAgpu(false);
+    } else {
+      at::setUseAgpu(true);
+    }
+
+    auto tin = torch::randn({1, 3, 224, 224}, torch::kFloat);
+    torch::autograd::AutoGradMode no_autograd_guard{false};
+    torch::jit::GraphOptimizerEnabledGuard no_optimizer_guard{false};
+
+    state.ResumeTiming();
+    auto out = module_.forward({tin});
+  }
+}
+
+void gbench_module(torch::jit::script::Module module, const std::string& args) {
+  ALOGI("pytorch_android_agpu::gbench_module(%s)", args.c_str());
+  auto argscv = ArgsCV{args};
+  module_ = std::move(module);
+  BENCHMARK_CAPTURE(BM_moduleForward, fwdBase, "fwdBase")
+      //->Arg(0)
+      ->Arg(1)
+      //->Iterations(1)
+      //->Repetitions(1)
+      ->Unit(benchmark::kMicrosecond)
+      //->ReportAggregatesOnly(true)
       ->UseRealTime();
 
   benchmark::Initialize(&(argscv.c), argscv.v);

@@ -5,9 +5,12 @@
 
 #include <fbjni/ByteBuffer.h>
 #include <fbjni/fbjni.h>
+#include <torch/script.h>
 
 #include "pytorch_jni_common.h"
 #if defined(__ANDROID__)
+#include <android/asset_manager.h>
+#include <android/asset_manager_jni.h>
 #include <caffe2/utils/threadpool/ThreadPool.h>
 #include <caffe2/utils/threadpool/ThreadPoolMobile.h>
 #endif
@@ -15,6 +18,28 @@
 #include "pytorch_jni_agpu.h"
 
 namespace pytorch_jni {
+
+class MemoryReadAdapter2 final : public caffe2::serialize::ReadAdapterInterface {
+ public:
+  explicit MemoryReadAdapter2(const void* data, off_t size)
+      : data_(data), size_(size){};
+
+  size_t size() const override {
+    return size_;
+  }
+
+  size_t read(uint64_t pos, void* buf, size_t n, const char* what = "")
+      const override {
+    memcpy(buf, (int8_t*)(data_) + pos, n);
+    return n;
+  }
+
+  ~MemoryReadAdapter2() {}
+
+ private:
+  const void* data_;
+  off_t size_;
+};
 
 bool Trace::is_initialized_ = false;
 
@@ -604,6 +629,7 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
             "nativeSetNumThreads", PyTorchAndroidJni::setNumThreads),
         makeNativeMethod("nativeAgpuGTest", PyTorchAndroidJni::agpu_gtest),
         makeNativeMethod("nativeAgpuGBench", PyTorchAndroidJni::agpu_gbench),
+        makeNativeMethod("nativeAgpuGBenchModule", PyTorchAndroidJni::agpu_gbench_module),
     });
   }
 
@@ -621,6 +647,45 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
       facebook::jni::alias_ref<jclass>,
       facebook::jni::alias_ref<jstring> args) {
     pytorch_jni_agpu::gbench_main(args->toStdString());
+  }
+
+  static void agpu_gbench_module(
+      facebook::jni::alias_ref<jclass>,
+      facebook::jni::alias_ref<jstring> assetName,
+      facebook::jni::alias_ref<jobject> assetManager,
+      facebook::jni::alias_ref<jstring> args) {
+
+    torch::autograd::AutoGradMode no_autograd_guard{false};
+    torch::jit::GraphOptimizerEnabledGuard no_optimizer_guard{false};
+
+    JNIEnv* env = facebook::jni::Environment::current();
+    AAssetManager* mgr = AAssetManager_fromJava(env, assetManager.get());
+    if (!mgr) {
+      facebook::jni::throwNewJavaException(
+          facebook::jni::gJavaLangIllegalArgumentException,
+          "Unable to get asset manager");
+    }
+    AAsset* asset = AAssetManager_open(
+        mgr, assetName->toStdString().c_str(), AASSET_MODE_BUFFER);
+    if (!asset) {
+      facebook::jni::throwNewJavaException(
+          facebook::jni::gJavaLangIllegalArgumentException,
+          "Failed to open asset '%s'",
+          assetName->toStdString().c_str());
+    }
+    auto assetBuffer = AAsset_getBuffer(asset);
+    if (!assetBuffer) {
+      facebook::jni::throwNewJavaException(
+          facebook::jni::gJavaLangIllegalArgumentException,
+          "Could not get buffer for asset '%s'",
+          assetName->toStdString().c_str());
+    }
+    torch::jit::script::Module module = torch::jit::load(torch::make_unique<MemoryReadAdapter2>(
+        assetBuffer, AAsset_getLength(asset)));
+    AAsset_close(asset);
+    module.eval();
+
+    pytorch_jni_agpu::gbench_module(module, args->toStdString());
   }
 };
 #endif
