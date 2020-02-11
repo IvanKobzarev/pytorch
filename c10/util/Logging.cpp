@@ -112,7 +112,7 @@ bool LogAPIUsageFakeReturn(const std::string& event) {
 // GLOG's minloglevel
 DECLARE_int32(minloglevel);
 // GLOG's verbose log value.
-DECLARE_int32(v);
+//DECLARE_int32(v);
 // GLOG's logtostderr value
 DECLARE_bool(logtostderr);
 #endif // defined(C10_USE_GFLAGS) && defined(C10_USE_GLOG)
@@ -122,7 +122,7 @@ DECLARE_bool(logtostderr);
 // Caffe2 are not built with glog, but some init flags still pass in these
 // flags. They may go away in the future.
 C10_DEFINE_int32(minloglevel, 0, "Equivalent to glog minloglevel");
-C10_DEFINE_int32(v, 0, "Equivalent to glog verbose");
+//C10_DEFINE_int32(v, 0, "Equivalent to glog verbose");
 C10_DEFINE_bool(logtostderr, false, "Equivalent to glog logtostderr");
 #endif // !defined(c10_USE_GLOG)
 
@@ -135,7 +135,7 @@ C10_DEFINE_bool(logtostderr, false, "Equivalent to glog logtostderr");
 namespace c10 {
 using fLB::FLAGS_logtostderr;
 using fLI::FLAGS_minloglevel;
-using fLI::FLAGS_v;
+//using fLI::FLAGS_v;
 } // namespace c10
 
 C10_DEFINE_int(
@@ -181,9 +181,9 @@ void UpdateLoggingLevelsFromFlags() {
     FLAGS_logtostderr = 1;
   }
   // Also, transfer the caffe2_log_level verbose setting to glog.
-  if (FLAGS_caffe2_log_level < 0) {
-    FLAGS_v = std::min(FLAGS_v, -FLAGS_caffe2_log_level);
-  }
+  //if (FLAGS_caffe2_log_level < 0) {
+  //  FLAGS_v = std::min(FLAGS_v, -FLAGS_caffe2_log_level);
+  //}
 }
 
 void ShowLogInfoToStderr() {

@@ -101,9 +101,9 @@ CMAKE_ARGS+=("-DUSE_LEVELDB=OFF")
 CMAKE_ARGS+=("-DUSE_MPI=OFF")
 CMAKE_ARGS+=("-DUSE_OPENMP=OFF")
 # Only toggle if VERBOSE=1
-if [ "${VERBOSE:-}" == '1' ]; then
+#if [ "${VERBOSE:-}" == '1' ]; then
   CMAKE_ARGS+=("-DCMAKE_VERBOSE_MAKEFILE=1")
-fi
+#fi
 
 # Android specific flags
 CMAKE_ARGS+=("-DANDROID_NDK=$ANDROID_NDK")
