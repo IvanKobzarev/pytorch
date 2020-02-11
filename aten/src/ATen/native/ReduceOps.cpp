@@ -9,6 +9,7 @@
 #include <ATen/native/ReduceOpsUtils.h>
 #include <ATen/native/TensorIterator.h>
 #include <ATen/NamedTensorUtils.h>
+#include <ATen/AgpuUtils.h>
 
 #include <algorithm>
 #include <functional>
@@ -385,7 +386,9 @@ Tensor& prod_out(Tensor& result, const Tensor& self, Dimname dim,
 
 Tensor &mean_out_cpu_gpu(Tensor &result, const Tensor &self, IntArrayRef dim,
                  bool keepdim, c10::optional<ScalarType> opt_dtype) {
-  std::cout << "OOOP mean_out_cpu_gpu" << std::endl;
+  if (at::isAgpuVerbose()) {
+    std::cout << "OOOP mean_out_cpu_gpu" << std::endl;
+  }
   ScalarType scalarType = opt_dtype.has_value() ? opt_dtype.value() : self.scalar_type();
   TORCH_CHECK(
       at::isFloatingType(scalarType) || at::isComplexType(scalarType),

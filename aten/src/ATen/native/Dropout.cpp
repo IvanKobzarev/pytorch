@@ -1,6 +1,7 @@
 #include <ATen/ATen.h>
 #include <ATen/Dispatch.h>
 #include <ATen/NamedTensorUtils.h>
+#include <ATen/AgpuUtils.h>
 
 namespace at { namespace native {
 
@@ -83,7 +84,9 @@ ALIAS_SPECIALIZATION(_feature_alpha_dropout, true,  true )
 } // anomymous namepsace
 
 Tensor dropout(const Tensor& input, double p, bool train) {
-  std::cout << "OOOP dropout" << std::endl;
+  if (at::isAgpuVerbose()) {
+    std::cout << "OOOP dropout" << std::endl;
+  }
   auto result = [&]() {
     NoNamesGuard guard;
     if (train && is_fused_kernel_acceptable(input, p)) {

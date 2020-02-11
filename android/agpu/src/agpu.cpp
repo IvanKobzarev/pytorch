@@ -531,11 +531,9 @@ std::unique_ptr<AGLShader> getProgramWithPrefix(
     tc << s << "\n";
   }
   tc << content;
-  if (isVerbose) {
-    APRINT(
+  APRINT(
       "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n%s\n<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<",
       tc.str().c_str());
-  }
 
   return std::make_unique<AGLShader>(tc.str());
 }

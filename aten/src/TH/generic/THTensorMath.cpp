@@ -4,6 +4,7 @@
 
 #include <TH/generic/THTensorApply.hpp>
 #include <ATen/NamedTensorUtils.h>
+#include <ATen/AgpuUtils.h>
 
 // HEY YOU!
 //
@@ -27,7 +28,9 @@
 
 static void THTensor_(addmmImpl)(THTensor *r_, THTensor *t, THTensor *m1, THTensor *m2, scalar_t beta, scalar_t alpha)
 {
-  std::cout << "OOOP THTensor addmm" << std::endl;
+  if (at::isAgpuVerbose()) {
+    std::cout << "OOOP THTensor addmm" << std::endl;
+  }
   char transpose_r, transpose_m1, transpose_m2;
   THTensor *r__, *m1_, *m2_;
   int free_m1 = 0;
