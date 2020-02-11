@@ -16,6 +16,9 @@
 namespace agpu {
 
 void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
+  if (!AGPU_VERBOSE) {
+    return;
+  }
   static const char* kFloatFormat = "%8.1f";
   std::cout << m;
 

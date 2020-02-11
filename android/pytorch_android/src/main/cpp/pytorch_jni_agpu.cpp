@@ -310,24 +310,37 @@ struct ArgsCV {
   char** v;
 };
 
-void gtest(const std::string& args) {
+void gtest_main(const std::string& args) {
   ALOGI("pytorch_android_agpu::test(%s)", args.c_str());
   auto argscv = ArgsCV{args};
   ::testing::InitGoogleTest(&(argscv.c), argscv.v);
   RUN_ALL_TESTS();
 }
 
-void BM_conv(benchmark::State& state) {
+static void BM_conv(benchmark::State& state, const char* name) {
   for (auto _ : state) {
+    state.PauseTiming();
     const int64_t useAgpu = state.range(0);
-    const int64_t input_n = state.range(1);
-    const int64_t input_c = state.range(2);
-    const int64_t input_h = state.range(3);
-    const int64_t input_w = state.range(4);
 
-    const int64_t kernel_c = state.range(5);
-    const int64_t kernel_h = state.range(6);
-    const int64_t kernel_w = state.range(7);
+    const int64_t n = state.range(1);
+    const int64_t h = state.range(2);
+    const int64_t w = state.range(3);
+
+    const int64_t kh = state.range(4);
+    const int64_t kw = state.range(5);
+
+    const int64_t padding_h = state.range(6);
+    const int64_t padding_w = state.range(7);
+
+    const int64_t stride = state.range(8);
+    const int64_t dilation = state.range(9);
+
+    const int64_t groups = state.range(10);
+    const int64_t groups_c_in = state.range(11);
+    const int64_t groups_c_out = state.range(12);
+
+    const int64_t c_in = groups_c_in;
+    const int64_t c_out = groups_c_out;
 
     if (useAgpu == 0) {
       at::setUseAgpu(false);
@@ -335,34 +348,132 @@ void BM_conv(benchmark::State& state) {
       at::setUseAgpu(true);
     }
 
-    auto input =
-        torch::randn({input_n, input_c, input_h, input_w}, torch::kFloat);
-    auto w =
-        torch::randn({kernel_c, input_c, kernel_h, kernel_w}, torch::kFloat);
-    auto b = torch::randn({kernel_c}, torch::kFloat);
-    int64_t groups = 1;
+    auto tin = torch::randn({n, c_in, h, w}, torch::kFloat);
+    auto tw = torch::randn({c_out, c_in, kh, kw}, torch::kFloat);
+    auto tb = torch::randn({c_out}, torch::kFloat);
+    int64_t g = 1;
     torch::nn::functional::Conv2dFuncOptions o =
-        torch::nn::functional::Conv2dFuncOptions().stride(1).padding(0);
-    auto outputC = at::conv2d(
-        input,
-        w,
-        b,
-        c10::IntArrayRef{1}, // stride
+        torch::nn::functional::Conv2dFuncOptions().stride(stride).padding(0);
+    state.ResumeTiming();
+    auto tout = at::conv2d(
+        tin,
+        tw,
+        tb,
+        c10::IntArrayRef{stride}, // stride
         c10::IntArrayRef{0}, // padding
-        c10::IntArrayRef{1}, // dilation
-        groups);
+        c10::IntArrayRef{dilation}, // dilation
+        g);
   }
 }
 
-void gbench(const std::string& args) {
+static void BM_convArgs(
+    benchmark::internal::Benchmark* b,
+    int64_t n,
+    int64_t h,
+    int64_t w,
+    int64_t kh,
+    int64_t kw,
+    int64_t ph,
+    int64_t pw,
+    int64_t s,
+    int64_t d,
+    int64_t g,
+    int64_t gcin,
+    int64_t gcout) {
+  b->Args({0, n, h, w, kh, kw, ph, pw, s, d, g, gcin, gcout});
+  b->Args({1, n, h, w, kh, kw, ph, pw, s, d, g, gcin, gcout});
+}
+
+static void BM_conv_args_base(benchmark::internal::Benchmark* b) {
+  b->ArgNames({"AGPU",
+               "N",
+               "H",
+               "W",
+               "KH",
+               "KW",
+               "PH",
+               "PW",
+               "S",
+               "D",
+               "G",
+               "GCin",
+               "GCout"});
+  /*             N   H    W   KH  KW  PH  PW  S  D    G  GCin  GCout */
+  BM_convArgs(b, 1, 224, 224, 3, 3, 2, 2, 2, 1, 1, 3, 32);
+  BM_convArgs(b, 1, 112, 112, 3, 3, 2, 2, 2, 1, 96, 1, 1);
+  BM_convArgs(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
+  BM_convArgs(b, 1, 28, 28, 3, 3, 2, 2, 2, 1, 192, 1, 1);
+  BM_convArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 96);
+  BM_convArgs(b, 1, 7, 7, 3, 3, 2, 2, 1, 1, 960, 1, 1);
+}
+
+static void BM_conv_args_MobileNetV2(benchmark::internal::Benchmark* b) {
+  b->ArgNames({"AGPU",
+               "N",
+               "H",
+               "W",
+               "KH",
+               "KW",
+               "PH",
+               "PW",
+               "S",
+               "D",
+               "G",
+               "GCin",
+               "GCout"});
+
+  /*             N   H    W   KH  KW  PH  PW  S  D    G  GCin  GCout */
+  BM_convArgs(b, 1, 224, 224, 3, 3, 2, 2, 2, 1, 1, 3, 32);
+  BM_convArgs(b, 1, 112, 112, 3, 3, 2, 2, 1, 1, 32, 1, 1);
+  BM_convArgs(b, 1, 112, 112, 1, 1, 0, 0, 1, 1, 1, 32, 16);
+  BM_convArgs(b, 1, 112, 112, 1, 1, 0, 0, 1, 1, 1, 16, 96);
+  BM_convArgs(b, 1, 112, 112, 3, 3, 2, 2, 2, 1, 96, 1, 1);
+  BM_convArgs(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 96, 24);
+  BM_convArgs(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 24, 144);
+  BM_convArgs(b, 1, 56, 56, 3, 3, 2, 2, 1, 1, 144, 1, 1);
+  BM_convArgs(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
+  BM_convArgs(b, 1, 56, 56, 3, 3, 2, 2, 2, 1, 144, 1, 1);
+  BM_convArgs(b, 1, 28, 28, 1, 1, 0, 0, 1, 1, 1, 144, 32);
+  BM_convArgs(b, 1, 28, 28, 1, 1, 0, 0, 1, 1, 1, 32, 192);
+  BM_convArgs(b, 1, 28, 28, 3, 3, 2, 2, 1, 1, 192, 1, 1);
+  BM_convArgs(b, 1, 28, 28, 1, 1, 0, 0, 1, 1, 1, 192, 32);
+  BM_convArgs(b, 1, 28, 28, 3, 3, 2, 2, 2, 1, 192, 1, 1);
+  BM_convArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 192, 64);
+  BM_convArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 64, 384);
+  BM_convArgs(b, 1, 14, 14, 3, 3, 2, 2, 1, 1, 384, 1, 1);
+  BM_convArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 64);
+  BM_convArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 96);
+  BM_convArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 96, 576);
+  BM_convArgs(b, 1, 14, 14, 3, 3, 2, 2, 1, 1, 576, 1, 1);
+  BM_convArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 576, 96);
+  BM_convArgs(b, 1, 14, 14, 3, 3, 2, 2, 2, 1, 576, 1, 1);
+  BM_convArgs(b, 1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 576, 160);
+  BM_convArgs(b, 1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 160, 960);
+  BM_convArgs(b, 1, 7, 7, 3, 3, 2, 2, 1, 1, 960, 1, 1);
+  BM_convArgs(b, 1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 960, 160);
+  BM_convArgs(b, 1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 960, 320);
+  BM_convArgs(b, 1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 320, 1280);
+  BM_convArgs(b, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1280, 1000);
+}
+
+void gbench_main(const std::string& args) {
   ALOGI("pytorch_android_agpu::bench(%s)", args.c_str());
   auto argscv = ArgsCV{args};
+  // TODO: --benchmark_filter for some reason does not work
+  //  BENCHMARK_CAPTURE(BM_conv, mobilenet_v2, "MobileNet v2")
+  //      ->Apply(BM_conv_args_MobileNetV2)
+  //      ->Iterations(50)
+  //      ->Unit(benchmark::kMicrosecond)
+  //      ->ReportAggregatesOnly(true)
+  //      ->UseRealTime();
 
-  BENCHMARK(BM_conv)
-      ->ArgNames({"AGPU", "N", "C", "H", "W", "KC", "KH", "KW"})
+  BENCHMARK_CAPTURE(BM_conv, base, "base")
+      ->Apply(BM_conv_args_base)
       ->Iterations(10)
-      ->Args({0, 1, 3, 3, 3, 3, 2, 2})
-      ->Args({1, 1, 3, 3, 3, 3, 2, 2});
+      ->Repetitions(10)
+      ->Unit(benchmark::kMicrosecond)
+      ->ReportAggregatesOnly(true)
+      ->UseRealTime();
 
   benchmark::Initialize(&(argscv.c), argscv.v);
   benchmark::RunSpecifiedBenchmarks();

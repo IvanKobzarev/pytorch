@@ -614,13 +614,13 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
   static void agpu_gtest(
       facebook::jni::alias_ref<jclass>,
       facebook::jni::alias_ref<jstring> args) {
-    pytorch_jni_agpu::gtest(args->toStdString());
+    pytorch_jni_agpu::gtest_main(args->toStdString());
   }
 
   static void agpu_gbench(
       facebook::jni::alias_ref<jclass>,
       facebook::jni::alias_ref<jstring> args) {
-    pytorch_jni_agpu::gbench(args->toStdString());
+    pytorch_jni_agpu::gbench_main(args->toStdString());
   }
 };
 #endif

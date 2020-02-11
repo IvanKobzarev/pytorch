@@ -1,5 +1,7 @@
 #pragma once
 
+#define AGPU_VERBOSE false
+
 #include <stdint.h>
 #include <stdio.h>
 #include "agpu_gl_header.h"
@@ -9,7 +11,7 @@
 #define AGPU_ERROR(format, ...) \
   __android_log_print(ANDROID_LOG_ERROR, "AGPU", format, ##__VA_ARGS__)
 #define APRINT(format, ...) \
-  __android_log_print(ANDROID_LOG_INFO, "AGPU", format, ##__VA_ARGS__)
+  if (AGPU_VERBOSE) __android_log_print(ANDROID_LOG_INFO, "AGPU", format, ##__VA_ARGS__)
 #else
 #define APRINT(format, ...) printf(format, ##__VA_ARGS__)
 #define AGPU_ERROR(format, ...) printf(format, ##__VA_ARGS__)
