@@ -207,17 +207,17 @@ std::tuple<Tensor,Tensor,Tensor> batch_norm_cpu_transform_input_template(
       && (!bias.defined() || bias.is_contiguous())
       && running_mean.is_contiguous()
       && running_var.is_contiguous()) {
-    bool useAgpu = at::getUseAgpu();
+    bool useAgpu = at::getUseAgpuNorm();
     if (!useAgpu) {
         Tensor output = at::empty_like(input, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
         batch_norm_cpu_inference_contiguous<scalar_t>(
           output, input, weight, bias, running_mean, running_var, eps);
         return std::make_tuple(output, save_mean, save_invstd);
     } else {
-        std::cout << "---AGPU---batch_norm()" << std::endl;
+        if (at::isAgpuVerbose()) std::cout << "---AGPU---batch_norm()" << std::endl;
         auto is = input.sizes();
-        std::cout << "input.dim():" << input.dim();
-        std::cout << "input.sizes():" << is;
+        if (at::isAgpuVerbose()) std::cout << "input.dim():" << input.dim();
+        if (at::isAgpuVerbose()) std::cout << "input.sizes():" << is;
         int64_t d = input.dim();
         uint32_t adims[4] = {1, 1, 1, 1 };
         for (uint32_t i = 0; i < d; ++i) {
@@ -250,7 +250,7 @@ std::tuple<Tensor,Tensor,Tensor> batch_norm_cpu_transform_input_template(
             eps,
             outputData
         );
-        std::cout << "---AGPU---batch_norm()$" << std::endl;
+        if (at::isAgpuVerbose()) std::cout << "---AGPU---batch_norm()$" << std::endl;
     }
   }
 
@@ -260,7 +260,7 @@ std::tuple<Tensor,Tensor,Tensor> batch_norm_cpu_transform_input_template(
       && (!bias.defined() || bias.is_contiguous())
       && running_mean.is_contiguous()
       && running_var.is_contiguous()) {
-    std::cout << "batch_norm1" << std::endl;
+    if (at::isAgpuVerbose()) std::cout << "batch_norm1" << std::endl;
 
     Tensor output = at::empty_like(input, at::MemoryFormat::ChannelsLast);
     batch_norm_cpu_inference_channels_last<scalar_t>(
@@ -268,7 +268,7 @@ std::tuple<Tensor,Tensor,Tensor> batch_norm_cpu_transform_input_template(
     return std::make_tuple(output, save_mean, save_invstd);
   }
 
-  std::cout << "batch_norm2" << std::endl;
+  if (at::isAgpuVerbose()) std::cout << "batch_norm2" << std::endl;
   Tensor output = at::empty_like(input, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
 
   int64_t n_input = input.size(1);
@@ -310,7 +310,7 @@ template<typename scalar_t, template<typename T> class VarTransform>
 std::tuple<Tensor,Tensor> batch_norm_cpu_update_stats_template(
     const Tensor& input, const Tensor& running_mean, const Tensor& running_var,
     double momentum, double eps) {
-  std::cout << "batch_norm_cpu_update_stats_template" << std::endl;
+  if (at::isAgpuVerbose()) std::cout << "batch_norm_cpu_update_stats_template" << std::endl;
 
   using accscalar_t = at::acc_type<scalar_t, false>;
 
@@ -674,8 +674,8 @@ std::tuple<Tensor, Tensor, Tensor> batch_norm_cpu(const Tensor& self, const Tens
   checkBackend("batch_norm_cpu", {self, weight, bias, running_mean, running_var}, Backend::CPU);
 
   return AT_DISPATCH_FLOATING_TYPES(self.scalar_type(), "batch_norm", [&] {
-      std::cout << "OOOP batch_norm_cpu" << std::endl;
-      std::cout 
+      if (at::isAgpuVerbose()) std::cout << "OOOP batch_norm_cpu" << std::endl;
+      if (at::isAgpuVerbose()) std::cout 
       << "BN self.sizes():\n" << self.sizes() << std::endl
       << "BN weight.sizes():\n" << weight.sizes() << " "<< weight.defined() << std::endl
       << "BN bias.sizes():\n" << bias.sizes() <<" "<< bias.defined() << std::endl
