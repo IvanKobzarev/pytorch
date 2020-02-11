@@ -42,15 +42,15 @@ android {
             dimension "model"
             applicationIdSuffix ".bench"
             buildConfigField("String", "AGPU_GBENCH", "\""+project.properties['ARGS']+"\"")
-            buildConfigField("String", "MODULE_ASSET_NAME", "\"mn2fp32.pt\"")
+            buildConfigField("String", "MODULE_ASSET_NAME", "\"mn2-fp32.pt\"")
             addManifestPlaceholders([APP_NAME: "BENCH"])
             buildConfigField("String", "LOGCAT_TAG", "\"pytorch-bench\"")
         }
         benchM {
             dimension "model"
             applicationIdSuffix ".benchM"
-            buildConfigField("String", "AGPU_GBENCH_M", "\"mn2.pt\"")
-            buildConfigField("String", "MODULE_ASSET_NAME", "\"mn2.pt\"")
+            buildConfigField("String", "AGPU_GBENCH_M", "\"mn2-fp32.pt\"")
+            buildConfigField("String", "MODULE_ASSET_NAME", "\"mn2-fp32.pt\"")
             addManifestPlaceholders([APP_NAME: "BENCHM"])
             buildConfigField("String", "LOGCAT_TAG", "\"pytorch-benchM\"")
         }

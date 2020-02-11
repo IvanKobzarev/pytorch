@@ -1,6 +1,6 @@
 #pragma once
 
-#define AGPU_VERBOSE true
+#define AGPU_VERBOSE false
 
 #include <stdint.h>
 #include <stdio.h>

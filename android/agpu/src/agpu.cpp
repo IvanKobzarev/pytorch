@@ -15,15 +15,22 @@
 
 namespace agpu {
 
+bool isVerbose() {
+  return AGPU_VERBOSE;
+}
+
 void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
-  if (!AGPU_VERBOSE) {
+  if (!isVerbose()) {
     return;
   }
   static const char* kFloatFormat = "%8.1f";
   std::cout << m;
 
   for (auto i = 0; i < rank; ++i) {
-    assert(dims[i] < 16);
+    if (dims[i] > 5) {
+      return;
+    }
+    //assert(dims[i] < 16);
   }
 
   if (rank == 0) {
@@ -524,10 +531,11 @@ std::unique_ptr<AGLShader> getProgramWithPrefix(
     tc << s << "\n";
   }
   tc << content;
-
-  APRINT(
+  if (isVerbose) {
+    APRINT(
       "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n%s\n<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<",
       tc.str().c_str());
+  }
 
   return std::make_unique<AGLShader>(tc.str());
 }

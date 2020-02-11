@@ -486,9 +486,16 @@ void BM_moduleForward(benchmark::State& state, const char* name) {
     state.PauseTiming();
     const int64_t useAgpu = state.range(0);
     if (useAgpu == 0) {
-      at::setUseAgpu(false);
+      at::setUseAgpuConv(false);
+      at::setUseAgpuNorm(false);
+      at::setUseAgpuRelu(false);
+      at::setUseAgpuAdd(false);
     } else {
-      at::setUseAgpu(true);
+      at::setAgpuVerbose(false);
+      at::setUseAgpuConv(true);
+      at::setUseAgpuNorm(true);
+      at::setUseAgpuRelu(true);
+      at::setUseAgpuAdd(true);
     }
 
     auto tin = torch::randn({1, 3, 224, 224}, torch::kFloat);
@@ -505,7 +512,7 @@ void gbench_module(torch::jit::script::Module module, const std::string& args) {
   auto argscv = ArgsCV{args};
   module_ = std::move(module);
   BENCHMARK_CAPTURE(BM_moduleForward, fwdBase, "fwdBase")
-      //->Arg(0)
+      ->Arg(0)
       ->Arg(1)
       //->Iterations(1)
       //->Repetitions(1)
