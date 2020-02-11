@@ -602,12 +602,13 @@ at::Tensor _convolution(
   params.deterministic = deterministic;
   params.cudnn_enabled = cudnn_enabled;
   
-  std::cout << "OOOP _convolution";
-  if (params.groups > 1) {
-    std::cout << " dws";
+  if (at::isAgpuVerbose()) {
+    std::cout << "OOOP _convolution";
+    if (params.groups > 1) {
+      std::cout << " dws";
+    }
+    std::cout << std::endl;
   }
-  std::cout << std::endl;
-
   check_shape_forward(input, weight, bias, params, input_is_mkldnn);
 
   if (k == 3) {
@@ -774,12 +775,11 @@ at::Tensor _convolution_nogroup(
             stride, padding, dilation);
       } else {  /* dim == 4, non-dilated */
         bool useAgpu = at::getUseAgpu();
-        std::cout << "III useAgpu:" << useAgpu << std::endl;
+        if (at::isAgpuVerbose()) std::cout << "III useAgpu:" << useAgpu << std::endl;
         if (useAgpu) { 
-          std::cout << "---AGPU---CONV()" << std::endl;
           auto is = input.sizes();
           auto ws = weight.sizes();
-          std::cout << "input.sizes() " << input.sizes() << " weight.sizes() " << weight.sizes();
+          if (at::isAgpuVerbose()) std::cout << "input.sizes() " << input.sizes() << " weight.sizes() " << weight.sizes();
           std::vector<int64_t> os = conv_output_size(is, ws, padding, stride, dilation);
           at::Tensor output = at::empty(os, input.options());
           const float* inputData = (float*) input.data_ptr();
@@ -795,9 +795,9 @@ at::Tensor _convolution_nogroup(
           uint32_t kernel_d = ws[1];
           uint32_t kernel_h = ws[2];
           uint32_t kernel_w = ws[3];
-          std::cout << "input nchw:" << input_n << " " << input_c << " " << input_h << " " << input_w << std::endl;
+          if (at::isAgpuVerbose())std::cout << "input nchw:" << input_n << " " << input_c << " " << input_h << " " << input_w << std::endl;
 
-          std::cout << "weight cdhw:" << kernel_c << " " << kernel_d << " " << kernel_h << " " << kernel_w << std::endl;
+          if (at::isAgpuVerbose())std::cout << "weight cdhw:" << kernel_c << " " << kernel_d << " " << kernel_h << " " << kernel_w << std::endl;
           
           agpu::agpu_conv2d(
               inputData,
@@ -815,8 +815,6 @@ at::Tensor _convolution_nogroup(
               dilation[0], dilation[1],
               1 /* groups */,
               outputData);
-
-          std::cout << "---AGPU---CONV()$" << std::endl;
           return output;
         }
         if (params.use_nnpack(input)) {
