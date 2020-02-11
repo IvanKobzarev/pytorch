@@ -30,30 +30,30 @@ DEFINE_DISPATCH(leaky_relu_stub);
 DEFINE_DISPATCH(leaky_relu_backward_stub);
 
 Tensor hardtanh(const Tensor& self, Scalar min, Scalar max) {
-  std::cout << "OOOP hardtanh" << std::endl;
+  if (at::isAgpuVerbose()) std::cout << "OOOP hardtanh" << std::endl;
   return at::clamp(self, min, max);
 }
 
 Tensor& hardtanh_out(Tensor& result, const Tensor& self, Scalar min, Scalar max) {
-  std::cout << "OOOP hardtanh_out" << std::endl;
+  if (at::isAgpuVerbose()) std::cout << "OOOP hardtanh_out" << std::endl;
   return at::clamp_out(result, self, min, max);
 }
 
 Tensor& hardtanh_(Tensor& self, Scalar min, Scalar max) {
-  std::cout << "OOOP hardtanh_" << std::endl;
+  if (at::isAgpuVerbose()) std::cout << "OOOP hardtanh_" << std::endl;
   return at::clamp_(self, min, max);
 }
 
 Tensor& hardtanh_backward_out(Tensor& grad_input,
     const Tensor& grad_output, const Tensor& self, Scalar min, Scalar max) {
-  std::cout << "OOOP hardtanh_backward_out" << std::endl;
+  if (at::isAgpuVerbose()) std::cout << "OOOP hardtanh_backward_out" << std::endl;
   auto iter = TensorIterator::binary_op(grad_input, grad_output, self);
   hardtanh_backward_stub(iter.device_type(), iter, min, max);
   return grad_input;
 }
 
 Tensor hardtanh_backward(const Tensor& grad_output, const Tensor& self, Scalar min, Scalar max) {
-  std::cout << "OOOP hardtanh_backward" << std::endl;
+  if (at::isAgpuVerbose()) std::cout << "OOOP hardtanh_backward" << std::endl;
   Tensor result;
   auto iter = TensorIterator::binary_op(result, grad_output, self);
   hardtanh_backward_stub(iter.device_type(), iter, min, max);
@@ -115,15 +115,15 @@ Tensor elu_backward(
 }
 
 Tensor relu(const Tensor & self) {
-  std::cout << "OOOP relu" << std::endl;
-  bool useAgpu = at::getUseAgpu();
+  if (at::isAgpuVerbose()) std::cout << "OOOP relu" << std::endl;
+  bool useAgpu = at::getUseAgpuRelu();
   if (!useAgpu) {
     return at::threshold(self, 0, 0);
   }
-  std::cout << "---AGPU---threshold()" << std::endl;
+  if (at::isAgpuVerbose()) std::cout << "---AGPU---threshold()" << std::endl;
   auto is = self.sizes();
-  std::cout << "input.dim():" << self.dim();
-  std::cout << "input.sizes():" << is;
+  if (at::isAgpuVerbose()) std::cout << "input.dim():" << self.dim();
+  if (at::isAgpuVerbose()) std::cout << "input.sizes():" << is;
   int64_t d = self.dim();
   uint32_t adims[4] = {1, 1, 1, 1 };
   for (uint32_t i = 0; i < d; ++i) {
@@ -150,13 +150,13 @@ Tensor relu(const Tensor & self) {
     outputData
   );
 
-  std::cout << "output:\n" << output << std::endl;
-  std::cout << "---AGPU---threshold()$" << std::endl;
+  if (at::isAgpuVerbose()) std::cout << "output:\n" << output << std::endl;
+  if (at::isAgpuVerbose()) std::cout << "---AGPU---threshold()$" << std::endl;
   return output;
 }
 
 Tensor & relu_(Tensor & self) {
-  std::cout << "OOOP relu_" << std::endl;
+  if (at::isAgpuVerbose()) std::cout << "OOOP relu_" << std::endl;
   return at::threshold_(self, 0, 0);
 }
 

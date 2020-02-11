@@ -774,23 +774,26 @@ at::Tensor _convolution_nogroup(
             input, weight, kernel_size, bias,
             stride, padding, dilation);
       } else {  /* dim == 4, non-dilated */
-        bool useAgpu = at::getUseAgpu();
+        bool useAgpu = at::getUseAgpuConv();
         if (at::isAgpuVerbose()) std::cout << "III useAgpu:" << useAgpu << std::endl;
         if (useAgpu) { 
           auto is = input.sizes();
           auto ws = weight.sizes();
-          if (at::isAgpuVerbose()) std::cout << "input.sizes() " << input.sizes() << " weight.sizes() " << weight.sizes();
-          std::vector<int64_t> os = conv_output_size(is, ws, padding, stride, dilation);
+          auto os = conv_output_size(input.sizes(), weight.sizes(), padding, stride, dilation);
           at::Tensor output = at::empty(os, input.options());
-          const float* inputData = (float*) input.data_ptr();
-          const float* biasData = (float*) bias.data_ptr();
-          float* outputData = (float*) output.data_ptr();
+
+          const auto input_ = input.contiguous();
+          const auto bias_ = bias.defined() ? bias : at::zeros({weight.size(0)}, input.options());
+
+          const float* inputData = input_.data_ptr<float>();
+          const float* biasData = bias_.data_ptr<float>();
+          float* outputData = output.data_ptr<float>();
           uint32_t input_n = is[0];
           uint32_t input_c = is[1];
           uint32_t input_h = is[2];
           uint32_t input_w = is[3];
 
-          const float* weightData = (float*) weight.data_ptr();
+          const float* weightData = weight.data_ptr<float>();
           uint32_t kernel_c = ws[0];
           uint32_t kernel_d = ws[1];
           uint32_t kernel_h = ws[2];

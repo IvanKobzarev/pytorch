@@ -16,11 +16,11 @@ namespace {
 using namespace vec256;
 
 void add_kernel(TensorIterator& iter, Scalar alpha_scalar) {
-  std::cout << "OOOP add_kernel" << std::endl;
+  if (at::isAgpuVerbose()) std::cout << "OOOP add_kernel" << std::endl;
   
-  bool useAgpu = at::getUseAgpu();
+  bool useAgpu = at::getUseAgpuAdd();
   if (useAgpu && iter.tensor(1).dim() <= 4) {
-    std::cout 
+    if (at::isAgpuVerbose()) std::cout 
       << "\nscalar:" << alpha_scalar
       << "\niter.numel():"<< iter.numel() 
       << "\niter.shape():"<< iter.shape() 
@@ -30,14 +30,14 @@ void add_kernel(TensorIterator& iter, Scalar alpha_scalar) {
       << "\niter.num_output_elements():"<< iter.num_output_elements() 
       << std::endl;
     for (uint32_t i = 0; i < iter.ntensors(); ++i) {
-      std::cout << "iter.tensor(" << i << "):\n" << iter.tensor(i) << std::endl; 
+      if (at::isAgpuVerbose()) std::cout << "iter.tensor(" << i << "):\n" << iter.tensor(i) << std::endl; 
     }
-    std::cout << __FILE__ << "III useAgpu:" << useAgpu << std::endl;
+    if (at::isAgpuVerbose()) std::cout << __FILE__ << "III useAgpu:" << useAgpu << std::endl;
     at::Tensor output = iter.tensor(0);
     at::Tensor input0 = iter.tensor(1);
     auto is = input0.sizes();
-    std::cout << "input0.dim():" << input0.dim();
-    std::cout << "input0.sizes():" << is;
+    if (at::isAgpuVerbose()) std::cout << "input0.dim():" << input0.dim();
+    if (at::isAgpuVerbose()) std::cout << "input0.sizes():" << is;
     int64_t d = input0.dim();
     uint32_t adims[4] = {1, 1, 1, 1 };
     for (uint32_t i = 0; i < d; ++i) {
@@ -48,14 +48,14 @@ void add_kernel(TensorIterator& iter, Scalar alpha_scalar) {
     uint32_t input_c = adims[1];
     uint32_t input_h = adims[2];
     uint32_t input_w = adims[3];
-    std::cout << "input nchw:" 
+    if (at::isAgpuVerbose()) std::cout << "input nchw:" 
       << input_n << " " 
       << input_c << " " 
       << input_h << " " 
       << input_w << std::endl;
     
     at::Tensor input1 = iter.tensor(2);
-    std::cout << "input1.sizes():" << input1.sizes();
+    if (at::isAgpuVerbose()) std::cout << "input1.sizes():" << input1.sizes();
     agpu::agpu_add2t(
         (float*)input0.data_ptr(),
         (float*)input1.data_ptr(),
@@ -64,7 +64,7 @@ void add_kernel(TensorIterator& iter, Scalar alpha_scalar) {
         input_h,
         input_w,
         (float*)output.data_ptr());
-    std::cout << "\nadd_kernel$ iter.tensor(0):"<< iter.tensor(0) << std::endl;
+    if (at::isAgpuVerbose()) std::cout << "\nadd_kernel$ iter.tensor(0):"<< iter.tensor(0) << std::endl;
     return;
   }
   if (iter.dtype() == ScalarType::Bool) {
