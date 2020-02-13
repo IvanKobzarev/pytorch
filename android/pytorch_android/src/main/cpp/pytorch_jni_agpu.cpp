@@ -1,9 +1,11 @@
 #include <fcntl.h>
+#include <inttypes.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <iostream>
 #include <memory>
+#include <random>
 #include <string>
 #include <typeinfo>
 
@@ -11,6 +13,7 @@
 #include <benchmark/benchmark.h>
 #include <gtest/gtest.h>
 #include <torch/torch.h>
+#include "agpu.h"
 #include "pytorch_jni_agpu.h"
 
 #ifdef __ANDROID__
@@ -32,11 +35,11 @@ void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
   static const char* kFloatFormat = "%12.12f";
   std::cout << m << std::endl;
 
-    std::cout << " dims:(";
-    for (uint32_t i = 0; i < rank; i++) {
-      std::cout << dims[i] << " ";
-    }
-    std::cout << ")";
+  std::cout << " dims:(";
+  for (uint32_t i = 0; i < rank; i++) {
+    std::cout << dims[i] << " ";
+  }
+  std::cout << ")";
 
   if (rank == 0) {
     std::cout << *t;
@@ -50,7 +53,7 @@ void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
       std::cout << "\n";
       for (uint32_t j = 0; j < crange; j++) {
         sprintf(fbuf, kFloatFormat, t[i * cols + j]);
-        std::cout << "(" << i << ","<< j << ")"<< fbuf << std::endl;
+        std::cout << "(" << i << "," << j << ")" << fbuf << std::endl;
       }
     }
   } else if (rank == 3) {
@@ -84,7 +87,7 @@ void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
     }
   } else {
     // TODO: support print r > 4
-    //assert(false);
+    // assert(false);
   }
   std::cout << std::endl;
 }
@@ -113,7 +116,10 @@ void print_tensor(const char* m, const at::Tensor& t) {
   delete[] dims;
 }
 
-static bool almostEqual(const at::Tensor& t, const at::Tensor& expected, bool logOnFalse = false) {
+static bool almostEqual(
+    const at::Tensor& t,
+    const at::Tensor& expected,
+    bool logOnFalse = false) {
   double rtol = 0.001;
   double atol = 0.0001;
   bool ret = torch::allclose(t, expected, rtol, atol, true);
@@ -125,7 +131,8 @@ static bool almostEqual(const at::Tensor& t, const at::Tensor& expected, bool lo
     double rtoli = 0.1;
     int i = 1;
     while (i < 5) {
-      ALOGI("almostEquals allClose(%d rtoli:%12.8f):%d",
+      ALOGI(
+          "almostEquals allClose(%d rtoli:%12.8f):%d",
           i++,
           rtoli,
           torch::allclose(t, expected, rtoli, 0.00001, true));
@@ -159,8 +166,22 @@ static void test_conv_(
     int64_t gcin,
     int64_t gcout,
     bool log = false) {
-  ALOGI("test_conv_ nhw (%d %d %d) kh kw (%d %d) pad yx (%d %d) s:%d d:%d g:%d cin:%d cout:%d",
-      n, h, w, kh, kw, py, px, s, d, g, gcin, gcout);
+  ALOGI(
+      "test_conv_ nhw (%" PRId64 " %" PRId64 " %" PRId64 ") kh kw (%" PRId64
+      " %" PRId64 ") pad yx (%" PRId64 " %" PRId64 ") s:%" PRId64 " d:%" PRId64
+      " g:%" PRId64 " cin:%" PRId64 " cout:%" PRId64,
+      n,
+      h,
+      w,
+      kh,
+      kw,
+      py,
+      px,
+      s,
+      d,
+      g,
+      gcin,
+      gcout);
 
   auto input = torch::randn({n, gcin, h, w}, torch::kFloat);
   auto weight = torch::randn({gcout, gcin, kh, kw}, torch::kFloat);
@@ -191,122 +212,122 @@ static void test_conv_(
 
 TEST(conv, xxs) {
   test_conv_(
-    /* n */ 1,
-    /* h */ 3,
-    /* w */ 3,
-    /* kh */ 3,
-    /* kw */ 3,
-    /* ph */ 0,
-    /* pw */ 0,
-    /* s */ 1,
-    /* d */ 1,
-    /* g */ 1,
-    /* gcin */ 3,
-    /* gcout */ 3,
-    /* log */ false);
+      /* n */ 1,
+      /* h */ 3,
+      /* w */ 3,
+      /* kh */ 3,
+      /* kw */ 3,
+      /* ph */ 0,
+      /* pw */ 0,
+      /* s */ 1,
+      /* d */ 1,
+      /* g */ 1,
+      /* gcin */ 3,
+      /* gcout */ 3,
+      /* log */ false);
 }
 
 TEST(conv, xxs_padding) {
   test_conv_(
-    /* n */ 1,
-    /* h */ 3,
-    /* w */ 3,
-    /* kh */ 3,
-    /* kw */ 3,
-    /* ph */ 1,
-    /* pw */ 1,
-    /* s */ 1,
-    /* d */ 1,
-    /* g */ 1,
-    /* gcin */ 3,
-    /* gcout */ 3,
-    /* log */ true);
+      /* n */ 1,
+      /* h */ 3,
+      /* w */ 3,
+      /* kh */ 3,
+      /* kw */ 3,
+      /* ph */ 1,
+      /* pw */ 1,
+      /* s */ 1,
+      /* d */ 1,
+      /* g */ 1,
+      /* gcin */ 3,
+      /* gcout */ 3,
+      /* log */ true);
 }
 
 TEST(conv, xs_padding) {
   test_conv_(
-    /* n */ 1,
-    /* h */ 3,
-    /* w */ 3,
-    /* kh */ 3,
-    /* kw */ 3,
-    /* py */ 1,
-    /* px */ 1,
-    /* s */ 1,
-    /* d */ 1,
-    /* g */ 1,
-    /* gcin */ 3,
-    /* gcout */ 3,
-    /* log */ true);
+      /* n */ 1,
+      /* h */ 3,
+      /* w */ 3,
+      /* kh */ 3,
+      /* kw */ 3,
+      /* py */ 1,
+      /* px */ 1,
+      /* s */ 1,
+      /* d */ 1,
+      /* g */ 1,
+      /* gcin */ 3,
+      /* gcout */ 3,
+      /* log */ true);
 }
 
 TEST(conv, xxs_stride) {
   test_conv_(
-    /* n */ 1,
-    /* h */ 3,
-    /* w */ 3,
-    /* kh */ 3,
-    /* kw */ 3,
-    /* ph */ 0,
-    /* pw */ 0,
-    /* s */ 2,
-    /* d */ 1,
-    /* g */ 1,
-    /* gcin */ 12,
-    /* gcout */ 12,
-    /* log */ true);
+      /* n */ 1,
+      /* h */ 3,
+      /* w */ 3,
+      /* kh */ 3,
+      /* kw */ 3,
+      /* ph */ 0,
+      /* pw */ 0,
+      /* s */ 2,
+      /* d */ 1,
+      /* g */ 1,
+      /* gcin */ 12,
+      /* gcout */ 12,
+      /* log */ true);
 }
 
 TEST(conv, xxs_padding2) {
   test_conv_(
-    /* n */ 1,
-    /* h */ 3,
-    /* w */ 3,
-    /* kh */ 3,
-    /* kw */ 3,
-    /* ph */ 2,
-    /* pw */ 2,
-    /* s */ 1,
-    /* d */ 1,
-    /* g */ 1,
-    /* gcin */ 3,
-    /* gcout */ 3,
-    /* log */ true);
+      /* n */ 1,
+      /* h */ 3,
+      /* w */ 3,
+      /* kh */ 3,
+      /* kw */ 3,
+      /* ph */ 2,
+      /* pw */ 2,
+      /* s */ 1,
+      /* d */ 1,
+      /* g */ 1,
+      /* gcin */ 3,
+      /* gcout */ 3,
+      /* log */ true);
 }
 
 TEST(conv, mn2) {
   //         n,   h,   w kh,kw,py,px, s, d,   g,  cin, cout
-  test_conv_(1, 224, 224, 3, 3, 1, 1, 2, 1,   1,    3,   32);
-  test_conv_(1, 112, 112, 3, 3, 1, 1, 1, 1,  32,    1,    1);
-  test_conv_(1, 112, 112, 1, 1, 0, 0, 1, 1,   1,   32,   16);
-  test_conv_(1, 112, 112, 1, 1, 0, 0, 1, 1,   1,   16,   96);
-  test_conv_(1, 112, 112, 3, 3, 1, 1, 2, 1,  96,    1,    1);
-  test_conv_(1,  56,  56, 1, 1, 0, 0, 1, 1,   1,   96,   24);
-  test_conv_(1,  56,  56, 1, 1, 0, 0, 1, 1,   1,   24,  144);
-  test_conv_(1,  56,  56, 3, 3, 1, 1, 1, 1, 144,    1,    1);
-  test_conv_(1,  56,  56, 1, 1, 0, 0, 1, 1,   1,  144,   24);
-  test_conv_(1,  56,  56, 3, 3, 1, 1, 2, 1, 144,    1,    1);
-  test_conv_(1,  28,  28, 1, 1, 0, 0, 1, 1,   1,  144,   32);
-  test_conv_(1,  28,  28, 1, 1, 0, 0, 1, 1,   1,   32,  192);
-  test_conv_(1,  28,  28, 3, 3, 1, 1, 1, 1, 192,    1,    1);
-  test_conv_(1,  28,  28, 1, 1, 0, 0, 1, 1,   1,  192,   32);
-  test_conv_(1,  28,  28, 3, 3, 1, 1, 2, 1, 192,    1,    1);
-  test_conv_(1,  14,  14, 1, 1, 0, 0, 1, 1,   1,  192,   64);
-  test_conv_(1,  14,  14, 1, 1, 0, 0, 1, 1,   1,   64,  384);
-  test_conv_(1,  14,  14, 3, 3, 1, 1, 1, 1, 384,    1,    1);
-  test_conv_(1,  14,  14, 1, 1, 0, 0, 1, 1,   1,  384,   64);
-  test_conv_(1,  14,  14, 1, 1, 0, 0, 1, 1,   1,  384,   96);
-  test_conv_(1,  14,  14, 1, 1, 0, 0, 1, 1,   1,   96,  576);
-  test_conv_(1,  14,  14, 3, 3, 1, 1, 1, 1, 576,    1,    1);
-  test_conv_(1,  14,  14, 1, 1, 0, 0, 1, 1,   1,  576,   96);
-  test_conv_(1,  14,  14, 3, 3, 1, 1, 2, 1, 576,    1,    1);
-  test_conv_(1,   7,   7, 1, 1, 0, 0, 1, 1,   1,  576,  160);
-  test_conv_(1,   7,   7, 1, 1, 0, 0, 1, 1,   1,  160,  960);
-  test_conv_(1,   7,   7, 3, 3, 1, 1, 1, 1, 960,    1,    1);
-  test_conv_(1,   7,   7, 1, 1, 0, 0, 1, 1,   1,  960,  160);
-  test_conv_(1,   7,   7, 1, 1, 0, 0, 1, 1,   1,  960,  320);
-  test_conv_(1,   7,   7, 1, 1, 0, 0, 1, 1,   1,  320, 1280);
-  test_conv_(1,   1,   1, 1, 1, 0, 0, 1, 1,   1, 1280, 1000);
+  test_conv_(1, 224, 224, 3, 3, 1, 1, 2, 1, 1, 3, 32);
+  test_conv_(1, 112, 112, 3, 3, 1, 1, 1, 1, 32, 1, 1);
+  test_conv_(1, 112, 112, 1, 1, 0, 0, 1, 1, 1, 32, 16);
+  test_conv_(1, 112, 112, 1, 1, 0, 0, 1, 1, 1, 16, 96);
+  test_conv_(1, 112, 112, 3, 3, 1, 1, 2, 1, 96, 1, 1);
+  test_conv_(1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 96, 24);
+  test_conv_(1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 24, 144);
+  test_conv_(1, 56, 56, 3, 3, 1, 1, 1, 1, 144, 1, 1);
+  test_conv_(1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
+  test_conv_(1, 56, 56, 3, 3, 1, 1, 2, 1, 144, 1, 1);
+  test_conv_(1, 28, 28, 1, 1, 0, 0, 1, 1, 1, 144, 32);
+  test_conv_(1, 28, 28, 1, 1, 0, 0, 1, 1, 1, 32, 192);
+  test_conv_(1, 28, 28, 3, 3, 1, 1, 1, 1, 192, 1, 1);
+  test_conv_(1, 28, 28, 1, 1, 0, 0, 1, 1, 1, 192, 32);
+  test_conv_(1, 28, 28, 3, 3, 1, 1, 2, 1, 192, 1, 1);
+  test_conv_(1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 192, 64);
+  test_conv_(1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 64, 384);
+  test_conv_(1, 14, 14, 3, 3, 1, 1, 1, 1, 384, 1, 1);
+  test_conv_(1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 64);
+  test_conv_(1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 96);
+  test_conv_(1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 96, 576);
+  test_conv_(1, 14, 14, 3, 3, 1, 1, 1, 1, 576, 1, 1);
+  test_conv_(1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 576, 96);
+  test_conv_(1, 14, 14, 3, 3, 1, 1, 2, 1, 576, 1, 1);
+  test_conv_(1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 576, 160);
+  test_conv_(1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 160, 960);
+  test_conv_(1, 7, 7, 3, 3, 1, 1, 1, 1, 960, 1, 1);
+  test_conv_(1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 960, 160);
+  test_conv_(1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 960, 320);
+  test_conv_(1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 320, 1280);
+  test_conv_(1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1280, 1000);
 }
 
 TEST(add, xxs) {
@@ -351,9 +372,11 @@ TEST(norm, xxs) {
   auto var = torch::ones({ic}, torch::kFloat);
 
   agpuOff();
-  auto toutC = at::batch_norm(tin, weight, bias, mean, var, false, 0.1, 0.00001, false);
+  auto toutC =
+      at::batch_norm(tin, weight, bias, mean, var, false, 0.1, 0.00001, false);
   at::setUseAgpuNorm(true);
-  auto toutT = at::batch_norm(tin, weight, bias, mean, var, false, 0.1, 0.00001, false);
+  auto toutT =
+      at::batch_norm(tin, weight, bias, mean, var, false, 0.1, 0.00001, false);
   agpuOff();
   assert(almostEqual(toutC, toutT));
 }
@@ -531,29 +554,6 @@ static void BM_conv_args_MobileNetV2(benchmark::internal::Benchmark* b) {
   BM_convArgs(b, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1280, 1000);
 }
 
-void gbench_main(const std::string& args) {
-  ALOGI("pytorch_android_agpu::gbench_main(%s)", args.c_str());
-  auto argscv = ArgsCV{args};
-  // TODO: --benchmark_filter for some reason does not work
-  //  BENCHMARK_CAPTURE(BM_conv, mobilenet_v2, "MobileNet v2")
-  //      ->Apply(BM_conv_args_MobileNetV2)
-  //      ->Iterations(50)
-  //      ->Unit(benchmark::kMicrosecond)
-  //      ->ReportAggregatesOnly(true)
-  //      ->UseRealTime();
-
-  BENCHMARK_CAPTURE(BM_conv, base, "base")
-      ->Apply(BM_conv_args_base)
-      ->Iterations(10)
-      ->Repetitions(10)
-      ->Unit(benchmark::kMicrosecond)
-      ->ReportAggregatesOnly(true)
-      ->UseRealTime();
-
-  benchmark::Initialize(&(argscv.c), argscv.v);
-  benchmark::RunSpecifiedBenchmarks();
-}
-
 torch::jit::script::Module module_;
 
 void BM_moduleForward(benchmark::State& state, const char* name) {
@@ -591,6 +591,147 @@ void gbench_module(torch::jit::script::Module module, const std::string& args) {
       //->Repetitions(1)
       ->Unit(benchmark::kMillisecond)
       //->ReportAggregatesOnly(true)
+      ->UseRealTime();
+
+  benchmark::Initialize(&(argscv.c), argscv.v);
+  benchmark::RunSpecifiedBenchmarks();
+}
+
+static void BM_conv_agpu_Args(
+    benchmark::internal::Benchmark* b,
+    int64_t n,
+    int64_t h,
+    int64_t w,
+    int64_t kh,
+    int64_t kw,
+    int64_t py,
+    int64_t px,
+    int64_t s,
+    int64_t d,
+    int64_t g,
+    int64_t gcin,
+    int64_t gcout) {
+  b->Args({0, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+}
+
+static void BM_conv_agpu_args_base(benchmark::internal::Benchmark* b) {
+  b->ArgNames({"ACX",
+               "N",
+               "H",
+               "W",
+               "KH",
+               "KW",
+               "py",
+               "px",
+               "S",
+               "D",
+               "G",
+               "GCin",
+               "GCout"});
+  /*             N   H    W   KH  KW  py  px  S  D    G  GCin  GCout */
+  BM_conv_agpu_Args(b, 1, 224, 224, 3, 3, 2, 1, 1, 1, 1, 3, 32);
+  BM_conv_agpu_Args(b, 1, 112, 112, 3, 3, 2, 1, 1, 1, 96, 1, 1);
+  BM_conv_agpu_Args(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
+  BM_conv_agpu_Args(b, 1, 28, 28, 3, 3, 1, 1, 2, 1, 192, 1, 1);
+  BM_conv_agpu_Args(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 96);
+  BM_conv_agpu_Args(b, 1, 7, 7, 3, 3, 1, 1, 1, 1, 960, 1, 1);
+}
+
+static void BM_conv_agpu(benchmark::State& state, const char* name) {
+  for (auto _ : state) {
+    state.PauseTiming();
+    const int64_t agpuConvX = state.range(0);
+
+    const int64_t n = state.range(1);
+    const int64_t h = state.range(2);
+    const int64_t w = state.range(3);
+
+    const int64_t kh = state.range(4);
+    const int64_t kw = state.range(5);
+
+    const int64_t py = state.range(6);
+    const int64_t px = state.range(7);
+
+    const int64_t stride = state.range(8);
+    const int64_t dilation = state.range(9);
+
+    const int64_t groups = state.range(10);
+    const int64_t groups_c_in = state.range(11);
+    const int64_t groups_c_out = state.range(12);
+
+    const int64_t c_in = groups_c_in;
+    const int64_t c_out = groups_c_out;
+
+    std::random_device random_device;
+    auto rng = std::mt19937(random_device());
+    auto f32rng =
+        std::bind(std::uniform_real_distribution<float>(0.0f, 1.0f), rng);
+
+    std::vector<float> input(n * c_in * h * w);
+    std::generate(input.begin(), input.end(), std::ref(f32rng));
+
+    std::vector<float> kernel(c_out * c_in * kh * kw);
+    std::generate(kernel.begin(), kernel.end(), std::ref(f32rng));
+
+    std::vector<float> bias(c_out);
+    std::generate(bias.begin(), bias.end(), std::ref(f32rng));
+
+    const size_t effK_h = (kh - 1) * dilation + 1;
+    const size_t effK_w = (kw - 1) * dilation + 1;
+    const size_t output_h = (h + 2 * py - effK_h) / stride + 1;
+    const size_t output_w = (w + 2 * px - effK_w) / stride + 1;
+
+    std::vector<float> output(n * c_out * output_w * output_h);
+
+    state.ResumeTiming();
+
+    agpu::agpu_conv2d(
+        input.data(),
+        n,
+        c_in,
+        h,
+        w,
+        kernel.data(),
+        c_out,
+        kh,
+        kw,
+        bias.data(),
+        stride,
+        stride,
+        py,
+        px,
+        dilation,
+        dilation,
+        groups,
+        output.data());
+  }
+}
+
+void gbench_main(const std::string& args) {
+  ALOGI("pytorch_android_agpu::gbench_main(%s)", args.c_str());
+  auto argscv = ArgsCV{args};
+  // TODO: --benchmark_filter for some reason does not work
+  //  BENCHMARK_CAPTURE(BM_conv, mobilenet_v2, "MobileNet v2")
+  //      ->Apply(BM_conv_args_MobileNetV2)
+  //      ->Iterations(50)
+  //      ->Unit(benchmark::kMicrosecond)
+  //      ->ReportAggregatesOnly(true)
+  //      ->UseRealTime();
+
+  // BENCHMARK_CAPTURE(BM_conv, base, "base")
+  //    ->Apply(BM_conv_args_base)
+  //    ->Iterations(10)
+  //    ->Repetitions(10)
+  //    ->Unit(benchmark::kMicrosecond)
+  //    ->ReportAggregatesOnly(true)
+  //    ->UseRealTime();
+
+  BENCHMARK_CAPTURE(BM_conv_agpu, base, "a_base")
+      ->Apply(BM_conv_agpu_args_base)
+      ->Iterations(10)
+      ->Repetitions(10)
+      ->Unit(benchmark::kMicrosecond)
+      ->ReportAggregatesOnly(true)
       ->UseRealTime();
 
   benchmark::Initialize(&(argscv.c), argscv.v);
