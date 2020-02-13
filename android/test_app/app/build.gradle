@@ -27,6 +27,7 @@ android {
         buildConfigField("String", "LOGCAT_TAG", "@string/app_name")
         buildConfigField("long[]", "INPUT_TENSOR_SHAPE", "new long[]{1, 3, 224, 224}")
         buildConfigField("String", "AGPU_GTEST", 'null')
+        buildConfigField("String", "AGPU_GTEST_M", 'null')
         buildConfigField("String", "AGPU_GBENCH", 'null')
         buildConfigField("String", "AGPU_GBENCH_M", 'null')
         addManifestPlaceholders([APP_NAME: "@string/app_name", MAIN_ACTIVITY: "org.pytorch.testapp.MainActivity"])
@@ -58,9 +59,17 @@ android {
             dimension "model"
             applicationIdSuffix ".tst"
             buildConfigField("String", "AGPU_GTEST", "\""+project.properties['ARGS']+"\"")
-            buildConfigField("String", "MODULE_ASSET_NAME", "\"mn2fp32.pt\"")
+            buildConfigField("String", "MODULE_ASSET_NAME", "\"mn2-fp32.pt\"")
             addManifestPlaceholders([APP_NAME: "TST"])
             buildConfigField("String", "LOGCAT_TAG", "\"pytorch-tst\"")
+        }
+        tstM {
+            dimension "model"
+            applicationIdSuffix ".tstM"
+            buildConfigField("String", "AGPU_GTEST_M", "\"mn2-fp32.pt\"")
+            buildConfigField("String", "MODULE_ASSET_NAME", "\"mn2-fp32.pt\"")
+            addManifestPlaceholders([APP_NAME: "TSTM"])
+            buildConfigField("String", "LOGCAT_TAG", "\"pytorch-tstM\"")
         }
         mbf {
             dimension "model"
@@ -106,7 +115,7 @@ android {
         }
     }
     packagingOptions {
-        //doNotStrip '**.so'
+        doNotStrip '**.so'
         pickFirst '**/libfbjni.so'
     }
 

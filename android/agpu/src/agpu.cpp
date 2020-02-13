@@ -5,6 +5,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <map>
 
 #include "agpu.h"
 #include "shader.h"
@@ -23,15 +24,15 @@ void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
   if (!isVerbose()) {
     return;
   }
-  static const char* kFloatFormat = "%8.1f";
+  static const char* kFloatFormat = "%8.8f";
   std::cout << m;
 
-  for (auto i = 0; i < rank; ++i) {
-    if (dims[i] > 5) {
-      return;
-    }
-    //assert(dims[i] < 16);
-  }
+  //for (auto i = 0; i < rank; ++i) {
+  //  if (dims[i] > 5) {
+  //    return;
+  //  }
+  //  //assert(dims[i] < 16);
+  //}
 
   if (rank == 0) {
     std::cout << *t;
@@ -151,6 +152,8 @@ void agpu_batch_norm(
 void agpu_bench() {}
 #else
 
+class AGLShader;
+
 class AGLContext {
  public:
   AGLContext() {
@@ -241,12 +244,30 @@ class AGLContext {
     return isCreateError_;
   }
 
+  std::map<std::string, std::shared_ptr<AGLShader>> shaderCache_;
+
  private:
   EGLContext context_;
   EGLDisplay display_;
   EGLSurface surface_;
   bool isCreateError_{false};
 };
+
+static std::unique_ptr<AGLContext> glContext;
+
+void initAGLContextOnce() {
+  static const int once = []() {
+    APRINT("Creating GLContext...");
+    glContext = std::make_unique<AGLContext>();
+    if (!glContext) {
+      APRINT("ERROR Failed to create GLContext");
+      assert(false);
+    }
+    APRINT("GLContext created ok");
+    return 0;
+  }();
+  ((void)once);
+}
 
 class AGLSSBuffer {
  public:
@@ -468,7 +489,7 @@ class AGLShader {
   static std::string getHead(std::string imageFormat) {
     std::ostringstream headOs;
     headOs << "#version 310 es\n";
-    headOs << "#define PRECISION mediump\n";
+    headOs << "#define PRECISION highp\n";
     headOs << "precision PRECISION float;\n";
     headOs << "#define FORMAT " << imageFormat << "\n";
     return headOs.str();
@@ -522,9 +543,9 @@ std::string getImageFormat() {
   return "rgba32f";
 }
 
-std::unique_ptr<AGLShader> getProgramWithPrefix(
+std::unique_ptr<AGLShader> createShader(
     const char* content,
-    const std::vector<std::string>& prefix) {
+    const std::vector<std::string>& prefix = {}) {
   std::ostringstream tc;
   tc << AGLShader::getHead(getImageFormat());
   for (auto& s : prefix) {
@@ -538,21 +559,27 @@ std::unique_ptr<AGLShader> getProgramWithPrefix(
   return std::make_unique<AGLShader>(tc.str());
 }
 
-std::unique_ptr<AGLShader> getProgram(const char* content) {
-  std::ostringstream tc;
-  tc << AGLShader::getHead(getImageFormat()) << content;
-  return std::make_unique<AGLShader>(tc.str());
-}
-
-std::unique_ptr<AGLShader> getProgram(const std::string&, const char* content) {
-  return getProgram(content);
-}
-
-std::unique_ptr<AGLShader> getProgram(
-    const std::string&,
+std::shared_ptr<AGLShader> getShader(
+    const std::string& key,
     const char* content,
-    const std::vector<std::string>& prefix) {
-  return getProgramWithPrefix(content, prefix);
+    const std::vector<std::string>& prefix = {}) {
+  initAGLContextOnce();
+
+  std::ostringstream newKey;
+  for (auto s : prefix) {
+    newKey << s;
+  }
+  newKey << key;
+  auto newKeyStr = newKey.str();
+
+  auto it = glContext->shaderCache_.find(newKeyStr);
+  if (it != glContext->shaderCache_.end()) {
+    return it->second;
+  }
+
+  std::shared_ptr<AGLShader> shader{createShader(content, prefix)};
+  glContext->shaderCache_.insert(std::make_pair(newKeyStr, shader));
+  return shader;
 }
 
 void wait() {
@@ -583,11 +610,12 @@ void device2host(
   auto buffer = std::make_unique<AGLSSBuffer>(size);
 
   auto program = outputAlign4
-      ? getProgram(
+      ? getShader(
             "glsl_image_to_nc4hw4_buffer_glsl",
             glsl_image_to_nc4hw4_buffer_glsl)
-      : getProgram(
-            "glsl_image_to_nchw_buffer_glsl", glsl_image_to_nchw_buffer_glsl);
+      : getShader(
+            "glsl_image_to_nchw_buffer_glsl",
+            glsl_image_to_nchw_buffer_glsl);
   program->useProgram();
 
   glBindImageTexture(
@@ -630,13 +658,14 @@ void host2device(
   auto buffer = AGLSSBuffer::from(
       inputData, size, inputData4Aligned ? size : c * h * w * sizeof(float));
 
-  auto program = inputData4Aligned
-      ? getProgram(
+  auto shader = inputData4Aligned
+      ? getShader(
             "glsl_nc4hw4_buffer_to_image_glsl",
             glsl_nc4hw4_buffer_to_image_glsl)
-      : getProgram(
-            "glsl_nchw_buffer_to_image_glsl", glsl_nchw_buffer_to_image_glsl);
-  program->useProgram();
+      : getShader(
+            "glsl_nchw_buffer_to_image_glsl",
+            glsl_nchw_buffer_to_image_glsl);
+  shader->useProgram();
 
   glBindImageTexture(
       0, textureId, 0, GL_TRUE, 0, GL_WRITE_ONLY, getTextureFormat());
@@ -649,22 +678,6 @@ void host2device(
 
   compute(UP_DIV(w, 8), UP_DIV(h, 8), c_4);
   AGL_CHECK_ERROR;
-}
-
-static std::unique_ptr<AGLContext> glContext;
-
-void initAGLContextOnce() {
-  static const int once = []() {
-    APRINT("Creating GLContext...");
-    glContext = std::make_unique<AGLContext>();
-    if (!glContext) {
-      APRINT("ERROR Failed to create GLContext");
-      assert(false);
-    }
-    APRINT("GLContext created ok");
-    return 0;
-  }();
-  ((void)once);
 }
 
 void addCompGroupSizeDefines(
@@ -802,9 +815,11 @@ void agpu_conv2d(
       GL_TEXTURE_3D,
       false);
 
-  auto kernel2ImageProgram = getProgram(
-      "glsl_kernel2image_adreno_glsl", glsl_kernel2image_adreno_glsl);
-  kernel2ImageProgram->useProgram();
+  auto kernel2ImageShader = getShader(
+      "glsl_kernel2image_adreno_glsl",
+       glsl_kernel2image_adreno_glsl);
+
+  kernel2ImageShader->useProgram();
   // binding kernel2Image {
   glBindImageTexture(
       0, kernelTexture->id(), 0, GL_TRUE, 0, GL_WRITE_ONLY, getTextureFormat());
@@ -832,7 +847,7 @@ void agpu_conv2d(
   std::vector<std::string> header;
   addCompGroupSizeDefines(header, compGroupSize, 1, 1, oc_4);
 
-  auto convProgram = getProgram("convolution", glsl_convolution_glsl, header);
+  auto convProgram = getShader("convolution", glsl_convolution_glsl, header);
 
   const uint32_t output_w =
       ((input_w - kernel_w + input_padding_w) / stride_w) + 1;
@@ -842,19 +857,6 @@ void agpu_conv2d(
       output_w, output_h, oc_4, getTextureFormat(), GL_TEXTURE_3D, false);
 
   convProgram->useProgram();
-
-  auto locInput = convProgram->getUniformLocation("uInput");
-  auto locKernel = convProgram->getUniformLocation("uKernel");
-  auto locPad = convProgram->getUniformLocation("uPad");
-  auto locKernelSize = convProgram->getUniformLocation("uKernelSize");
-  auto locUnroll = convProgram->getUniformLocation("uUnroll");
-  auto locInputSize = convProgram->getUniformLocation("uInputSize");
-  APRINT("LLL locInput:%d", locInput);
-  APRINT("LLL locKernel:%d", locKernel);
-  APRINT("LLL locPad:%d", locPad);
-  APRINT("LLL locKernelSize:%d", locKernelSize);
-  APRINT("LLL locUnroll:%d", locUnroll);
-  APRINT("LLL locInputSize:%d", locInputSize);
 
   // binding convolution {
   glBindImageTexture(
@@ -922,7 +924,7 @@ void agpu_add2t(
   addCompGroupSizeDefines(prefix, compGroupSize, 8, 8, 1);
 
   auto binAddProgram =
-      getProgram("glsl_binary_add_glsl", glsl_binary_add_glsl, prefix);
+      getShader("glsl_binary_add_glsl", glsl_binary_add_glsl, prefix);
   binAddProgram->useProgram();
   // binding glsl_binary_add_glsl {
   glBindImageTexture(
@@ -968,7 +970,7 @@ void agpu_threshold(
   std::vector<std::string> prefix;
   addCompGroupSizeDefines(prefix, compGroupSize, 8, 8, 1);
 
-  auto program = getProgram("glsl_threshold_glsl", glsl_threshold_glsl, prefix);
+  auto program = getShader("glsl_threshold_glsl", glsl_threshold_glsl, prefix);
   program->useProgram();
   // binding {
   glBindImageTexture(
@@ -1025,8 +1027,7 @@ void agpu_batch_norm(
   std::vector<std::string> prefix;
   addCompGroupSizeDefines(prefix, compGroupSize, 8, 8, 1);
 
-  auto program =
-      getProgram("glsl_normalization_glsl", glsl_normalization_glsl, prefix);
+  auto program = getShader("glsl_normalization_glsl", glsl_normalization_glsl, prefix);
   program->useProgram();
 
   // binding glsl_normalization_glsl {

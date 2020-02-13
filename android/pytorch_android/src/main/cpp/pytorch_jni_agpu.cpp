@@ -5,6 +5,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <typeinfo>
 
 #include <ATen/AgpuUtils.h>
 #include <benchmark/benchmark.h>
@@ -24,259 +25,271 @@ template <typename T>
 void log(const char* m, T t) {
   std::ostringstream os;
   os << t << std::endl;
-  ALOGI("%s %s", m, os.str().c_str());
+  ALOGI("%s typeid:%s %s", m, typeid(t).name(), os.str().c_str());
 }
 
-static bool checkRtol(
-    const at::Tensor& diff,
-    const std::vector<at::Tensor> inputs) {
-  double maxValue = 0.0;
-  for (auto& tensor : inputs) {
-    maxValue = fmax(tensor.abs().max().item<float>(), maxValue);
+void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
+  static const char* kFloatFormat = "%12.12f";
+  std::cout << m << std::endl;
+
+    std::cout << " dims:(";
+    for (uint32_t i = 0; i < rank; i++) {
+      std::cout << dims[i] << " ";
+    }
+    std::cout << ")";
+
+  if (rank == 0) {
+    std::cout << *t;
+  } else if ((rank == 1) || (rank == 2)) {
+    char fbuf[12];
+    uint32_t rows = rank == 1 ? 1 : dims[0];
+    uint32_t cols = rank == 1 ? dims[0] : dims[1];
+    auto rrange = std::min(rows, 100u);
+    auto crange = std::min(cols, 100u);
+    for (uint32_t i = 0; i < rrange; i++) {
+      std::cout << "\n";
+      for (uint32_t j = 0; j < crange; j++) {
+        sprintf(fbuf, kFloatFormat, t[i * cols + j]);
+        std::cout << "(" << i << ","<< j << ")"<< fbuf << std::endl;
+      }
+    }
+  } else if (rank == 3) {
+    std::cout << " dims:(";
+    for (uint32_t i = 0; i < rank; i++) {
+      std::cout << dims[i] << " ";
+    }
+    std::cout << ")";
+    uint32_t d0 = dims[0];
+    uint32_t d12size = dims[1] * dims[2];
+    for (uint32_t i = 0; i < d0; i++) {
+      char s[80];
+      sprintf(s, "[%d, *, *]", i);
+      agpu_print(s, t + i * d12size, 2, dims + 1);
+    }
+  } else if (rank == 4) {
+    std::cout << " dims:(";
+    for (uint32_t i = 0; i < rank; i++) {
+      std::cout << dims[i] << " ";
+    }
+    std::cout << ")";
+    uint32_t d0 = dims[0];
+    uint32_t d1 = dims[1];
+    uint32_t d23size = dims[2] * dims[3];
+    for (uint32_t i = 0; i < d0; i++) {
+      for (uint32_t j = 0; j < d1; j++) {
+        char s[80];
+        sprintf(s, "[%d, %d, *, *]", i, j);
+        agpu_print(s, t + (i * d0 + j) * d23size, 2, dims + 2);
+      }
+    }
+  } else {
+    // TODO: support print r > 4
+    //assert(false);
   }
-  return diff.abs().max().item<float>() < 2e-6 * maxValue;
+  std::cout << std::endl;
 }
 
-static bool almostEqual(const at::Tensor& a, const at::Tensor& b) {
-  return checkRtol(a - b, {a, b});
+void agpu_print4d(
+    const char* m,
+    const float* data,
+    uint32_t d0,
+    uint32_t d1,
+    uint32_t d2,
+    uint32_t d3) {
+  uint32_t dims[4] = {d0, d1, d2, d3};
+  agpu_print(m, data, 4, dims);
 }
 
-TEST(conv, smoke) {
-  std::cout << "*******************************"
-            << "ATEST_CONV"
-            << "*******************************" << std::endl;
-  auto input = torch::tensor( // 1, 3, 3, 3
-      {{
-          // c_0
-          {
-              {1, 2, 3},
-              {4, 5, 6},
-              {7, 8, 9},
-          },
-          // c_1
-          {
-              {101, 102, 103},
-              {104, 105, 106},
-              {107, 108, 109},
-          },
-          // c_2
-          {
-              {1001, 1002, 1003},
-              {1004, 1005, 1006},
-              {1007, 1008, 1009},
-          },
-      }},
-      torch::kFloat);
+void print_tensor(const char* m, const at::Tensor& t) {
+  auto ts = t.sizes();
+  std::cout << "print_tensor ts:" << ts << std::endl;
+  auto r = ts.size();
+  uint32_t* dims = new uint32_t[r];
+  for (uint32_t i = 0; i < r; ++i) {
+    dims[i] = ts[i];
+    std::cout << "print_tensor dims:" << dims[i] << std::endl;
+  }
+  agpu_print(m, t.data_ptr<float>(), r, dims);
+  delete[] dims;
+}
 
-  auto weight = torch::tensor(
-      {
-          // 2, 3, 2, 2
-          // oc_0 (f_0)
-          {{
-               // oc_0 c_0
-               {1, 0},
-               {0, 0},
-           },
-           {
-               // oc_0 c_1
-               {0, 1},
-               {0, 0},
-           },
-           {
-               // oc_0 c_2
-               {0, 0},
-               {1, 0},
-           }},
-          // oc_1 (f_1)
-          {{
-               // oc_1 c_0
-               {-1, 0},
-               {0, 0},
-           },
-           {
-               // oc_1 c_1
-               {0, -1},
-               {0, 0},
-           },
-           {
-               // oc_1 c_2
-               {0, 0},
-               {-1, 0},
-           }},
-      },
-      torch::kFloat);
-  auto bias = torch::tensor({0, 0}, torch::kFloat);
-  log("C input sizes:", input.sizes());
-  log("C w sizes:", weight.sizes());
-  log("C b sizes:", bias.sizes());
+static bool almostEqual(const at::Tensor& t, const at::Tensor& expected, bool logOnFalse = false) {
+  double rtol = 0.0001;
+  double atol = 0.00001;
+  bool ret = torch::allclose(t, expected, rtol, atol, true);
+  if (logOnFalse && !ret) {
+    auto diff = (t - expected).abs();
+    auto diff_max = diff.max().item<float>();
+    ALOGI("almostEquals abs_diff_max:%12.8f", diff_max);
 
-  int64_t groups = 1;
-  torch::nn::functional::Conv2dFuncOptions o =
-      torch::nn::functional::Conv2dFuncOptions().stride(1).padding(0);
+    double rtoli = 0.1;
+    int i = 1;
+    while (i < 5) {
+      ALOGI("almostEquals allClose(%d rtoli:%12.8f):%d",
+          i++,
+          rtoli,
+          torch::allclose(t, expected, rtoli, 0.00001, true));
+      rtoli *= 0.1;
+    }
+    print_tensor("diff:", diff);
+    print_tensor("almostEquals t:", t);
+    print_tensor("almostEquals expected:", expected);
+  }
+  return ret;
+}
 
-  ALOGI("C set useAgpu false");
-  at::setUseAgpu(false);
+static void agpuOff() {
+  at::setUseAgpuNorm(false);
+  at::setUseAgpuAdd(false);
+  at::setUseAgpuRelu(false);
+  at::setUseAgpuConv(false);
+}
+
+static void test_conv_(
+    int64_t n,
+    int64_t h,
+    int64_t w,
+    int64_t kh,
+    int64_t kw,
+    int64_t ph,
+    int64_t pw,
+    int64_t s,
+    int64_t d,
+    int64_t g,
+    int64_t gcin,
+    int64_t gcout,
+    bool log) {
+
+  auto input = torch::randn({n, gcin, h, w}, torch::kFloat);
+  auto weight = torch::randn({gcout, gcin, kh, kw}, torch::kFloat);
+  auto bias = torch::randn({gcout}, torch::kFloat);
+
+  agpuOff();
   auto outputC = at::conv2d(
       input,
       weight,
       bias,
-      c10::IntArrayRef{1}, // stride
-      c10::IntArrayRef{0}, // padding
-      c10::IntArrayRef{1}, // dilation
-      groups);
-  log("C outputC.sizes: ", outputC.sizes());
+      c10::IntArrayRef{s}, // stride
+      c10::IntArrayRef{ph, pw}, // padding
+      c10::IntArrayRef{d}, // dilation
+      g);
 
-  ALOGI("C set useAgpu true");
-  at::setUseAgpu(true);
+  at::setUseAgpuConv(true);
   auto outputT = at::conv2d(
       input,
       weight,
       bias,
-      c10::IntArrayRef{1}, // stride
-      c10::IntArrayRef{0}, // padding
-      c10::IntArrayRef{1}, // dilation
-      groups);
-  log("C outputT.sizes: ", outputT.sizes());
-
-  bool eq = torch::equal(outputC, outputT);
-  ALOGI("C outputC eq outputT:%d", eq);
-  assert(eq);
-  ALOGI("ATEST_CONV PASSED");
+      c10::IntArrayRef{s}, // stride
+      c10::IntArrayRef{ph, pw}, // padding
+      c10::IntArrayRef{d}, // dilation
+      g);
+  agpuOff();
+  assert(almostEqual(outputC, outputT, log));
 }
 
-TEST(add, smoke) {
-  std::cout << "*******************************"
-            << "ATEST_ADD"
-            << "*******************************" << std::endl;
-  auto a = torch::tensor( // 1, 2, 2, 3
-      {
-          {
-              {1, 2, 3},
-              {4, 5, 6},
-          },
-          {
-              {11, 12, 13},
-              {14, 15, 16},
-          },
-      },
-      torch::kFloat);
-  auto b = torch::tensor( // 1, 2, 2, 3
-      {
-          {
-              {101, 102, 103},
-              {104, 105, 106},
-          },
-          {
-              {111, 112, 113},
-              {114, 115, 116},
-          },
-      },
-      torch::kFloat);
+/*
+TEST(conv, mn2_0) {
+  test_conv_(1, 224, 224, 3, 3, 2, 2, 2, 1, 1, 3, 32, false);
+}
+*/
 
-  std::cout << "A a:\n" << a << std::endl;
-  std::cout << "A b:\n" << b << std::endl;
+//TEST(conv, small) {
+//  test_conv_(
+//    /* n */ 1,
+//    /* h */ 3,
+//    /* w */ 3,
+//    /* kh */ 3,
+//    /* kw */ 3,
+//    /* ph */ 0,
+//    /* pw */ 0,
+//    /* s */ 1,
+//    /* d */ 1,
+//    /* g */ 1,
+//    /* gcin */ 3,
+//    /* gcout */ 32,
+//    /* log */ false);
+//}
 
-  ALOGI("A set useAgpu false");
-  at::setUseAgpu(false);
-  auto outputC = torch::add(a, b);
-  log("A outputC.sizes: ", outputC.sizes());
+TEST(conv, small_padding1) {
+  test_conv_(
+    /* n */ 1,
+    /* h */ 3,
+    /* w */ 3,
+    /* kh */ 3,
+    /* kw */ 3,
+    /* ph */ 1,
+    /* pw */ 1,
+    /* s */ 1,
+    /* d */ 1,
+    /* g */ 1,
+    /* gcin */ 3,
+    /* gcout */ 32,
+    /* log */ false);
+}
+//TEST(conv, small_stride2) {
+//  test_conv_(
+//    /* n */ 1,
+//    /* h */ 3,
+//    /* w */ 3,
+//    /* kh */ 3,
+//    /* kw */ 3,
+//    /* ph */ 0,
+//    /* pw */ 0,
+//    /* s */ 2,
+//    /* d */ 1,
+//    /* g */ 1,
+//    /* gcin */ 3,
+//    /* gcout */ 32,
+//    /* log */ false);
+//}
 
-  ALOGI("A set useAgpu true");
-  at::setUseAgpu(true);
-  auto outputT = torch::add(a, b);
-  log("A outputT.sizes: ", outputT.sizes());
+TEST(add, small) {
+  int64_t n = 1;
+  int64_t ih = 3;
+  int64_t iw = 3;
+  int64_t kc = 3;
+  auto tina = torch::randn({n, kc, ih, iw}, torch::kFloat);
+  auto tinb = torch::randn({n, kc, ih, iw}, torch::kFloat);
 
-  bool eq = torch::equal(outputC, outputT);
-  ALOGI("A outputC eq outputT:%d", eq);
-  assert(eq);
-  ALOGI("ATEST_ADD PASSED");
+  agpuOff();
+  auto toutC = torch::add(tina, tinb);
+  at::setUseAgpuAdd(true);
+  auto toutT = torch::add(tina, tinb);
+  agpuOff();
+  assert(almostEqual(toutC, toutT));
 }
 
-TEST(threshold, smoke) {
-  std::cout << "*******************************"
-            << "ATEST_THRESHOLD"
-            << "*******************************" << std::endl;
-  auto input = torch::tensor( // 1, 2, 2, 3
-      {
-          {
-              {1, -2, 3},
-              {-4, 5, -6},
-          },
-          {
-              {11, -12, 13},
-              {-14, 15, -16},
-          },
-      },
-      torch::kFloat);
-  log("T input.sizes():", input.sizes());
-  log("T input:", input);
-  ALOGI("T set useAgpu false");
-  at::setUseAgpu(false);
-  auto outputC = at::relu(input); //, 3, 0);
-  log("T outputC.sizes: ", outputC.sizes());
-  log("T outputC: ", outputC);
-
-  ALOGI("III set useAgpu true");
-  at::setUseAgpu(true);
-  auto outputT = at::relu(input); //, 3, 0);
-  ALOGI("T ===");
-  log("T input.sizes():", input.sizes());
-  log("T input:", input);
-  log("T outputC.sizes: ", outputC.sizes());
-  log("T outputC: ", outputC);
-  log("T outputT.sizes: ", outputT.sizes());
-  log("T outputT: ", outputT);
-
-  bool eq = torch::equal(outputC, outputT);
-  ALOGI("T outputC eq outputT:%d", eq);
-  assert(eq);
-  ALOGI("ATEST_THRESHOLD PASSED");
+TEST(threshold, small) {
+  int64_t n = 1;
+  int64_t ih = 3;
+  int64_t iw = 3;
+  int64_t kc = 3;
+  auto tin = torch::randn({n, kc, ih, iw}, torch::kFloat);
+  agpuOff();
+  auto toutC = at::relu(tin);
+  at::setUseAgpuRelu(true);
+  auto toutT = at::relu(tin);
+  agpuOff();
+  assert(almostEqual(toutC, toutT));
 }
 
-TEST(norm, smoke) {
-  std::cout << "*******************************"
-            << "ATEST_NORM"
-            << "*******************************" << std::endl;
-  auto input = torch::tensor( // 1, 2, 2, 3
-      {
-          {
-              {1, -2, 3},
-              {-4, 5, -6},
-          },
-          {
-              {11, -12, 13},
-              {-14, 15, -16},
-          },
-      },
-      torch::kFloat);
-  auto weight = torch::tensor({1, 2}, torch::kFloat);
-  auto bias = torch::tensor({3, 4}, torch::kFloat);
-  auto mean = torch::tensor({5, 6}, torch::kFloat);
-  auto var = torch::tensor({7, 8}, torch::kFloat);
+TEST(norm, small) {
+  int64_t n = 1;
+  int64_t ic = 3;
+  int64_t ih = 3;
+  int64_t iw = 3;
+  auto tin = torch::randn({n, ic, ih, iw}, torch::kFloat);
+  auto weight = torch::randn({ic}, torch::kFloat);
+  auto bias = torch::randn({ic}, torch::kFloat);
+  auto mean = torch::ones({ic}, torch::kFloat);
+  auto var = torch::ones({ic}, torch::kFloat);
 
-  log("N input.sizes():", input.sizes());
-  log("N input:", input);
-  ALOGI("N set useAgpu false");
-  at::setUseAgpu(false);
-  auto outputC = at::batch_norm(
-      input, weight, bias, mean, var, false, 0.1, 0.00001, false);
-  log("N outputC.sizes: ", outputC.sizes());
-  log("N outputC: ", outputC);
-
-  ALOGI("N set useAgpu true");
-  at::setUseAgpu(true);
-  auto outputT = at::batch_norm(
-      input, weight, bias, mean, var, false, 0.1, 0.00001, false);
-  at::setUseAgpu(false);
-  log("N outputC.sizes: ", outputC.sizes());
-  log("N outputC: ", outputC);
-  log("N outputT.sizes: ", outputT.sizes());
-  log("N outputT: ", outputT);
-
-  bool eq = almostEqual(outputC, outputT);
-  ALOGI("N outputC eq outputT:%d", eq);
-  assert(eq);
-  ALOGI("ATEST_NORM PASSED");
+  agpuOff();
+  auto toutC = at::batch_norm(tin, weight, bias, mean, var, false, 0.1, 0.00001, false);
+  at::setUseAgpuNorm(true);
+  auto toutT = at::batch_norm(tin, weight, bias, mean, var, false, 0.1, 0.00001, false);
+  agpuOff();
+  assert(almostEqual(toutC, toutT));
 }
 
 struct ArgsCV {
@@ -341,12 +354,8 @@ static void BM_conv(benchmark::State& state, const char* name) {
 
     const int64_t c_in = groups_c_in;
     const int64_t c_out = groups_c_out;
-
-    if (useAgpu == 0) {
-      at::setUseAgpu(false);
-    } else {
-      at::setUseAgpu(true);
-    }
+    agpuOff();
+    at::setUseAgpuConv((useAgpu != 0));
 
     auto tin = torch::randn({n, c_in, h, w}, torch::kFloat);
     auto tw = torch::randn({c_out, c_in, kh, kw}, torch::kFloat);
@@ -484,12 +493,13 @@ torch::jit::script::Module module_;
 void BM_moduleForward(benchmark::State& state, const char* name) {
   for (auto _ : state) {
     state.PauseTiming();
+    torch::autograd::AutoGradMode no_autograd_guard{false};
+    torch::jit::GraphOptimizerEnabledGuard no_optimizer_guard{false};
+    auto tin = torch::randn({1, 3, 224, 224}, torch::kFloat);
+
     const int64_t useAgpu = state.range(0);
     if (useAgpu == 0) {
-      at::setUseAgpuConv(false);
-      at::setUseAgpuNorm(false);
-      at::setUseAgpuRelu(false);
-      at::setUseAgpuAdd(false);
+      agpuOff();
     } else {
       at::setAgpuVerbose(false);
       at::setUseAgpuConv(true);
@@ -498,12 +508,9 @@ void BM_moduleForward(benchmark::State& state, const char* name) {
       at::setUseAgpuAdd(true);
     }
 
-    auto tin = torch::randn({1, 3, 224, 224}, torch::kFloat);
-    torch::autograd::AutoGradMode no_autograd_guard{false};
-    torch::jit::GraphOptimizerEnabledGuard no_optimizer_guard{false};
-
     state.ResumeTiming();
     auto out = module_.forward({tin});
+    agpuOff();
   }
 }
 
@@ -516,12 +523,33 @@ void gbench_module(torch::jit::script::Module module, const std::string& args) {
       ->Arg(1)
       //->Iterations(1)
       //->Repetitions(1)
-      ->Unit(benchmark::kMicrosecond)
+      ->Unit(benchmark::kMillisecond)
       //->ReportAggregatesOnly(true)
       ->UseRealTime();
 
   benchmark::Initialize(&(argscv.c), argscv.v);
   benchmark::RunSpecifiedBenchmarks();
+}
+
+void test_module(torch::jit::script::Module module, const std::string& args) {
+  ALOGI("pytorch_android_agpu::test_module(%s)", args.c_str());
+  module_ = std::move(module);
+
+  torch::autograd::AutoGradMode no_autograd_guard{false};
+  torch::jit::GraphOptimizerEnabledGuard no_optimizer_guard{false};
+  auto tin = torch::randn({1, 3, 224, 224}, torch::kFloat);
+  agpuOff();
+  auto toutC = module_.forward({tin}).toTensor();
+  at::setAgpuVerbose(false);
+  at::setUseAgpuConv(true);
+  at::setUseAgpuNorm(false);
+  at::setUseAgpuRelu(false);
+  at::setUseAgpuAdd(false);
+  auto toutT = module_.forward({tin}).toTensor();
+  agpuOff();
+
+  assert(almostEqual(toutT, toutC));
+  ALOGI("ATEST_MODULE PASSED");
 }
 
 int stdOutErrToLogcat() {

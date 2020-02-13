@@ -36,9 +36,12 @@ public class MainActivity extends AppCompatActivity {
     public void run() {
       Log.i(TAG, "BuildConfig.AGPU_GTEST:" + BuildConfig.AGPU_GTEST);
       Log.i(TAG, "BuildConfig.AGPU_GBENCH:" + BuildConfig.AGPU_GBENCH);
+      Log.i(TAG, "BuildConfig.AGPU_GTEST_M:" + BuildConfig.AGPU_GTEST_M);
       Log.i(TAG, "BuildConfig.AGPU_GBENCH_M:" + BuildConfig.AGPU_GBENCH_M);
-      if (BuildConfig.AGPU_GBENCH_M != null) {
-        PyTorchAndroid.nativeAgpuGBenchModule(BuildConfig.AGPU_GBENCH_M, getAssets(), BuildConfig.AGPU_GTEST);
+      if (BuildConfig.AGPU_GTEST_M != null) {
+        PyTorchAndroid.nativeAgpuGTestModule(BuildConfig.AGPU_GTEST_M, getAssets(), BuildConfig.AGPU_GTEST);
+      } else if (BuildConfig.AGPU_GBENCH_M != null) {
+        PyTorchAndroid.nativeAgpuGBenchModule(BuildConfig.AGPU_GBENCH_M, getAssets(), BuildConfig.AGPU_GBENCH);
       } else if (BuildConfig.AGPU_GTEST != null) {
         PyTorchAndroid.nativeAgpuGTest(BuildConfig.AGPU_GTEST);
       } else if (BuildConfig.AGPU_GBENCH != null) {
@@ -101,7 +104,7 @@ public class MainActivity extends AppCompatActivity {
       }
       mInputTensorBuffer = Tensor.allocateFloatBuffer((int) numElements);
       mInputTensor = Tensor.fromBlob(mInputTensorBuffer, BuildConfig.INPUT_TENSOR_SHAPE);
-      PyTorchAndroid.setNumThreads(1);
+      //PyTorchAndroid.setNumThreads(1);
       mModule = PyTorchAndroid.loadModuleFromAsset(getAssets(), BuildConfig.MODULE_ASSET_NAME);
     }
 

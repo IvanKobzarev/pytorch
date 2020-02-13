@@ -1,1 +1,2 @@
-gradle -p android test_app:installTstLocalBaseDebug -PARGS="--gtest_repeat=10 --gtest_filter=testConv.smoke" -PABI_FILTERS=arm64-v8a && adb shell am start -n org.pytorch.testapp.tst/org.pytorch.testapp.MainActivity
+echo $ARGS
+gradle -PARGS="$ARGS" -p android test_app:installTstLocalBaseDebug -PABI_FILTERS=arm64-v8a && adb shell am start -n org.pytorch.testapp.tst/org.pytorch.testapp.MainActivity

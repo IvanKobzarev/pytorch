@@ -625,11 +625,11 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
 
   static void registerNatives() {
     javaClassStatic()->registerNatives({
-        makeNativeMethod(
-            "nativeSetNumThreads", PyTorchAndroidJni::setNumThreads),
+        makeNativeMethod("nativeSetNumThreads", PyTorchAndroidJni::setNumThreads),
         makeNativeMethod("nativeAgpuGTest", PyTorchAndroidJni::agpu_gtest),
         makeNativeMethod("nativeAgpuGBench", PyTorchAndroidJni::agpu_gbench),
         makeNativeMethod("nativeAgpuGBenchModule", PyTorchAndroidJni::agpu_gbench_module),
+        makeNativeMethod("nativeAgpuGTestModule", PyTorchAndroidJni::agpu_gtest_module),
     });
   }
 
@@ -649,15 +649,9 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
     pytorch_jni_agpu::gbench_main(args->toStdString());
   }
 
-  static void agpu_gbench_module(
-      facebook::jni::alias_ref<jclass>,
+  static auto moduleFromAsset(
       facebook::jni::alias_ref<jstring> assetName,
-      facebook::jni::alias_ref<jobject> assetManager,
-      facebook::jni::alias_ref<jstring> args) {
-
-    torch::autograd::AutoGradMode no_autograd_guard{false};
-    torch::jit::GraphOptimizerEnabledGuard no_optimizer_guard{false};
-
+      facebook::jni::alias_ref<jobject> assetManager) {
     JNIEnv* env = facebook::jni::Environment::current();
     AAssetManager* mgr = AAssetManager_fromJava(env, assetManager.get());
     if (!mgr) {
@@ -683,9 +677,37 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
     torch::jit::script::Module module = torch::jit::load(torch::make_unique<MemoryReadAdapter2>(
         assetBuffer, AAsset_getLength(asset)));
     AAsset_close(asset);
+    return module;
+  }
+
+  static void agpu_gbench_module(
+      facebook::jni::alias_ref<jclass>,
+      facebook::jni::alias_ref<jstring> assetName,
+      facebook::jni::alias_ref<jobject> assetManager,
+      facebook::jni::alias_ref<jstring> args) {
+
+    torch::autograd::AutoGradMode no_autograd_guard{false};
+    torch::jit::GraphOptimizerEnabledGuard no_optimizer_guard{false};
+
+    auto module = moduleFromAsset(assetName, assetManager);
     module.eval();
 
     pytorch_jni_agpu::gbench_module(module, args->toStdString());
+  }
+
+  static void agpu_gtest_module(
+      facebook::jni::alias_ref<jclass>,
+      facebook::jni::alias_ref<jstring> assetName,
+      facebook::jni::alias_ref<jobject> assetManager,
+      facebook::jni::alias_ref<jstring> args) {
+
+    torch::autograd::AutoGradMode no_autograd_guard{false};
+    torch::jit::GraphOptimizerEnabledGuard no_optimizer_guard{false};
+
+    auto module = moduleFromAsset(assetName, assetManager);
+    module.eval();
+
+    pytorch_jni_agpu::test_module(module, args->toStdString());
   }
 };
 #endif

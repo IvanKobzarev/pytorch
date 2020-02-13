@@ -1,6 +1,6 @@
 #pragma once
 
-#define AGPU_VERBOSE false
+#define AGPU_VERBOSE true
 
 #include <stdint.h>
 #include <stdio.h>
@@ -85,4 +85,18 @@ void agpu_batch_norm(
     const float eps,
     float* output);
 
+
+void agpu_print(
+    const char* m,
+    const float* t,
+    uint32_t rank,
+    uint32_t* dims);
+
+void agpu_print4d(
+    const char* m,
+    const float* data,
+    uint32_t d0,
+    uint32_t d1,
+    uint32_t d2,
+    uint32_t d3);
 } // namespace agpu

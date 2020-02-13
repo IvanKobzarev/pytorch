@@ -1,7 +1,7 @@
 layout(std430) buffer;
 layout(FORMAT, binding=0) writeonly uniform PRECISION image3D uOutput;
-layout(location=1) uniform mediump sampler3D uInput;
-layout(location=2) uniform mediump sampler3D uKernel;
+layout(location=1) uniform PRECISION sampler3D uInput;
+layout(location=2) uniform PRECISION sampler3D uKernel;
 
 layout(binding=3) readonly buffer bias{
     vec4 data[];
@@ -31,8 +31,10 @@ void main()
         ivec3 inputSize = uInputSize;
         ivec2 s0 = pos.xy*uStride-uPad;
         int fx, fy, fz;
-        ivec2 sfxy = max(ivec2(0), (UP_DIV(-s0, uDilate)));
-        ivec2 efxy = min(uKernelSize, UP_DIV(inputSize.xy-s0, uDilate));
+        //ivec2 sfxy = max(ivec2(0), (UP_DIV(-s0, uDilate)));
+        ivec2 sfxy = ivec2(0);
+        //ivec2 efxy = min(uKernelSize, UP_DIV(inputSize.xy-s0, uDilate));
+        ivec2 efxy = inputSize.xy;
         vec4 color = uBias.data[pos.z];
         vec4 color2 = color;
         vec4 color3 = color;
