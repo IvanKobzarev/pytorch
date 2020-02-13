@@ -114,8 +114,8 @@ void print_tensor(const char* m, const at::Tensor& t) {
 }
 
 static bool almostEqual(const at::Tensor& t, const at::Tensor& expected, bool logOnFalse = false) {
-  double rtol = 0.0001;
-  double atol = 0.00001;
+  double rtol = 0.001;
+  double atol = 0.0001;
   bool ret = torch::allclose(t, expected, rtol, atol, true);
   if (logOnFalse && !ret) {
     auto diff = (t - expected).abs();
@@ -151,14 +151,16 @@ static void test_conv_(
     int64_t w,
     int64_t kh,
     int64_t kw,
-    int64_t ph,
-    int64_t pw,
+    int64_t py,
+    int64_t px,
     int64_t s,
     int64_t d,
     int64_t g,
     int64_t gcin,
     int64_t gcout,
-    bool log) {
+    bool log = false) {
+  ALOGI("test_conv_ nhw (%d %d %d) kh kw (%d %d) pad yx (%d %d) s:%d d:%d g:%d cin:%d cout:%d",
+      n, h, w, kh, kw, py, px, s, d, g, gcin, gcout);
 
   auto input = torch::randn({n, gcin, h, w}, torch::kFloat);
   auto weight = torch::randn({gcout, gcin, kh, kw}, torch::kFloat);
@@ -170,9 +172,9 @@ static void test_conv_(
       weight,
       bias,
       c10::IntArrayRef{s}, // stride
-      c10::IntArrayRef{ph, pw}, // padding
+      c10::IntArrayRef{py, px}, // padding
       c10::IntArrayRef{d}, // dilation
-      g);
+      1);
 
   at::setUseAgpuConv(true);
   auto outputT = at::conv2d(
@@ -180,37 +182,31 @@ static void test_conv_(
       weight,
       bias,
       c10::IntArrayRef{s}, // stride
-      c10::IntArrayRef{ph, pw}, // padding
+      c10::IntArrayRef{py, px}, // padding
       c10::IntArrayRef{d}, // dilation
-      g);
+      1);
   agpuOff();
   assert(almostEqual(outputC, outputT, log));
 }
 
-/*
-TEST(conv, mn2_0) {
-  test_conv_(1, 224, 224, 3, 3, 2, 2, 2, 1, 1, 3, 32, false);
+TEST(conv, xxs) {
+  test_conv_(
+    /* n */ 1,
+    /* h */ 3,
+    /* w */ 3,
+    /* kh */ 3,
+    /* kw */ 3,
+    /* ph */ 0,
+    /* pw */ 0,
+    /* s */ 1,
+    /* d */ 1,
+    /* g */ 1,
+    /* gcin */ 3,
+    /* gcout */ 3,
+    /* log */ false);
 }
-*/
 
-//TEST(conv, small) {
-//  test_conv_(
-//    /* n */ 1,
-//    /* h */ 3,
-//    /* w */ 3,
-//    /* kh */ 3,
-//    /* kw */ 3,
-//    /* ph */ 0,
-//    /* pw */ 0,
-//    /* s */ 1,
-//    /* d */ 1,
-//    /* g */ 1,
-//    /* gcin */ 3,
-//    /* gcout */ 32,
-//    /* log */ false);
-//}
-
-TEST(conv, small_padding1) {
+TEST(conv, xxs_padding) {
   test_conv_(
     /* n */ 1,
     /* h */ 3,
@@ -223,27 +219,97 @@ TEST(conv, small_padding1) {
     /* d */ 1,
     /* g */ 1,
     /* gcin */ 3,
-    /* gcout */ 32,
-    /* log */ false);
+    /* gcout */ 3,
+    /* log */ true);
 }
-//TEST(conv, small_stride2) {
-//  test_conv_(
-//    /* n */ 1,
-//    /* h */ 3,
-//    /* w */ 3,
-//    /* kh */ 3,
-//    /* kw */ 3,
-//    /* ph */ 0,
-//    /* pw */ 0,
-//    /* s */ 2,
-//    /* d */ 1,
-//    /* g */ 1,
-//    /* gcin */ 3,
-//    /* gcout */ 32,
-//    /* log */ false);
-//}
 
-TEST(add, small) {
+TEST(conv, xs_padding) {
+  test_conv_(
+    /* n */ 1,
+    /* h */ 3,
+    /* w */ 3,
+    /* kh */ 3,
+    /* kw */ 3,
+    /* py */ 1,
+    /* px */ 1,
+    /* s */ 1,
+    /* d */ 1,
+    /* g */ 1,
+    /* gcin */ 3,
+    /* gcout */ 3,
+    /* log */ true);
+}
+
+TEST(conv, xxs_stride) {
+  test_conv_(
+    /* n */ 1,
+    /* h */ 3,
+    /* w */ 3,
+    /* kh */ 3,
+    /* kw */ 3,
+    /* ph */ 0,
+    /* pw */ 0,
+    /* s */ 2,
+    /* d */ 1,
+    /* g */ 1,
+    /* gcin */ 12,
+    /* gcout */ 12,
+    /* log */ true);
+}
+
+TEST(conv, xxs_padding2) {
+  test_conv_(
+    /* n */ 1,
+    /* h */ 3,
+    /* w */ 3,
+    /* kh */ 3,
+    /* kw */ 3,
+    /* ph */ 2,
+    /* pw */ 2,
+    /* s */ 1,
+    /* d */ 1,
+    /* g */ 1,
+    /* gcin */ 3,
+    /* gcout */ 3,
+    /* log */ true);
+}
+
+TEST(conv, mn2) {
+  //         n,   h,   w kh,kw,py,px, s, d,   g,  cin, cout
+  test_conv_(1, 224, 224, 3, 3, 1, 1, 2, 1,   1,    3,   32);
+  test_conv_(1, 112, 112, 3, 3, 1, 1, 1, 1,  32,    1,    1);
+  test_conv_(1, 112, 112, 1, 1, 0, 0, 1, 1,   1,   32,   16);
+  test_conv_(1, 112, 112, 1, 1, 0, 0, 1, 1,   1,   16,   96);
+  test_conv_(1, 112, 112, 3, 3, 1, 1, 2, 1,  96,    1,    1);
+  test_conv_(1,  56,  56, 1, 1, 0, 0, 1, 1,   1,   96,   24);
+  test_conv_(1,  56,  56, 1, 1, 0, 0, 1, 1,   1,   24,  144);
+  test_conv_(1,  56,  56, 3, 3, 1, 1, 1, 1, 144,    1,    1);
+  test_conv_(1,  56,  56, 1, 1, 0, 0, 1, 1,   1,  144,   24);
+  test_conv_(1,  56,  56, 3, 3, 1, 1, 2, 1, 144,    1,    1);
+  test_conv_(1,  28,  28, 1, 1, 0, 0, 1, 1,   1,  144,   32);
+  test_conv_(1,  28,  28, 1, 1, 0, 0, 1, 1,   1,   32,  192);
+  test_conv_(1,  28,  28, 3, 3, 1, 1, 1, 1, 192,    1,    1);
+  test_conv_(1,  28,  28, 1, 1, 0, 0, 1, 1,   1,  192,   32);
+  test_conv_(1,  28,  28, 3, 3, 1, 1, 2, 1, 192,    1,    1);
+  test_conv_(1,  14,  14, 1, 1, 0, 0, 1, 1,   1,  192,   64);
+  test_conv_(1,  14,  14, 1, 1, 0, 0, 1, 1,   1,   64,  384);
+  test_conv_(1,  14,  14, 3, 3, 1, 1, 1, 1, 384,    1,    1);
+  test_conv_(1,  14,  14, 1, 1, 0, 0, 1, 1,   1,  384,   64);
+  test_conv_(1,  14,  14, 1, 1, 0, 0, 1, 1,   1,  384,   96);
+  test_conv_(1,  14,  14, 1, 1, 0, 0, 1, 1,   1,   96,  576);
+  test_conv_(1,  14,  14, 3, 3, 1, 1, 1, 1, 576,    1,    1);
+  test_conv_(1,  14,  14, 1, 1, 0, 0, 1, 1,   1,  576,   96);
+  test_conv_(1,  14,  14, 3, 3, 1, 1, 2, 1, 576,    1,    1);
+  test_conv_(1,   7,   7, 1, 1, 0, 0, 1, 1,   1,  576,  160);
+  test_conv_(1,   7,   7, 1, 1, 0, 0, 1, 1,   1,  160,  960);
+  test_conv_(1,   7,   7, 3, 3, 1, 1, 1, 1, 960,    1,    1);
+  test_conv_(1,   7,   7, 1, 1, 0, 0, 1, 1,   1,  960,  160);
+  test_conv_(1,   7,   7, 1, 1, 0, 0, 1, 1,   1,  960,  320);
+  test_conv_(1,   7,   7, 1, 1, 0, 0, 1, 1,   1,  320, 1280);
+  test_conv_(1,   1,   1, 1, 1, 0, 0, 1, 1,   1, 1280, 1000);
+}
+
+TEST(add, xxs) {
   int64_t n = 1;
   int64_t ih = 3;
   int64_t iw = 3;
@@ -259,7 +325,7 @@ TEST(add, small) {
   assert(almostEqual(toutC, toutT));
 }
 
-TEST(threshold, small) {
+TEST(threshold, xxs) {
   int64_t n = 1;
   int64_t ih = 3;
   int64_t iw = 3;
@@ -273,7 +339,7 @@ TEST(threshold, small) {
   assert(almostEqual(toutC, toutT));
 }
 
-TEST(norm, small) {
+TEST(norm, xxs) {
   int64_t n = 1;
   int64_t ic = 3;
   int64_t ih = 3;
@@ -326,8 +392,8 @@ struct ArgsCV {
 void gtest_main(const std::string& args) {
   ALOGI("pytorch_android_agpu::test(%s)", args.c_str());
   auto argscv = ArgsCV{args};
-  ::testing::InitGoogleTest(&(argscv.c), argscv.v);
   RUN_ALL_TESTS();
+  ::testing::InitGoogleTest(&(argscv.c), argscv.v);
 }
 
 static void BM_conv(benchmark::State& state, const char* name) {
@@ -342,8 +408,8 @@ static void BM_conv(benchmark::State& state, const char* name) {
     const int64_t kh = state.range(4);
     const int64_t kw = state.range(5);
 
-    const int64_t padding_h = state.range(6);
-    const int64_t padding_w = state.range(7);
+    const int64_t py = state.range(6);
+    const int64_t px = state.range(7);
 
     const int64_t stride = state.range(8);
     const int64_t dilation = state.range(9);
@@ -369,7 +435,7 @@ static void BM_conv(benchmark::State& state, const char* name) {
         tw,
         tb,
         c10::IntArrayRef{stride}, // stride
-        c10::IntArrayRef{0}, // padding
+        c10::IntArrayRef{py, px}, // padding
         c10::IntArrayRef{dilation}, // dilation
         g);
   }
@@ -382,15 +448,15 @@ static void BM_convArgs(
     int64_t w,
     int64_t kh,
     int64_t kw,
-    int64_t ph,
-    int64_t pw,
+    int64_t py,
+    int64_t px,
     int64_t s,
     int64_t d,
     int64_t g,
     int64_t gcin,
     int64_t gcout) {
-  b->Args({0, n, h, w, kh, kw, ph, pw, s, d, g, gcin, gcout});
-  b->Args({1, n, h, w, kh, kw, ph, pw, s, d, g, gcin, gcout});
+  b->Args({0, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  b->Args({1, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
 }
 
 static void BM_conv_args_base(benchmark::internal::Benchmark* b) {
@@ -400,20 +466,20 @@ static void BM_conv_args_base(benchmark::internal::Benchmark* b) {
                "W",
                "KH",
                "KW",
-               "PH",
-               "PW",
+               "py",
+               "px",
                "S",
                "D",
                "G",
                "GCin",
                "GCout"});
-  /*             N   H    W   KH  KW  PH  PW  S  D    G  GCin  GCout */
-  BM_convArgs(b, 1, 224, 224, 3, 3, 2, 2, 2, 1, 1, 3, 32);
-  BM_convArgs(b, 1, 112, 112, 3, 3, 2, 2, 2, 1, 96, 1, 1);
+  /*             N   H    W   KH  KW  py  px  S  D    G  GCin  GCout */
+  BM_convArgs(b, 1, 224, 224, 3, 3, 2, 1, 1, 1, 1, 3, 32);
+  BM_convArgs(b, 1, 112, 112, 3, 3, 2, 1, 1, 1, 96, 1, 1);
   BM_convArgs(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
-  BM_convArgs(b, 1, 28, 28, 3, 3, 2, 2, 2, 1, 192, 1, 1);
+  BM_convArgs(b, 1, 28, 28, 3, 3, 1, 1, 2, 1, 192, 1, 1);
   BM_convArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 96);
-  BM_convArgs(b, 1, 7, 7, 3, 3, 2, 2, 1, 1, 960, 1, 1);
+  BM_convArgs(b, 1, 7, 7, 3, 3, 1, 1, 1, 1, 960, 1, 1);
 }
 
 static void BM_conv_args_MobileNetV2(benchmark::internal::Benchmark* b) {
@@ -423,42 +489,42 @@ static void BM_conv_args_MobileNetV2(benchmark::internal::Benchmark* b) {
                "W",
                "KH",
                "KW",
-               "PH",
-               "PW",
+               "py",
+               "px",
                "S",
                "D",
                "G",
                "GCin",
                "GCout"});
 
-  /*             N   H    W   KH  KW  PH  PW  S  D    G  GCin  GCout */
-  BM_convArgs(b, 1, 224, 224, 3, 3, 2, 2, 2, 1, 1, 3, 32);
-  BM_convArgs(b, 1, 112, 112, 3, 3, 2, 2, 1, 1, 32, 1, 1);
+  /*             N   H    W   KH  KW  py  px  S  D    G  GCin  GCout */
+  BM_convArgs(b, 1, 224, 224, 3, 3, 1, 1, 2, 1, 1, 3, 32);
+  BM_convArgs(b, 1, 112, 112, 3, 3, 1, 1, 1, 1, 32, 1, 1);
   BM_convArgs(b, 1, 112, 112, 1, 1, 0, 0, 1, 1, 1, 32, 16);
   BM_convArgs(b, 1, 112, 112, 1, 1, 0, 0, 1, 1, 1, 16, 96);
-  BM_convArgs(b, 1, 112, 112, 3, 3, 2, 2, 2, 1, 96, 1, 1);
+  BM_convArgs(b, 1, 112, 112, 3, 3, 1, 1, 2, 1, 96, 1, 1);
   BM_convArgs(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 96, 24);
   BM_convArgs(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 24, 144);
-  BM_convArgs(b, 1, 56, 56, 3, 3, 2, 2, 1, 1, 144, 1, 1);
+  BM_convArgs(b, 1, 56, 56, 3, 3, 1, 1, 1, 1, 144, 1, 1);
   BM_convArgs(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
-  BM_convArgs(b, 1, 56, 56, 3, 3, 2, 2, 2, 1, 144, 1, 1);
+  BM_convArgs(b, 1, 56, 56, 3, 3, 1, 1, 2, 1, 144, 1, 1);
   BM_convArgs(b, 1, 28, 28, 1, 1, 0, 0, 1, 1, 1, 144, 32);
   BM_convArgs(b, 1, 28, 28, 1, 1, 0, 0, 1, 1, 1, 32, 192);
-  BM_convArgs(b, 1, 28, 28, 3, 3, 2, 2, 1, 1, 192, 1, 1);
+  BM_convArgs(b, 1, 28, 28, 3, 3, 1, 1, 1, 1, 192, 1, 1);
   BM_convArgs(b, 1, 28, 28, 1, 1, 0, 0, 1, 1, 1, 192, 32);
-  BM_convArgs(b, 1, 28, 28, 3, 3, 2, 2, 2, 1, 192, 1, 1);
+  BM_convArgs(b, 1, 28, 28, 3, 3, 1, 1, 2, 1, 192, 1, 1);
   BM_convArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 192, 64);
   BM_convArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 64, 384);
-  BM_convArgs(b, 1, 14, 14, 3, 3, 2, 2, 1, 1, 384, 1, 1);
+  BM_convArgs(b, 1, 14, 14, 3, 3, 1, 1, 1, 1, 384, 1, 1);
   BM_convArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 64);
   BM_convArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 96);
   BM_convArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 96, 576);
-  BM_convArgs(b, 1, 14, 14, 3, 3, 2, 2, 1, 1, 576, 1, 1);
+  BM_convArgs(b, 1, 14, 14, 3, 3, 1, 1, 1, 1, 576, 1, 1);
   BM_convArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 576, 96);
-  BM_convArgs(b, 1, 14, 14, 3, 3, 2, 2, 2, 1, 576, 1, 1);
+  BM_convArgs(b, 1, 14, 14, 3, 3, 1, 1, 2, 1, 576, 1, 1);
   BM_convArgs(b, 1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 576, 160);
   BM_convArgs(b, 1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 160, 960);
-  BM_convArgs(b, 1, 7, 7, 3, 3, 2, 2, 1, 1, 960, 1, 1);
+  BM_convArgs(b, 1, 7, 7, 3, 3, 1, 1, 1, 1, 960, 1, 1);
   BM_convArgs(b, 1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 960, 160);
   BM_convArgs(b, 1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 960, 320);
   BM_convArgs(b, 1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 320, 1280);
@@ -542,13 +608,13 @@ void test_module(torch::jit::script::Module module, const std::string& args) {
   auto toutC = module_.forward({tin}).toTensor();
   at::setAgpuVerbose(false);
   at::setUseAgpuConv(true);
-  at::setUseAgpuNorm(false);
-  at::setUseAgpuRelu(false);
-  at::setUseAgpuAdd(false);
+  at::setUseAgpuNorm(true);
+  at::setUseAgpuRelu(true);
+  at::setUseAgpuAdd(true);
   auto toutT = module_.forward({tin}).toTensor();
   agpuOff();
 
-  assert(almostEqual(toutT, toutC));
+  assert(almostEqual(toutT, toutC, true));
   ALOGI("ATEST_MODULE PASSED");
 }
 

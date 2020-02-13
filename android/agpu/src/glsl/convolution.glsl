@@ -31,10 +31,10 @@ void main()
         ivec3 inputSize = uInputSize;
         ivec2 s0 = pos.xy*uStride-uPad;
         int fx, fy, fz;
-        //ivec2 sfxy = max(ivec2(0), (UP_DIV(-s0, uDilate)));
-        ivec2 sfxy = ivec2(0);
-        //ivec2 efxy = min(uKernelSize, UP_DIV(inputSize.xy-s0, uDilate));
-        ivec2 efxy = inputSize.xy;
+        ivec2 sfxy = max(ivec2(0), (UP_DIV(-s0, uDilate)));
+        //ivec2 sfxy = ivec2(0);
+        ivec2 efxy = min(uKernelSize, UP_DIV(inputSize.xy-s0, uDilate));
+        //ivec2 efxy = uKernelSize;
         vec4 color = uBias.data[pos.z];
         vec4 color2 = color;
         vec4 color3 = color;
