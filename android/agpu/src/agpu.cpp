@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <unistd.h>
 
 #include "agpu.h"
 #include "shader.h"
@@ -24,7 +25,7 @@ void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
   if (!isVerbose()) {
     return;
   }
-  static const char* kFloatFormat = "%8.8f";
+  static const char* kFloatFormat = "%4.4f";
   std::cout << m;
     std::cout << " dims:(";
     for (uint32_t i = 0; i < rank; i++) {
@@ -38,9 +39,9 @@ void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
     char fbuf[12];
     uint32_t rows = rank == 1 ? 1 : dims[0];
     uint32_t cols = rank == 1 ? dims[0] : dims[1];
-    for (uint32_t i = 0; i < rows; i++) {
+    for (uint32_t i = 0; i < rows; ++i) {
       std::cout << "\n";
-      for (uint32_t j = 0; j < cols; j++) {
+      for (uint32_t j = 0; j < cols; ++j) {
         sprintf(fbuf, kFloatFormat, t[i * cols + j]);
         std::cout << fbuf << " ";
       }
@@ -57,11 +58,11 @@ void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
     uint32_t d0 = dims[0];
     uint32_t d1 = dims[1];
     uint32_t d23size = dims[2] * dims[3];
-    for (uint32_t i = 0; i < d0; i++) {
-      for (uint32_t j = 0; j < d1; j++) {
+    for (uint32_t i = 0; i < d0; ++i) {
+      for (uint32_t j = 0; j < d1; ++j) {
         char s[80];
-        sprintf(s, "[%d, %d, *, *]", i, j);
-        agpu_print(s, t + (i * d0 + j) * d23size, 2, dims + 2);
+        sprintf(s, "[%d, %d, *, *] offset:%d", i, j, (i * d0 + j) * d23size);
+        agpu_print(s, t + i * d1 * d23size + j * d23size, 2, dims + 2);
       }
     }
   }
@@ -196,7 +197,14 @@ class AGLContext {
           "GLContext: GL_MAJOR_VERSION:%d GL_MINOR_VERSION:%d", major, minor);
       APRINT(
           "GLContext: GL_SHADING_LANGUAGE_VERSION:%s",
-          (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION));
+          (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION));\
+
+      int maxShaderStorageBlockSize;
+      glGetIntegerv(GL_MAX_SHADER_STORAGE_BLOCK_SIZE, &maxShaderStorageBlockSize);
+
+      APRINT(
+          "GLContext: GL_MAX_SHADER_STORAGE_BLOCK_SIZE:%d",
+          maxShaderStorageBlockSize);
 
       if (major < 3) {
         isCreateError_ = true;
@@ -254,9 +262,11 @@ void initAGLContextOnce() {
   ((void)once);
 }
 
+using buffer_size_t = GLsizeiptr;
+
 class AGLSSBuffer {
  public:
-  AGLSSBuffer(GLsizeiptr size, GLenum type = GL_SHADER_STORAGE_BUFFER) {
+  AGLSSBuffer(buffer_size_t size, GLenum type = GL_SHADER_STORAGE_BUFFER) {
     type_ = type;
     assert(size > 0);
     glGenBuffers(1, &id_);
@@ -288,7 +298,7 @@ class AGLSSBuffer {
     AGL_CHECK_ERROR;
   }
 
-  GLsizeiptr size() const {
+  buffer_size_t size() const {
     return size_;
   }
 
@@ -313,13 +323,37 @@ class AGLSSBuffer {
     return buffer;
   }
 
-  std::unique_ptr<AGLSSBuffer> static from(const float* data, GLsizeiptr size) {
+  std::unique_ptr<AGLSSBuffer> static from(const float* data, buffer_size_t size) {
     return from(data, size, size);
+  }
+
+  auto copyToHostVec() {
+    uint32_t n = size_ / sizeof(float);
+    std::vector<float> ret(n);
+    float* retDataPtr = ret.data();
+    std::cout << "copyToHostVec size:" << size_ << " n:" << n << std::endl;
+    const float* bufferDataPtr = (const float*) map(GL_MAP_READ_BIT);
+    if (!bufferDataPtr) {
+      assert(false);
+    }
+    memset(retDataPtr, 0, n);
+    memcpy(retDataPtr, bufferDataPtr, size_);
+    unmap();
+    return ret;
+  }
+
+  void copyToHost(float* outputDataPtr, size_t sizeCopy) {
+    const float* bufferDataPtr = (const float*) map(GL_MAP_READ_BIT);
+    if (!bufferDataPtr) {
+      assert(false);
+    }
+    memcpy(outputDataPtr, bufferDataPtr, sizeCopy);
+    unmap();
   }
 
  private:
   GLuint id_ = 0;
-  GLsizeiptr size_;
+  buffer_size_t size_;
   GLenum type_;
 }; // class AGLSSBuffer
 
@@ -568,101 +602,18 @@ std::shared_ptr<AGLShader> getShader(
 }
 
 void wait() {
-#ifdef USE_GL_FINISH
-  glFinish();
-#else
+//#ifdef USE_GL_FINISH
   glFlush();
-#endif
+  glFinish();
+//#else
+//  glFlush();
+//#endif
 }
 
 void compute(int dim0, int dim1, int dim2) {
-  APRINT("compute(%d %d %d)", dim0, dim1, dim2);
+  APRINT("glDispatchCompute(%d %d %d)", dim0, dim1, dim2);
   wait();
   glDispatchCompute(dim0, dim1, dim2);
-}
-
-void device2host(
-    GLuint textureId,
-    float* outputData,
-    int d0,
-    int d1,
-    int d2,
-    bool outputAlign4) {
-  APRINT("device2host(%d %d %d align %d)", d0, d1, d2, outputAlign4);
-  wait();
-  auto d2_4 = UP_DIV(d2, 4);
-  auto size = d2_4 * 4 * d0 * d1 * sizeof(float);
-  auto buffer = std::make_unique<AGLSSBuffer>(size);
-
-  auto program = outputAlign4
-      ? getShader(
-            "glsl_image_to_nc4hw4_buffer_glsl",
-            glsl_image_to_nc4hw4_buffer_glsl)
-      : getShader(
-            "glsl_image_to_nchw_buffer_glsl",
-            glsl_image_to_nchw_buffer_glsl);
-  program->useProgram();
-
-  glBindImageTexture(
-      0, textureId, 0, GL_TRUE, 0, GL_READ_ONLY, getTextureFormat());
-  AGL_CHECK_ERROR;
-  buffer->bindInProgram(1);
-
-  glUniform1i(2, d0);
-  glUniform1i(3, d1);
-  AGL_CHECK_ERROR;
-
-  compute(UP_DIV(d0, 8), UP_DIV(d1, 8), d2_4);
-  AGL_CHECK_ERROR;
-
-  glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-  AGL_CHECK_ERROR;
-
-  auto dOutputData = buffer->map(GL_MAP_READ_BIT);
-  if (dOutputData != nullptr) {
-    if (outputAlign4) {
-      ::memcpy(outputData, dOutputData, size);
-    } else {
-      ::memcpy(outputData, dOutputData, d0 * d1 * d2 * sizeof(float));
-    }
-  }
-  buffer->unmap();
-}
-
-void host2device(
-    GLuint textureId,
-    const float* inputData,
-    const int c,
-    const int h,
-    const int w,
-    const bool inputData4Aligned) {
-  APRINT("device2host(c %d h %d w %d align %d)", c, h, w, inputData4Aligned);
-
-  const int c_4 = UP_DIV(c, 4);
-  GLsizeiptr size = ROUND_UP(c, 4) * w * h * sizeof(float);
-  auto buffer = AGLSSBuffer::from(
-      inputData, size, inputData4Aligned ? size : c * h * w * sizeof(float));
-
-  auto shader = inputData4Aligned
-      ? getShader(
-            "glsl_nc4hw4_buffer_to_image_glsl",
-            glsl_nc4hw4_buffer_to_image_glsl)
-      : getShader(
-            "glsl_nchw_buffer_to_image_glsl",
-            glsl_nchw_buffer_to_image_glsl);
-  shader->useProgram();
-
-  glBindImageTexture(
-      0, textureId, 0, GL_TRUE, 0, GL_WRITE_ONLY, getTextureFormat());
-  AGL_CHECK_ERROR;
-
-  buffer->bindInProgram(1);
-  glUniform1i(2, w);
-  glUniform1i(3, h);
-  AGL_CHECK_ERROR;
-
-  compute(UP_DIV(w, 8), UP_DIV(h, 8), c_4);
-  AGL_CHECK_ERROR;
 }
 
 void addCompGroupSizeDefines(
@@ -704,6 +655,320 @@ void addCompGroupSizeDefines(
       compGroupSize[2]);
 }
 
+void device2host(
+    GLuint textureId,
+    float* outputData,
+    int d0,
+    int d1,
+    int d2,
+    bool outputAlign4) {
+  APRINT("device2host(%d %d %d align %d)", d0, d1, d2, outputAlign4);
+  wait();
+  auto d2_4 = UP_DIV(d2, 4);
+  auto size = d2_4 * 4 * d0 * d1 * sizeof(float);
+  auto buffer = std::make_unique<AGLSSBuffer>(size);
+
+  auto program = outputAlign4
+      ? getShader(
+            "image_to_nc4hw4_buffer_glsl",
+            image_to_nc4hw4_buffer_glsl)
+      : getShader(
+            "image_to_nchw_buffer_glsl",
+            image_to_nchw_buffer_glsl);
+  program->useProgram();
+
+  glBindImageTexture(
+      0, textureId, 0, GL_TRUE, 0, GL_READ_ONLY, getTextureFormat());
+  AGL_CHECK_ERROR;
+  buffer->bindInProgram(1);
+
+  glUniform1i(2, d0);
+  glUniform1i(3, d1);
+  AGL_CHECK_ERROR;
+
+  compute(UP_DIV(d0, 8), UP_DIV(d1, 8), d2_4);
+  AGL_CHECK_ERROR;
+
+  glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+  AGL_CHECK_ERROR;
+
+  auto dOutputData = buffer->map(GL_MAP_READ_BIT);
+  if (dOutputData != nullptr) {
+    if (outputAlign4) {
+      ::memcpy(outputData, dOutputData, size);
+    } else {
+      ::memcpy(outputData, dOutputData, d0 * d1 * d2 * sizeof(float));
+    }
+  }
+  buffer->unmap();
+}
+
+auto hostNCHW_to_deviceNC4HWBuffer(
+    const float* inputData,
+    const int c,
+    const int h,
+    const int w) {
+  APRINT("device2host(c %d h %d w %d)", c, h, w);
+
+  const int c_4 = UP_DIV(c, 4);
+  buffer_size_t size = ROUND_UP(c, 4) * w * h * sizeof(float);
+  auto src = AGLSSBuffer::from(inputData, size, c * h * w * sizeof(float));
+  auto dst = std::make_unique<AGLSSBuffer>(size);
+
+  int workGroupSize[3];
+  std::vector<std::string> header;
+  addCompGroupSizeDefines(header, workGroupSize, 8, 8, 4);
+
+  auto shader = getShader("nchw_buffer_to_nc4hw_buffer_glsl", nchw_buffer_to_nc4hw_buffer_glsl, header);
+  shader->useProgram();
+  AGL_CHECK_ERROR;
+  dst->bindInProgram(0);
+  AGL_CHECK_ERROR;
+  src->bindInProgram(1);
+  AGL_CHECK_ERROR;
+  glUniform1i(2, w);
+  glUniform1i(3, h);
+  AGL_CHECK_ERROR;
+
+  compute(
+      UP_DIV(w, workGroupSize[0]),
+      UP_DIV(h, workGroupSize[1]),
+      UP_DIV(c, workGroupSize[2]));
+  AGL_CHECK_ERROR;
+  return dst;
+}
+
+void host2deviceTexture(
+    GLuint textureId,
+    const float* inputData,
+    const int c,
+    const int h,
+    const int w,
+    const bool inputData4Aligned) {
+  APRINT("host2deviceTexture(c %d h %d w %d align %d)", c, h, w, inputData4Aligned);
+
+  const int c_4 = UP_DIV(c, 4);
+  GLsizeiptr size = ROUND_UP(c, 4) * w * h * sizeof(float);
+  auto buffer = AGLSSBuffer::from(
+      inputData, size, inputData4Aligned ? size : c * h * w * sizeof(float));
+
+  auto shader = inputData4Aligned
+      ? getShader(
+            "nc4hw4_buffer_to_image_glsl",
+            nc4hw4_buffer_to_image_glsl)
+      : getShader(
+            "nchw_buffer_to_image_glsl",
+            nchw_buffer_to_image_glsl);
+  shader->useProgram();
+
+  glBindImageTexture(
+      0, textureId, 0, GL_TRUE, 0, GL_WRITE_ONLY, getTextureFormat());
+  AGL_CHECK_ERROR;
+
+  buffer->bindInProgram(1);
+  glUniform1i(2, w);
+  glUniform1i(3, h);
+  AGL_CHECK_ERROR;
+
+  compute(UP_DIV(w, 8), UP_DIV(h, 8), c_4);
+  AGL_CHECK_ERROR;
+}
+
+void agpu_conv2d_buffers_nc4nc(
+    const float* input,
+    uint32_t input_n,
+    uint32_t input_c,
+    uint32_t input_h,
+    uint32_t input_w,
+    const float* weights,
+    uint32_t kernel_c,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    const float* bias,
+    uint32_t stride_y,
+    uint32_t stride_x,
+    uint32_t input_padding_y,
+    uint32_t input_padding_x,
+    uint32_t dilation_y,
+    uint32_t dilation_x,
+    uint32_t groups,
+    float* output) {
+
+  APRINT(
+      "agpu_conv2d_buffers_nc4nc(input nchw %d %d %d %d kernel chw %d %d %d stride hw %d %d pad yx %d %d dilation %d %d groups %d",
+      input_n,
+      input_c,
+      input_h,
+      input_w,
+      kernel_c,
+      kernel_h,
+      kernel_w,
+      stride_y,
+      stride_x,
+      input_padding_y,
+      input_padding_x,
+      dilation_y,
+      dilation_x,
+      groups);
+  initAGLContextOnce();
+  static const bool debugPrintTensors = true;
+  if (debugPrintTensors) {
+    agpu_print4d("input:", input, input_n, input_c, input_h, input_w);
+    agpu_print4d("kernel:", weights, kernel_c, input_c, kernel_h, kernel_w);
+    uint32_t bdims[1] = {kernel_c};
+    agpu_print("bias:", bias, 1, bdims);
+  }
+
+  const int KW = kernel_w;
+  const int KH = kernel_h;
+  const int OC = kernel_c;
+  const int OC_4 = UP_DIV(OC, 4);
+
+  const int W = input_w;
+  const int H = input_h;
+  const int C = input_c;
+  const int C_4 = UP_DIV(C, 4);
+
+  const int KWE = (KW - 1) * dilation_x + 1;
+  const int KHE = (KH - 1) * dilation_y + 1;
+  APRINT("KHE KWE (%d,%d)", KHE, KWE);
+
+  const uint32_t OW = ((W - KWE + 2 * input_padding_x) / stride_x) + 1;
+  const uint32_t OH = ((H - KHE + 2 * input_padding_y) / stride_y) + 1;
+  APRINT("OH OW (%d,%d)", OH, OW);
+  // bias{
+  auto biasBuffer = AGLSSBuffer::from(bias, sizeof(float) * ALIGN_UP4(OC), sizeof(float) * OC);
+  const uint32_t KBufferSize = ALIGN_UP4(OC) * ALIGN_UP4(C) * KH * KW;
+  auto kernelBuffer = std::make_unique<AGLSSBuffer>(sizeof(float) * KBufferSize);
+  // bias}
+
+  // kernel buffer {
+  const int alignedKOCSize = UP_DIV(C, 4) * KW * KH * 16;
+  float* kernelPtr = (float*)(kernelBuffer->map(GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT));
+  if (kernelPtr) {
+    memset(kernelPtr, 0, sizeof(float) * KBufferSize);
+    const float* src = weights;
+    float* dst = kernelPtr;
+    int ridx = 0;
+    for (int oc = 0; oc < OC; ++oc) {
+      int oc_4 = oc / 4;
+      int oc_4_i = oc % 4;
+      float* dst_oc = dst + oc_4 * alignedKOCSize;
+      for (int ic = 0; ic < C; ++ic) {
+        int ic_4 = ic / 4;
+        int ic_4_i = ic % 4;
+        float* dst_ic = dst_oc + ic_4 * KW * KH * 16;
+        for (int ky = 0; ky < KH; ++ky) {
+          float* dst_ky = dst_ic + ky * KW * 16;
+          for (int kx = 0; kx < KW; ++kx) {
+            float* dst_kx = dst_ky + kx * 16;
+            dst_kx[4 * ic_4_i + oc_4_i] = src[ridx++];
+          }
+        }
+      }
+    }
+  }
+  kernelBuffer->unmap();
+  // kernel buffer }
+
+  if (debugPrintTensors) {
+    std::vector<float> kernelBufferDebugVec = kernelBuffer->copyToHostVec();
+    agpu_print4d("repacked kernel buffer:\n", kernelBufferDebugVec.data(), KH, KW, 4, 4);
+  }
+  auto inputBuffer = hostNCHW_to_deviceNC4HWBuffer(input, C, H, W);
+
+  if (debugPrintTensors) {
+    wait();
+    std::vector<float> inputBufferDebugVec = inputBuffer->copyToHostVec();
+    agpu_print4d("input buffer nc4hw:\n", inputBufferDebugVec.data(), C_4, H, W, 4);
+  }
+  const int convOutC4BufferSize = sizeof(float) * 4 * OC_4 * OW * OH;
+  auto convOutC4Buffer = std::make_unique<AGLSSBuffer>(convOutC4BufferSize);
+  {
+    int workGroupSize[3];
+    std::vector<std::string> header;
+    addCompGroupSizeDefines(header, workGroupSize, 1, 1, OC_4);
+
+    auto shader = getShader(
+        "convolution_buffers_out_nc4hw_glsl",
+        convolution_buffers_out_nc4hw_glsl,
+        header);
+
+    shader->useProgram();
+    AGL_CHECK_ERROR;
+
+    convOutC4Buffer->bindInProgram(0);
+    inputBuffer->bindInProgram(1);
+    kernelBuffer->bindInProgram(2);
+    biasBuffer->bindInProgram(3);
+
+    glUniform2i(4, input_padding_x, input_padding_y);
+    glUniform2i(5, KW, KH);
+    APRINT("KW:%d KH:%d", KW, KH);
+    glUniform2i(6, stride_x, stride_y);
+    glUniform2i(7, dilation_x, dilation_y);
+    AGL_CHECK_ERROR;
+
+    glUniform3i(8, OW, OH, OC_4);
+    APRINT("OW:%d OH:%d OC:%d OC_4:%d", OW, OH, OC, OC_4);
+    glUniform3i(9, W, H, C_4);
+    APRINT("W:%d H:%d C:%d C_4:%d", W, H, C, C_4);
+    AGL_CHECK_ERROR;
+
+    compute(
+        UP_DIV(OW, 4 * workGroupSize[0]),
+        UP_DIV(OH, workGroupSize[1]),
+        UP_DIV(OC_4, workGroupSize[2]));
+    AGL_CHECK_ERROR;
+
+    if (debugPrintTensors) {
+      wait();
+      std::vector<float> convOutC4BufferDebugVec = convOutC4Buffer->copyToHostVec();
+      agpu_print4d("convOutC4Buffer:\n", convOutC4BufferDebugVec.data(), OC_4, OH, OW, 4);
+    }
+  }
+
+  const int outBufferSize = sizeof(float) * ALIGN_UP4(OC) * OH * OW;
+  auto outBuffer = std::make_unique<AGLSSBuffer>(outBufferSize);
+  {
+    int workGroupSize[3];
+    std::vector<std::string> header;
+    addCompGroupSizeDefines(header, workGroupSize, 8, 8, OC_4);
+
+    auto shader = getShader(
+        "nc4hw_buffer_to_nchw_buffer_glsl",
+        nc4hw_buffer_to_nchw_buffer_glsl,
+        header);
+
+    shader->useProgram();
+    AGL_CHECK_ERROR;
+
+    outBuffer->bindInProgram(0);
+    convOutC4Buffer->bindInProgram(1);
+    AGL_CHECK_ERROR;
+
+    glUniform2i(2, OW, OH);
+    AGL_CHECK_ERROR;
+
+    compute(
+        UP_DIV(OW, workGroupSize[0]),
+        UP_DIV(OH, workGroupSize[1]),
+        UP_DIV(OC_4, workGroupSize[2]));
+    AGL_CHECK_ERROR;
+
+    if (debugPrintTensors) {
+      wait();
+      std::vector<float> outBufferDebugVec = outBuffer->copyToHostVec();
+      agpu_print4d("outBuffer:\n", outBufferDebugVec.data(), 1, OC, OH, OW);
+    }
+  }
+
+  outBuffer->copyToHost(output, sizeof(float)*OC*OH*OW);
+  if (debugPrintTensors) {
+    agpu_print4d("conv2d_buffers_nc4nc output:", output, input_n, OC, OH, OW);
+  }
+}
+
 void agpu_conv2d(
     const float* input,
     uint32_t input_n,
@@ -741,7 +1006,7 @@ void agpu_conv2d(
       dilation_x,
       groups);
   initAGLContextOnce();
-  static const bool debugPrintTensors = false;
+  static const bool debugPrintTensors = true;
   static const int unit = 4;
   const int unit2 = unit * unit;
   const int ic_4 = UP_DIV(input_c, unit);
@@ -813,8 +1078,8 @@ void agpu_conv2d(
       false);
 
   auto kernel2ImageShader = getShader(
-      "glsl_kernel2image_adreno_glsl",
-       glsl_kernel2image_adreno_glsl);
+      "kernel2image_adreno_glsl",
+       kernel2image_adreno_glsl);
 
   kernel2ImageShader->useProgram();
   // binding kernel2Image {
@@ -832,7 +1097,7 @@ void agpu_conv2d(
 
   auto inputTexture = std::make_unique<AGLTexture>(
       input_w, input_h, ic_4, getTextureFormat(), GL_TEXTURE_3D, false);
-  host2device(
+  host2deviceTexture(
       inputTexture->id(),
       input,
       input_c,
@@ -844,7 +1109,7 @@ void agpu_conv2d(
   std::vector<std::string> header;
   addCompGroupSizeDefines(header, compGroupSize, 1, 1, oc_4);
 
-  auto convProgram = getShader("convolution", glsl_convolution_glsl, header);
+  auto convProgram = getShader("convolution", convolution_glsl, header);
 
   auto outputTexture = std::make_unique<AGLTexture>(
       output_w, output_h, oc_4, getTextureFormat(), GL_TEXTURE_3D, false);
@@ -862,12 +1127,11 @@ void agpu_conv2d(
   glUniform2i(5, kernel_w, kernel_h);
   glUniform2i(6, stride_x, stride_y);
   glUniform2i(7, dilation_x, dilation_y);
-
+  glUniform1i(8, unit);
   AGL_CHECK_ERROR;
+
   glUniform3i(10, output_w, output_h, oc_4);
   glUniform3i(11, input_w, input_h, ic_4);
-
-  glUniform1i(8, unit);
   AGL_CHECK_ERROR;
   // binding convolution }
 
@@ -907,10 +1171,10 @@ void agpu_add2t(
 
   auto input0Texture = std::make_unique<AGLTexture>(
       w, h, c_4, getTextureFormat(), GL_TEXTURE_3D, false);
-  host2device(input0Texture->id(), input0, c, h, w, false /* align */);
+  host2deviceTexture(input0Texture->id(), input0, c, h, w, false /* align */);
   auto input1Texture = std::make_unique<AGLTexture>(
       w, h, c_4, getTextureFormat(), GL_TEXTURE_3D, false);
-  host2device(input1Texture->id(), input1, c, h, w, false /* align */);
+  host2deviceTexture(input1Texture->id(), input1, c, h, w, false /* align */);
 
   auto outputTexture = std::make_unique<AGLTexture>(
       w, h, c_4, getTextureFormat(), GL_TEXTURE_3D, false);
@@ -920,16 +1184,16 @@ void agpu_add2t(
   addCompGroupSizeDefines(prefix, compGroupSize, 8, 8, 1);
 
   auto binAddProgram =
-      getShader("glsl_binary_add_glsl", glsl_binary_add_glsl, prefix);
+      getShader("binary_add_glsl", binary_add_glsl, prefix);
   binAddProgram->useProgram();
-  // binding glsl_binary_add_glsl {
+  // binding binary_add_glsl {
   glBindImageTexture(
       0, outputTexture->id(), 0, GL_TRUE, 0, GL_WRITE_ONLY, getTextureFormat());
   input0Texture->bindInProgram(0, 1);
   input1Texture->bindInProgram(1, 2);
   glUniform4i(3, w, h, c_4, 1);
   AGL_CHECK_ERROR;
-  // binding glsl_binary_add_glsl }
+  // binding binary_add_glsl }
 
   compute(
       UP_DIV(w, compGroupSize[0]),
@@ -957,7 +1221,7 @@ void agpu_threshold(
   auto inputTexture = std::make_unique<AGLTexture>(
       w, h, c_4, getTextureFormat(), GL_TEXTURE_3D, false);
 
-  host2device(inputTexture->id(), input, c, h, w, false /* align */);
+  host2deviceTexture(inputTexture->id(), input, c, h, w, false /* align */);
 
   auto outputTexture = std::make_unique<AGLTexture>(
       w, h, c_4, getTextureFormat(), GL_TEXTURE_3D, false);
@@ -966,7 +1230,7 @@ void agpu_threshold(
   std::vector<std::string> prefix;
   addCompGroupSizeDefines(prefix, compGroupSize, 8, 8, 1);
 
-  auto program = getShader("glsl_threshold_glsl", glsl_threshold_glsl, prefix);
+  auto program = getShader("threshold_glsl", threshold_glsl, prefix);
   program->useProgram();
   // binding {
   glBindImageTexture(
@@ -1007,7 +1271,7 @@ void agpu_batch_norm(
 
   auto inputTexture = std::make_unique<AGLTexture>(
       w, h, c_4, getTextureFormat(), GL_TEXTURE_3D, false);
-  host2device(inputTexture->id(), input, c, h, w, false /* align */);
+  host2deviceTexture(inputTexture->id(), input, c, h, w, false /* align */);
 
   auto outputTexture = std::make_unique<AGLTexture>(
       w, h, c_4, getTextureFormat(), GL_TEXTURE_3D, false);
@@ -1023,10 +1287,10 @@ void agpu_batch_norm(
   std::vector<std::string> prefix;
   addCompGroupSizeDefines(prefix, compGroupSize, 8, 8, 1);
 
-  auto program = getShader("glsl_normalization_glsl", glsl_normalization_glsl, prefix);
+  auto program = getShader("normalization_glsl", normalization_glsl, prefix);
   program->useProgram();
 
-  // binding glsl_normalization_glsl {
+  // binding normalization_glsl {
   glBindImageTexture(
       0, outputTexture->id(), 0, GL_TRUE, 0, GL_WRITE_ONLY, getTextureFormat());
 
@@ -1038,7 +1302,7 @@ void agpu_batch_norm(
 
   glUniform1f(7, eps);
   AGL_CHECK_ERROR;
-  // binding glsl_normalization_glsl }
+  // binding normalization_glsl }
 
   compute(
       UP_DIV(w, compGroupSize[0]),

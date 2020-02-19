@@ -1,6 +1,6 @@
 #pragma once
 
-#define AGPU_VERBOSE false
+#define AGPU_VERBOSE true
 
 #include <stdint.h>
 #include <stdio.h>
@@ -50,6 +50,26 @@ void agpu_conv2d(
     uint32_t input_padding_w,
     uint32_t dilation_h,
     uint32_t dilation_w,
+    uint32_t groups,
+    float* output);
+
+void agpu_conv2d_buffers_nc4nc(
+    const float* input,
+    uint32_t input_n,
+    uint32_t input_c,
+    uint32_t input_h,
+    uint32_t input_w,
+    const float* weights,
+    uint32_t kernel_c,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    const float* bias,
+    uint32_t stride_y,
+    uint32_t stride_x,
+    uint32_t input_padding_y,
+    uint32_t input_padding_x,
+    uint32_t dilation_y,
+    uint32_t dilation_x,
     uint32_t groups,
     float* output);
 

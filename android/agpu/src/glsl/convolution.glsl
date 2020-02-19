@@ -72,18 +72,6 @@ void main()
                 }
             }
         }
-        #ifdef RELU
-        color = max(color, vec4(0));
-        color2 = max(color2, vec4(0));
-        color3 = max(color3, vec4(0));
-        color4 = max(color4, vec4(0));
-        #endif
-        #ifdef RELU6
-        color = clamp(color, vec4(0), vec4(6));
-        color2 = clamp(color2, vec4(0), vec4(6));
-        color3 = clamp(color3, vec4(0), vec4(6));
-        color4 = clamp(color4, vec4(0), vec4(6));
-        #endif
         imageStore(uOutput, ivec3(pos.x+0, pos.y, pos.z), color);
         imageStore(uOutput, ivec3(pos.x+1, pos.y, pos.z), color2);
         imageStore(uOutput, ivec3(pos.x+2, pos.y, pos.z), color3);

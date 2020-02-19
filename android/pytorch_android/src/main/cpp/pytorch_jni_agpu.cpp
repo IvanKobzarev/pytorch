@@ -637,6 +637,23 @@ static void BM_conv_agpu_args_base(benchmark::internal::Benchmark* b) {
   BM_conv_agpu_Args(b, 1, 7, 7, 3, 3, 1, 1, 1, 1, 960, 1, 1);
 }
 
+static void BM_conv_agpu_args_base_test(benchmark::internal::Benchmark* b) {
+  b->ArgNames({"ACX",
+               "N",
+               "H",
+               "W",
+               "KH",
+               "KW",
+               "py",
+               "px",
+               "S",
+               "D",
+               "G",
+               "GCin",
+               "GCout"});
+  b->Args({0, 1, 3, 3, 2, 2, 0, 0, 1, 1, 1, 3, 2});
+}
+
 static void BM_conv_agpu(benchmark::State& state, const char* name) {
   for (auto _ : state) {
     state.PauseTiming();
@@ -682,29 +699,115 @@ static void BM_conv_agpu(benchmark::State& state, const char* name) {
     const size_t output_w = (w + 2 * px - effK_w) / stride + 1;
 
     std::vector<float> output(n * c_out * output_w * output_h);
-
-    state.ResumeTiming();
-
-    agpu::agpu_conv2d(
-        input.data(),
-        n,
-        c_in,
-        h,
-        w,
-        kernel.data(),
-        c_out,
-        kh,
-        kw,
-        bias.data(),
-        stride,
-        stride,
-        py,
-        px,
-        dilation,
-        dilation,
-        groups,
-        output.data());
+    if (agpuConvX == 0) {
+      state.ResumeTiming();
+      agpu::agpu_conv2d(
+          input.data(),
+          n,
+          c_in,
+          h,
+          w,
+          kernel.data(),
+          c_out,
+          kh,
+          kw,
+          bias.data(),
+          stride,
+          stride,
+          py,
+          px,
+          dilation,
+          dilation,
+          groups,
+          output.data());
+    } else {
+      state.ResumeTiming();
+      agpu::agpu_conv2d_buffers_nc4nc(
+          input.data(),
+          n,
+          c_in,
+          h,
+          w,
+          kernel.data(),
+          c_out,
+          kh,
+          kw,
+          bias.data(),
+          stride,
+          stride,
+          py,
+          px,
+          dilation,
+          dilation,
+          groups,
+          output.data());
+    }
   }
+}
+
+static void baby_test_conv_agpu(){
+const int64_t n = 1;
+const int64_t h = 3;
+const int64_t w = 3;
+
+const int64_t kh = 2;
+const int64_t kw = 2;
+
+const int64_t py = 0;
+const int64_t px = 0;
+
+const int64_t stride = 1;
+const int64_t dilation = 1;
+
+const int64_t groups = 1;
+const int64_t groups_c_in = 3;
+const int64_t groups_c_out = 2;
+
+const int64_t c_in = groups_c_in;
+const int64_t c_out = groups_c_out;
+
+std::vector<float> input = {
+1, 2, 3, 4, 5, 6, 7, 8, 9,
+101, 102, 103, 104, 105, 106, 107, 108, 109,
+1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1017 };
+
+std::vector<float> kernel = {
+1, 0, 0, 0,
+0, 1, 0, 0,
+0, 0, 1, 0,
+
+-1, 0, 0, 0,
+0, -1, 0, 0,
+0, 0, -1, 0
+};
+std::cout << kernel << std::endl;
+std::vector<float> bias = {0, 0};
+
+const size_t effK_h = (kh - 1) * dilation + 1;
+const size_t effK_w = (kw - 1) * dilation + 1;
+const size_t output_h = (h + 2 * py - effK_h) / stride + 1;
+const size_t output_w = (w + 2 * px - effK_w) / stride + 1;
+
+std::vector<float> output(n * c_out * output_w * output_h);
+  agpu::agpu_conv2d_buffers_nc4nc(
+      input.data(),
+      n,
+      c_in,
+      h,
+      w,
+      kernel.data(),
+      c_out,
+      kh,
+      kw,
+      bias.data(),
+      stride,
+      stride,
+      py,
+      px,
+      dilation,
+      dilation,
+      groups,
+      output.data());
 }
 
 void gbench_main(const std::string& args) {
@@ -726,16 +829,23 @@ void gbench_main(const std::string& args) {
   //    ->ReportAggregatesOnly(true)
   //    ->UseRealTime();
 
-  BENCHMARK_CAPTURE(BM_conv_agpu, base, "a_base")
-      ->Apply(BM_conv_agpu_args_base)
-      ->Iterations(10)
-      ->Repetitions(10)
-      ->Unit(benchmark::kMicrosecond)
-      ->ReportAggregatesOnly(true)
-      ->UseRealTime();
+  //BENCHMARK_CAPTURE(BM_conv_agpu, base, "a_base")
+  //    ->Apply(BM_conv_agpu_args_base)
+  //    ->Iterations(10)
+  //    ->Repetitions(10)
+  //    ->Unit(benchmark::kMicrosecond)
+  //    ->ReportAggregatesOnly(true)
+  //    ->UseRealTime();
 
-  benchmark::Initialize(&(argscv.c), argscv.v);
-  benchmark::RunSpecifiedBenchmarks();
+  //BENCHMARK_CAPTURE(BM_conv_agpu, baseTest, "a_base_test")
+  //    ->Apply(BM_conv_agpu_args_base_test)
+  //    ->Unit(benchmark::kMicrosecond)
+  //    ->Iterations(1)
+  //    ->Repetitions(1)
+  //    ->UseRealTime();
+  //benchmark::Initialize(&(argscv.c), argscv.v);
+  //benchmark::RunSpecifiedBenchmarks();
+  baby_test_conv_agpu();
 }
 
 void test_module(torch::jit::script::Module module, const std::string& args) {
@@ -772,7 +882,7 @@ int stdOutErrToLogcat() {
           0,
           [](void*) -> void* {
             ssize_t s;
-            char b[256];
+            char b[1024];
             while ((s = read(pfd[0], b, sizeof(b) - 1)) > 0) {
               if (b[s - 1] == '\n') {
                 --s;
