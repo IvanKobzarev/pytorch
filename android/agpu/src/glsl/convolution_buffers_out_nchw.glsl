@@ -1,6 +1,6 @@
 layout(std430) buffer;
 layout(binding=0) writeonly buffer outBuffer{
-  vec4 data[];
+  float data[];
 }uOutputBuffer;
 
 layout(binding=1) readonly buffer inputBuffer{
@@ -94,15 +94,19 @@ void main()
             }
         }
 
-        int outBi = pos.z * OW * OH + pos.y * OW + pos.x;
         int vi=0;
-        int vie=min(4, W-pos.x);
+        int vie=min(4, OW-pos.x);
+        int OWH = OW*OH;
+        int outBi;
         for (;vi<vie;++vi)
         {
-          uOutputBuffer.data[outBi+vi] = v[vi];
+          outBi = (pos.x+vi) + OW*pos.y + 4*pos.z*OWH;
+          vec4 v = v[vi];
+          uOutputBuffer.data[outBi+0] = v.x;
+          uOutputBuffer.data[outBi+1*OWH] = v.y;
+          uOutputBuffer.data[outBi+2*OWH] = v.z;
+          uOutputBuffer.data[outBi+3*OWH] = v.w;
         }
-
-
     }
 
 }

@@ -11,7 +11,8 @@
 #define AGPU_ERROR(format, ...) \
   __android_log_print(ANDROID_LOG_ERROR, "AGPU", format, ##__VA_ARGS__)
 #define APRINT(format, ...) \
-  if (AGPU_VERBOSE) __android_log_print(ANDROID_LOG_INFO, "AGPU", format, ##__VA_ARGS__)
+  if (AGPU_VERBOSE)         \
+  __android_log_print(ANDROID_LOG_INFO, "AGPU", format, ##__VA_ARGS__)
 #else
 #define APRINT(format, ...) printf(format, ##__VA_ARGS__)
 #define AGPU_ERROR(format, ...) printf(format, ##__VA_ARGS__)
@@ -25,7 +26,7 @@
   {                                                                           \
     GLenum error = glGetError();                                              \
     if (GL_NO_ERROR != error) {                                               \
-      APRINT(                                                             \
+      APRINT(                                                                 \
           "File = %s Line = %d Func=%s\n", __FILE__, __LINE__, __FUNCTION__); \
       FUNC_PRINT_ALL(error, 0x);                                              \
     }                                                                         \
@@ -54,6 +55,26 @@ void agpu_conv2d(
     float* output);
 
 void agpu_conv2d_buffers_nc4nc(
+    const float* input,
+    uint32_t input_n,
+    uint32_t input_c,
+    uint32_t input_h,
+    uint32_t input_w,
+    const float* weights,
+    uint32_t kernel_c,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    const float* bias,
+    uint32_t stride_y,
+    uint32_t stride_x,
+    uint32_t input_padding_y,
+    uint32_t input_padding_x,
+    uint32_t dilation_y,
+    uint32_t dilation_x,
+    uint32_t groups,
+    float* output);
+
+void agpu_conv2d_buffers_nchw(
     const float* input,
     uint32_t input_n,
     uint32_t input_c,
@@ -105,12 +126,7 @@ void agpu_batch_norm(
     const float eps,
     float* output);
 
-
-void agpu_print(
-    const char* m,
-    const float* t,
-    uint32_t rank,
-    uint32_t* dims);
+void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims);
 
 void agpu_print4d(
     const char* m,

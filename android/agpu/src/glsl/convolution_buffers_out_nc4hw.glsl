@@ -96,7 +96,7 @@ void main()
 
         int outBi = pos.z * OW * OH + pos.y * OW + pos.x;
         int vi=0;
-        int vie=min(4, W-pos.x);
+        int vie=min(4, OW-pos.x);
         for (;vi<vie;++vi)
         {
           uOutputBuffer.data[outBi+vi] = v[vi];
