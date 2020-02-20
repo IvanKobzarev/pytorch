@@ -722,7 +722,7 @@ static void BM_conv_agpu(benchmark::State& state, const char* name) {
           output.data());
     } else {
       state.ResumeTiming();
-      agpu::agpu_conv2d_buffers_nc4nc(
+      agpu::agpu_conv2d_buffers_soutnc4nc(
           input.data(),
           n,
           c_in,
@@ -783,7 +783,7 @@ static void baby_test_conv_agpu() {
   const size_t output_w = (w + 2 * px - effK_w) / stride + 1;
 
   std::vector<float> output(n * c_out * output_w * output_h);
-  agpu::agpu_conv2d_buffers_nchw(
+  agpu::agpu_conv2d_buffers_sinoutnchw(
       input.data(),
       n,
       c_in,
