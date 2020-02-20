@@ -52,7 +52,8 @@ void agpu_conv2d(
     uint32_t dilation_h,
     uint32_t dilation_w,
     uint32_t groups,
-    float* output);
+    float* output,
+    int64_t mod = 0);
 
 void agpu_conv2d_sTextures(
     const float* input,
@@ -72,7 +73,8 @@ void agpu_conv2d_sTextures(
     uint32_t dilation_h,
     uint32_t dilation_w,
     uint32_t groups,
-    float* output);
+    float* output,
+    int64_t mod = 0);
 
 void agpu_conv2d_buffers_sOutNc4nc(
     const float* input,
@@ -92,7 +94,8 @@ void agpu_conv2d_buffers_sOutNc4nc(
     uint32_t dilation_y,
     uint32_t dilation_x,
     uint32_t groups,
-    float* output);
+    float* output,
+    int64_t mod = 0);
 
 void agpu_conv2d_buffers_sOutNchw(
     const float* input,
@@ -112,7 +115,8 @@ void agpu_conv2d_buffers_sOutNchw(
     uint32_t dilation_y,
     uint32_t dilation_x,
     uint32_t groups,
-    float* output);
+    float* output,
+    int64_t mod = 0);
 
 void agpu_conv2d_buffers_sInOutNchw(
     const float* input,
@@ -132,7 +136,8 @@ void agpu_conv2d_buffers_sInOutNchw(
     uint32_t dilation_y,
     uint32_t dilation_x,
     uint32_t groups,
-    float* output);
+    float* output,
+    int64_t mod = 0);
 
 void agpu_add2t(
     const float* input0,

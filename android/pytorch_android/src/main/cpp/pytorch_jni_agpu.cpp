@@ -611,10 +611,10 @@ static void BM_conv_agpu_Args(
     int64_t g,
     int64_t gcin,
     int64_t gcout) {
-  b->Args({0, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  //b->Args({0, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
   b->Args({1, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
-  b->Args({2, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
-  b->Args({3, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  //b->Args({2, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  //b->Args({3, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
 }
 
 static void BM_conv_agpu_args_base(benchmark::internal::Benchmark* b) {
@@ -780,7 +780,8 @@ static void BM_conv_agpu(benchmark::State& state, const char* name) {
         dilation,
         dilation,
         groups,
-        output.data());
+        output.data(),
+        0);
   }
 }
 

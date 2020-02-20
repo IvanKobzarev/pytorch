@@ -46,7 +46,6 @@ void main()
         ivec2 s0 = pos.xy*uStride-uPad;
         int kxi, kyi, ic_4i;
 
-        int oc_4i = pos.z;
 
         ivec2 sfxy = max(ivec2(0), (UP_DIV(-s0, uDilate)));
         ivec2 efxy = min(uKernelSize, UP_DIV(inputSize.xy-s0, uDilate));

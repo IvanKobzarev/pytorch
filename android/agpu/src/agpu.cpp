@@ -797,7 +797,8 @@ void agpu_conv2d_buffers_sOutNc4nc(
     uint32_t dilation_y,
     uint32_t dilation_x,
     uint32_t groups,
-    float* output) {
+    float* output,
+    int64_t mod) {
   APRINT(
       "agpu_conv2d_buffers_nc4nc(input nchw %d %d %d %d kernel chw %d %d %d stride hw %d %d pad yx %d %d dilation %d %d groups %d",
       input_n,
@@ -1003,7 +1004,8 @@ void agpu_conv2d_buffers_sOutNchw(
     uint32_t dilation_y,
     uint32_t dilation_x,
     uint32_t groups,
-    float* output) {
+    float* output,
+    int64_t mod) {
   APRINT(
       "agpu_conv2d_buffers_nchw(input nchw %d %d %d %d kernel chw %d %d %d stride hw %d %d pad yx %d %d dilation %d %d groups %d",
       input_n,
@@ -1168,7 +1170,8 @@ void agpu_conv2d_buffers_sInOutNchw(
     uint32_t dilation_y,
     uint32_t dilation_x,
     uint32_t groups,
-    float* output) {
+    float* output,
+    int64_t mod) {
   APRINT(
       "agpu_conv2d_buffers_nchw(input nchw %d %d %d %d kernel chw %d %d %d stride hw %d %d pad yx %d %d dilation %d %d groups %d",
       input_n,
@@ -1331,7 +1334,8 @@ void agpu_conv2d(
     uint32_t dilation_y,
     uint32_t dilation_x,
     uint32_t groups,
-    float* output) {
+    float* output,
+    int64_t mod) {
   agpu_conv2d_sTextures(
       input,
       input_n,
@@ -1350,7 +1354,8 @@ void agpu_conv2d(
       dilation_y,
       dilation_x,
       groups,
-      output);
+      output,
+      mod);
 }
 
 void agpu_conv2d_sTextures(
@@ -1371,7 +1376,8 @@ void agpu_conv2d_sTextures(
     uint32_t dilation_y,
     uint32_t dilation_x,
     uint32_t groups,
-    float* output) {
+    float* output,
+    int64_t mod) {
   APRINT(
       "agpu_conv2d(input nchw %d %d %d %d kernel chw %d %d %d stride hw %d %d pad yx %d %d dilation %d %d groups %d",
       input_n,
@@ -1540,6 +1546,7 @@ void agpu_conv2d_sTextures(
   }
 }
 
+//region not_convolution
 void agpu_add2t(
     const float* input0,
     const float* input1,
@@ -1697,6 +1704,6 @@ void agpu_batch_norm(
   device2host(outputTexture->id(), output, w, h, c, false /* align */);
   agpu_print4d("agpu_batch_norm output:\n", output, n, c, h, w);
 }
-
+//endregion notconvolution
 #endif
 } // namespace agpu
