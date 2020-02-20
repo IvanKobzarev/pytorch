@@ -15,6 +15,8 @@
 #define ROUND_UP(x, y) (((x) + (y) - (1)) / (y) * (y))
 #define ALIGN_UP4(x) ROUND_UP((x), 4)
 
+#define DEBUG_PRINT_TENSOR false
+
 namespace agpu {
 
 bool isVerbose() {
@@ -777,7 +779,7 @@ void host2deviceTexture(
   AGL_CHECK_ERROR;
 }
 
-void agpu_conv2d_buffers_soutnc4nc(
+void agpu_conv2d_buffers_sOutNc4nc(
     const float* input,
     uint32_t input_n,
     uint32_t input_c,
@@ -813,7 +815,7 @@ void agpu_conv2d_buffers_soutnc4nc(
       dilation_x,
       groups);
   initAGLContextOnce();
-  static const bool debugPrintTensors = true;
+  static const bool debugPrintTensors = DEBUG_PRINT_TENSOR;
   if (debugPrintTensors) {
     agpu_print4d("input:", input, input_n, input_c, input_h, input_w);
     agpu_print4d("kernel:", weights, kernel_c, input_c, kernel_h, kernel_w);
@@ -983,7 +985,7 @@ void agpu_conv2d_buffers_soutnc4nc(
   }
 }
 
-void agpu_conv2d_buffers_soutnchw(
+void agpu_conv2d_buffers_sOutNchw(
     const float* input,
     uint32_t input_n,
     uint32_t input_c,
@@ -1019,7 +1021,7 @@ void agpu_conv2d_buffers_soutnchw(
       dilation_x,
       groups);
   initAGLContextOnce();
-  static const bool debugPrintTensors = true;
+  static const bool debugPrintTensors = DEBUG_PRINT_TENSOR;
   if (debugPrintTensors) {
     agpu_print4d("input:", input, input_n, input_c, input_h, input_w);
     agpu_print4d("kernel:", weights, kernel_c, input_c, kernel_h, kernel_w);
@@ -1148,7 +1150,7 @@ void agpu_conv2d_buffers_soutnchw(
   }
 }
 
-void agpu_conv2d_buffers_sinoutnchw(
+void agpu_conv2d_buffers_sInOutNchw(
     const float* input,
     uint32_t input_n,
     uint32_t input_c,
@@ -1184,7 +1186,7 @@ void agpu_conv2d_buffers_sinoutnchw(
       dilation_x,
       groups);
   initAGLContextOnce();
-  static const bool debugPrintTensors = true;
+  static const bool debugPrintTensors = DEBUG_PRINT_TENSOR;
   if (debugPrintTensors) {
     agpu_print4d("input:", input, input_n, input_c, input_h, input_w);
     agpu_print4d("kernel:", weights, kernel_c, input_c, kernel_h, kernel_w);
@@ -1330,7 +1332,7 @@ void agpu_conv2d(
     uint32_t dilation_x,
     uint32_t groups,
     float* output) {
-  agpu_conv2d_stextures(
+  agpu_conv2d_sTextures(
       input,
       input_n,
       input_c,
@@ -1351,7 +1353,7 @@ void agpu_conv2d(
       output);
 }
 
-void agpu_conv2d_stextures(
+void agpu_conv2d_sTextures(
     const float* input,
     uint32_t input_n,
     uint32_t input_c,
@@ -1387,7 +1389,7 @@ void agpu_conv2d_stextures(
       dilation_x,
       groups);
   initAGLContextOnce();
-  static const bool debugPrintTensors = true;
+  static const bool debugPrintTensors = DEBUG_PRINT_TENSOR;
   static const int unit = 4;
   const int unit2 = unit * unit;
   const int ic_4 = UP_DIV(input_c, unit);

@@ -1,0 +1,206 @@
+02-19 18:49:57.594 23789 23815 I cout    : ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+02-19 18:49:57.594 23789 23815 I cout    : Benchmark                                                                                                                                 Time             CPU   Iterations
+02-19 18:49:57.594 23789 23815 I cout    : ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+02-19 18:49:57.594 23789 23815 I cout    : BM_conv_agpu/base/ACX:0/N:1/H:224/W:224/KH:3/KW:3/py:2/px:1/S:1/D:1/G:1/GCin:3/GCout:32/iterations:1/repeats:20/real_time_mean        96491 us        66655 us           20
+02-19 18:49:57.594 23789 23815 I cout    : BM_conv_agpu/base/ACX:0/N:1/H:224/W:224/KH:3/KW:3/py:2/px:1/S:1/D:1/G:1/GCin:3/GCout:32/iterations:1/repeats:20/real_time_median      87717 us        58388 us           20
+02-19 18:49:57.594 23789 23815 I cout    : BM_conv_agpu/base/ACX:0/N:1/H:224/W:224/KH:3/KW:3/py:2/px:1/S:1/D:1/G:1/GCin:3/GCout:32/iterations:1/repeats:20/real_time_stddev      18472 us        15293 us           20
+02-19 18:50:01.590 23789 23815 I cout    : BM_conv_agpu/base/ACX:1/N:1/H:224/W:224/KH:3/KW:3/py:2/px:1/S:1/D:1/G:1/GCin:3/GCout:32/iterations:1/repeats:20/real_time_mean       146221 us        88440 us           20
+02-19 18:50:01.590 23789 23815 I cout    : BM_conv_agpu/base/ACX:1/N:1/H:224/W:224/KH:3/KW:3/py:2/px:1/S:1/D:1/G:1/GCin:3/GCout:32/iterations:1/repeats:20/real_time_median     145271 us        87073 us           20
+02-19 18:50:01.590 23789 23815 I cout    : BM_conv_agpu/base/ACX:1/N:1/H:224/W:224/KH:3/KW:3/py:2/px:1/S:1/D:1/G:1/GCin:3/GCout:32/iterations:1/repeats:20/real_time_stddev       9781 us         9501 us           20
+02-19 18:50:04.762 31697 31760 I WorkerManager: dispose()
+02-19 18:50:04.763 31697 31760 W ThreadPoolDumper: Queue length for executor EventBus is now 11. Perhaps some tasks are too long, or the pool is too small.
+02-19 18:50:05.444 23789 23815 I cout    : BM_conv_agpu/base/ACX:2/N:1/H:224/W:224/KH:3/KW:3/py:2/px:1/S:1/D:1/G:1/GCin:3/GCout:32/iterations:1/repeats:20/real_time_mean       139209 us        83997 us           20
+02-19 18:50:05.444 23789 23815 I cout    : BM_conv_agpu/base/ACX:2/N:1/H:224/W:224/KH:3/KW:3/py:2/px:1/S:1/D:1/G:1/GCin:3/GCout:32/iterations:1/repeats:20/real_time_median     141082 us        86054 us           20
+02-19 18:50:05.444 23789 23815 I cout    : BM_conv_agpu/base/ACX:2/N:1/H:224/W:224/KH:3/KW:3/py:2/px:1/S:1/D:1/G:1/GCin:3/GCout:32/iterations:1/repeats:20/real_time_stddev       8256 us         8280 us           20
+02-19 18:50:08.820 16915 16915 I Finsky  : [2] JobSchedulerEngine$PhoneskyJobSchedulerJobService.onStartJob(5): SCH: onJobSchedulerWakeup with jobId 9002
+02-19 18:50:08.823 16915 16915 I Finsky  : [2] tqe.a(19): Scheduling fallback job with id: 9034, and delay: 43200000 ms
+02-19 18:50:08.830 16915 16915 I Finsky  : [2] tqe.a(5): Scheduling fallback in 64799997 (absolute: 1381324283)
+02-19 18:50:08.879 16915 16915 I Finsky  : [2] tqn.handleMessage(10): SCH: DeviceState: DeviceState{currentTime=1582167008869, isCharging=true, isIdle=false, netAny=true, netNotRoaming=true, netUnmetered=true, batteryPercent=100.0}
+02-19 18:50:08.888 16915 23732 I Finsky  : [1878] ttb.a(7): SCH: Jobs in database: 1-1337 12-1 26-1414141414 34-209 34-217 34-220 34-223 34-224 34-225 34-228 34-229 34-230
+02-19 18:50:08.897 16915 16915 I Finsky  : [2] tqo.a(20): SCH: Running job: 12-1
+02-19 18:50:08.898 16915 16915 I Finsky  : [2] ContentSyncJob.a(14): ContentSyncJob started
+02-19 18:50:08.900 16915 16915 I Finsky  : [2] tqn.handleMessage(63): SCH: RunningQueue size: 1, PendingQueue size: 0
+02-19 18:50:08.900 16915 16915 I Finsky  : [2] tqn.handleMessage(66): SCH: Running queue: 12-1
+02-19 18:50:09.048 16915 23779 I Finsky  : [1886] ehn.a(29): Completed 0 account content syncs with 0 successful.
+02-19 18:50:09.049 16915 16915 I Finsky  : [2] ContentSyncJob.a(12): Installation state replication succeeded.
+02-19 18:50:09.049 16915 16915 I Finsky  : [2] try.a(16): SCH: jobFinished: 12-1. TimeElapsed: 152ms.
+02-19 18:50:09.049 16915 16915 I Finsky  : [2] tqo.a(37): SCH: Job 12-1 finished. Not rescheduling.
+02-19 18:50:09.050 16915 16915 I Finsky  : [2] tqn.handleMessage(63): SCH: RunningQueue size: 0, PendingQueue size: 0
+02-19 18:50:09.050 16915 16915 I Finsky  : [2] tqn.handleMessage(29): Executor finished
+02-19 18:50:09.172 16915 16915 I Finsky  : [2] ttb.a(7): SCH: Jobs in database: 1-1337 26-1414141414 34-209 34-217 34-220 34-223 34-224 34-225 34-228 34-229 34-230
+02-19 18:50:09.176 16915 16915 I Finsky  : [2] toy.a(58): SCH: ConstraintMapping: 1-1337, 34-229,  -> L: 29345251ms, D: 72545251ms, C: false, I: false, N: 1
+02-19 18:50:09.176 16915 16915 I Finsky  : [2] toy.a(58): SCH: ConstraintMapping: 34-209, 34-217, 34-220, 34-223, 34-224, 34-225, 34-228, 34-230,  -> L: 51009036ms, D: 1347009036ms, C: false, I: true, N: 2
+02-19 18:50:09.176 16915 16915 I Finsky  : [2] toy.a(58): SCH: ConstraintMapping: 34-209, 34-217, 34-220, 34-223, 34-224, 34-225, 34-228, 34-230,  -> L: 51009036ms, D: 1347009036ms, C: true, I: true, N: 2
+02-19 18:50:09.177 16915 16915 I Finsky  : [2] toy.a(58): SCH: ConstraintMapping: 26-1414141414,  -> L: 8138626ms, D: 9038626ms, C: false, I: false, N: 0
+02-19 18:50:09.187 16915 16915 I Finsky  : [2] trl.a(37): Cancelling existing jobscheduler jobs: 9006 9005 9004
+02-19 18:50:09.188 16915 16915 I Finsky  : [2] trl.a(30): Scheduling job Id: 9000, L: 29345251, D: 72545251, C: false, I: false, N: 1
+02-19 18:50:09.190 16915 16915 I Finsky  : [2] trl.a(30): Scheduling job Id: 9001, L: 51009036, D: 1347009036, C: false, I: true, N: 2
+02-19 18:50:09.190 16915 16915 I Finsky  : [2] trl.a(30): Scheduling job Id: 9003, L: 51009036, D: 1347009036, C: true, I: true, N: 2
+02-19 18:50:09.191 16915 16915 I Finsky  : [2] trl.a(30): Scheduling job Id: 9007, L: 8138626, D: 9038626, C: false, I: false, N: 0
+02-19 18:50:09.375 23789 23815 I cout    : BM_conv_agpu/base/ACX:3/N:1/H:224/W:224/KH:3/KW:3/py:2/px:1/S:1/D:1/G:1/GCin:3/GCout:32/iterations:1/repeats:20/real_time_mean       141709 us        70417 us           20
+02-19 18:50:09.375 23789 23815 I cout    : BM_conv_agpu/base/ACX:3/N:1/H:224/W:224/KH:3/KW:3/py:2/px:1/S:1/D:1/G:1/GCin:3/GCout:32/iterations:1/repeats:20/real_time_median     140432 us        69093 us           20
+02-19 18:50:09.375 23789 23815 I cout    : BM_conv_agpu/base/ACX:3/N:1/H:224/W:224/KH:3/KW:3/py:2/px:1/S:1/D:1/G:1/GCin:3/GCout:32/iterations:1/repeats:20/real_time_stddev       8655 us         8174 us           20
+02-19 18:50:09.534 23789 23815 I cout    : BM_conv_agpu/base/ACX:0/N:1/H:112/W:112/KH:3/KW:3/py:2/px:1/S:1/D:1/G:96/GCin:1/GCout:1/iterations:1/repeats:20/real_time_mean         4911 us         2212 us           20
+02-19 18:50:09.534 23789 23815 I cout    : BM_conv_agpu/base/ACX:0/N:1/H:112/W:112/KH:3/KW:3/py:2/px:1/S:1/D:1/G:96/GCin:1/GCout:1/iterations:1/repeats:20/real_time_median       3848 us         1134 us           20
+02-19 18:50:09.534 23789 23815 I cout    : BM_conv_agpu/base/ACX:0/N:1/H:112/W:112/KH:3/KW:3/py:2/px:1/S:1/D:1/G:96/GCin:1/GCout:1/iterations:1/repeats:20/real_time_stddev       4945 us         4944 us           20
+02-19 18:50:09.785 23789 23815 I cout    : BM_conv_agpu/base/ACX:1/N:1/H:112/W:112/KH:3/KW:3/py:2/px:1/S:1/D:1/G:96/GCin:1/GCout:1/iterations:1/repeats:20/real_time_mean         8417 us         3613 us           20
+02-19 18:50:09.785 23789 23815 I cout    : BM_conv_agpu/base/ACX:1/N:1/H:112/W:112/KH:3/KW:3/py:2/px:1/S:1/D:1/G:96/GCin:1/GCout:1/iterations:1/repeats:20/real_time_median       6176 us         1419 us           20
+02-19 18:50:09.785 23789 23815 I cout    : BM_conv_agpu/base/ACX:1/N:1/H:112/W:112/KH:3/KW:3/py:2/px:1/S:1/D:1/G:96/GCin:1/GCout:1/iterations:1/repeats:20/real_time_stddev      10167 us        10069 us           20
+02-19 18:50:10.099 23789 23815 I cout    : BM_conv_agpu/base/ACX:2/N:1/H:112/W:112/KH:3/KW:3/py:2/px:1/S:1/D:1/G:96/GCin:1/GCout:1/iterations:1/repeats:20/real_time_mean        10658 us         3890 us           20
+02-19 18:50:10.099 23789 23815 I cout    : BM_conv_agpu/base/ACX:2/N:1/H:112/W:112/KH:3/KW:3/py:2/px:1/S:1/D:1/G:96/GCin:1/GCout:1/iterations:1/repeats:20/real_time_median       8016 us         1627 us           20
+02-19 18:50:10.100 23789 23815 I cout    : BM_conv_agpu/base/ACX:2/N:1/H:112/W:112/KH:3/KW:3/py:2/px:1/S:1/D:1/G:96/GCin:1/GCout:1/iterations:1/repeats:20/real_time_stddev      10501 us        10695 us           20
+02-19 18:50:10.709 23789 23815 I cout    : BM_conv_agpu/base/ACX:3/N:1/H:112/W:112/KH:3/KW:3/py:2/px:1/S:1/D:1/G:96/GCin:1/GCout:1/iterations:1/repeats:20/real_time_mean        23515 us         6229 us           20
+02-19 18:50:10.709 23789 23815 I cout    : BM_conv_agpu/base/ACX:3/N:1/H:112/W:112/KH:3/KW:3/py:2/px:1/S:1/D:1/G:96/GCin:1/GCout:1/iterations:1/repeats:20/real_time_median      19818 us         2787 us           20
+02-19 18:50:10.709 23789 23815 I cout    : BM_conv_agpu/base/ACX:3/N:1/H:112/W:112/KH:3/KW:3/py:2/px:1/S:1/D:1/G:96/GCin:1/GCout:1/iterations:1/repeats:20/real_time_stddev      16522 us        15377 us           20
+02-19 18:50:12.664 23789 23815 I cout    : BM_conv_agpu/base/ACX:0/N:1/H:56/W:56/KH:1/KW:1/py:0/px:0/S:1/D:1/G:1/GCin:144/GCout:24/iterations:1/repeats:20/real_time_mean        22792 us        13172 us           20
+02-19 18:50:12.665 23789 23815 I cout    : BM_conv_agpu/base/ACX:0/N:1/H:56/W:56/KH:1/KW:1/py:0/px:0/S:1/D:1/G:1/GCin:144/GCout:24/iterations:1/repeats:20/real_time_median      21715 us        12076 us           20
+02-19 18:50:12.665 23789 23815 I cout    : BM_conv_agpu/base/ACX:0/N:1/H:56/W:56/KH:1/KW:1/py:0/px:0/S:1/D:1/G:1/GCin:144/GCout:24/iterations:1/repeats:20/real_time_stddev       4905 us         4813 us           20
+02-19 18:50:14.419 31197 31211 W System  : A resource failed to call close.
+02-19 18:50:14.420 31197 31211 W System  : A resource failed to call close.
+02-19 18:50:15.089 23789 23815 I cout    : BM_conv_agpu/base/ACX:1/N:1/H:56/W:56/KH:1/KW:1/py:0/px:0/S:1/D:1/G:1/GCin:144/GCout:24/iterations:1/repeats:20/real_time_mean        39797 us        23425 us           20
+02-19 18:50:15.089 23789 23815 I cout    : BM_conv_agpu/base/ACX:1/N:1/H:56/W:56/KH:1/KW:1/py:0/px:0/S:1/D:1/G:1/GCin:144/GCout:24/iterations:1/repeats:20/real_time_median      38011 us        21631 us           20
+02-19 18:50:15.089 23789 23815 I cout    : BM_conv_agpu/base/ACX:1/N:1/H:56/W:56/KH:1/KW:1/py:0/px:0/S:1/D:1/G:1/GCin:144/GCout:24/iterations:1/repeats:20/real_time_stddev       7386 us         7478 us           20
+02-19 18:50:17.491 23789 23815 I cout    : BM_conv_agpu/base/ACX:2/N:1/H:56/W:56/KH:1/KW:1/py:0/px:0/S:1/D:1/G:1/GCin:144/GCout:24/iterations:1/repeats:20/real_time_mean        38890 us        21859 us           20
+02-19 18:50:17.491 23789 23815 I cout    : BM_conv_agpu/base/ACX:2/N:1/H:56/W:56/KH:1/KW:1/py:0/px:0/S:1/D:1/G:1/GCin:144/GCout:24/iterations:1/repeats:20/real_time_median      38088 us        21831 us           20
+02-19 18:50:17.491 23789 23815 I cout    : BM_conv_agpu/base/ACX:2/N:1/H:56/W:56/KH:1/KW:1/py:0/px:0/S:1/D:1/G:1/GCin:144/GCout:24/iterations:1/repeats:20/real_time_stddev      11544 us         8457 us           20
+02-19 18:50:19.893 23789 23815 I cout    : BM_conv_agpu/base/ACX:3/N:1/H:56/W:56/KH:1/KW:1/py:0/px:0/S:1/D:1/G:1/GCin:144/GCout:24/iterations:1/repeats:20/real_time_mean        38948 us        21512 us           20
+02-19 18:50:19.893 23789 23815 I cout    : BM_conv_agpu/base/ACX:3/N:1/H:56/W:56/KH:1/KW:1/py:0/px:0/S:1/D:1/G:1/GCin:144/GCout:24/iterations:1/repeats:20/real_time_median      37885 us        20707 us           20
+02-19 18:50:19.893 23789 23815 I cout    : BM_conv_agpu/base/ACX:3/N:1/H:56/W:56/KH:1/KW:1/py:0/px:0/S:1/D:1/G:1/GCin:144/GCout:24/iterations:1/repeats:20/real_time_stddev      10514 us        10277 us           20
+02-19 18:50:19.925 23789 23815 I cout    : BM_conv_agpu/base/ACX:0/N:1/H:28/W:28/KH:3/KW:3/py:1/px:1/S:2/D:1/G:192/GCin:1/GCout:1/iterations:1/repeats:20/real_time_mean          1253 us          630 us           20
+02-19 18:50:19.925 23789 23815 I cout    : BM_conv_agpu/base/ACX:0/N:1/H:28/W:28/KH:3/KW:3/py:1/px:1/S:2/D:1/G:192/GCin:1/GCout:1/iterations:1/repeats:20/real_time_median        1208 us          572 us           20
+02-19 18:50:19.925 23789 23815 I cout    : BM_conv_agpu/base/ACX:0/N:1/H:28/W:28/KH:3/KW:3/py:1/px:1/S:2/D:1/G:192/GCin:1/GCout:1/iterations:1/repeats:20/real_time_stddev         185 us          209 us           20
+02-19 18:50:19.956 23789 23815 I cout    : BM_conv_agpu/base/ACX:1/N:1/H:28/W:28/KH:3/KW:3/py:1/px:1/S:2/D:1/G:192/GCin:1/GCout:1/iterations:1/repeats:20/real_time_mean          1227 us          642 us           20
+02-19 18:50:19.956 23789 23815 I cout    : BM_conv_agpu/base/ACX:1/N:1/H:28/W:28/KH:3/KW:3/py:1/px:1/S:2/D:1/G:192/GCin:1/GCout:1/iterations:1/repeats:20/real_time_median        1090 us          526 us           20
+02-19 18:50:19.956 23789 23815 I cout    : BM_conv_agpu/base/ACX:1/N:1/H:28/W:28/KH:3/KW:3/py:1/px:1/S:2/D:1/G:192/GCin:1/GCout:1/iterations:1/repeats:20/real_time_stddev         449 us          424 us           20
+02-19 18:50:19.980 23789 23815 I cout    : BM_conv_agpu/base/ACX:2/N:1/H:28/W:28/KH:3/KW:3/py:1/px:1/S:2/D:1/G:192/GCin:1/GCout:1/iterations:1/repeats:20/real_time_mean           851 us          372 us           20
+02-19 18:50:19.980 23789 23815 I cout    : BM_conv_agpu/base/ACX:2/N:1/H:28/W:28/KH:3/KW:3/py:1/px:1/S:2/D:1/G:192/GCin:1/GCout:1/iterations:1/repeats:20/real_time_median         836 us          367 us           20
+02-19 18:50:19.980 23789 23815 I cout    : BM_conv_agpu/base/ACX:2/N:1/H:28/W:28/KH:3/KW:3/py:1/px:1/S:2/D:1/G:192/GCin:1/GCout:1/iterations:1/repeats:20/real_time_stddev        63.2 us         18.3 us           20
+02-19 18:50:20.001 23789 23815 I cout    : BM_conv_agpu/base/ACX:3/N:1/H:28/W:28/KH:3/KW:3/py:1/px:1/S:2/D:1/G:192/GCin:1/GCout:1/iterations:1/repeats:20/real_time_mean           713 us          296 us           20
+02-19 18:50:20.001 23789 23815 I cout    : BM_conv_agpu/base/ACX:3/N:1/H:28/W:28/KH:3/KW:3/py:1/px:1/S:2/D:1/G:192/GCin:1/GCout:1/iterations:1/repeats:20/real_time_median         708 us          294 us           20
+02-19 18:50:20.001 23789 23815 I cout    : BM_conv_agpu/base/ACX:3/N:1/H:28/W:28/KH:3/KW:3/py:1/px:1/S:2/D:1/G:192/GCin:1/GCout:1/iterations:1/repeats:20/real_time_stddev        13.5 us         9.32 us           20
+02-19 18:50:20.504 23789 23815 I cout    : BM_conv_agpu/base/ACX:0/N:1/H:14/W:14/KH:1/KW:1/py:0/px:0/S:1/D:1/G:1/GCin:384/GCout:96/iterations:1/repeats:20/real_time_mean         6983 us         5182 us           20
+02-19 18:50:20.504 23789 23815 I cout    : BM_conv_agpu/base/ACX:0/N:1/H:14/W:14/KH:1/KW:1/py:0/px:0/S:1/D:1/G:1/GCin:384/GCout:96/iterations:1/repeats:20/real_time_median       5831 us         3991 us           20
+02-19 18:50:20.504 23789 23815 I cout    : BM_conv_agpu/base/ACX:0/N:1/H:14/W:14/KH:1/KW:1/py:0/px:0/S:1/D:1/G:1/GCin:384/GCout:96/iterations:1/repeats:20/real_time_stddev       5709 us         5692 us           20
+02-19 18:50:20.575 23789 23814 I Adreno  : Error: Compute shader work group size exceed limit
+02-19 18:50:20.575 23789 23815 I cout    : /Users/ivankobzarev/myforks/pytorch/android/agpu/src/agpu.cpp:524: void agpu::AGLShader::useProgram(): assertion "GL_NO_ERROR == error" failed
+02-19 18:50:20.575 23789 23814 F libc    : /Users/ivankobzarev/myforks/pytorch/android/agpu/src/agpu.cpp:524: void agpu::AGLShader::useProgram(): assertion "GL_NO_ERROR == error" failed
+02-19 18:50:20.575 23789 23814 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 23814 (pytorch-bench_b), pid 23789 (h.testapp.bench)
+02-19 18:50:20.614 23830 23830 I crash_dump64: obtaining output fd from tombstoned, type: kDebuggerdTombstone
+02-19 18:50:20.614  1017  1017 I /system/bin/tombstoned: received crash request for pid 23814
+02-19 18:50:20.615 23830 23830 I crash_dump64: performing dump of process 23789 (target tid = 23814)
+02-19 18:50:20.620 23830 23830 F DEBUG   : *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+02-19 18:50:20.620 23830 23830 F DEBUG   : Build fingerprint: 'google/crosshatch/crosshatch:10/QQ1A.200205.002/6084386:user/release-keys'
+02-19 18:50:20.620 23830 23830 F DEBUG   : Revision: 'MP1.0'
+02-19 18:50:20.620 23830 23830 F DEBUG   : ABI: 'arm64'
+02-19 18:50:20.628 23830 23830 F DEBUG   : Timestamp: 2020-02-19 18:50:20-0800
+02-19 18:50:20.628 23830 23830 F DEBUG   : pid: 23789, tid: 23814, name: pytorch-bench_b  >>> org.pytorch.testapp.bench <<<
+02-19 18:50:20.628 23830 23830 F DEBUG   : uid: 10256
+02-19 18:50:20.628 23830 23830 F DEBUG   : signal 6 (SIGABRT), code -1 (SI_QUEUE), fault addr --------
+02-19 18:50:20.628 23830 23830 F DEBUG   : Abort message: '/Users/ivankobzarev/myforks/pytorch/android/agpu/src/agpu.cpp:524: void agpu::AGLShader::useProgram(): assertion "GL_NO_ERROR == error" failed'
+02-19 18:50:20.628 23830 23830 F DEBUG   :     x0  0000000000000000  x1  0000000000005d06  x2  0000000000000006  x3  000000762f52a8d0
+02-19 18:50:20.628 23830 23830 F DEBUG   :     x4  0000000000008080  x5  0000000000008080  x6  0000000000008080  x7  0000000000000038
+02-19 18:50:20.628 23830 23830 F DEBUG   :     x8  00000000000000f0  x9  a16dc618d645826d  x10 0000000000000001  x11 0000000000000000
+02-19 18:50:20.628 23830 23830 F DEBUG   :     x12 fffffff0fffffbdf  x13 0000000000000018  x14 000016fd6264aaa6  x15 00221005da6a29d4
+02-19 18:50:20.628 23830 23830 F DEBUG   :     x16 000000771885e8c0  x17 000000771883c100  x18 000000762ef4a000  x19 0000000000005ced
+02-19 18:50:20.628 23830 23830 F DEBUG   :     x20 0000000000005d06  x21 00000000ffffffff  x22 000000762f52ed00  x23 000000768f2bee94
+02-19 18:50:20.628 23830 23830 F DEBUG   :     x24 0000000000000004  x25 000000762f530020  x26 0000007686c6acb0  x27 0000000000000001
+02-19 18:50:20.628 23830 23830 F DEBUG   :     x28 000000762f52ea90  x29 000000762f52a970
+02-19 18:50:20.628 23830 23830 F DEBUG   :     sp  000000762f52a8b0  lr  00000077187f0f48  pc  00000077187f0f74
+02-19 18:50:20.719 23830 23830 F DEBUG   :
+02-19 18:50:20.719 23830 23830 F DEBUG   : backtrace:
+02-19 18:50:20.719 23830 23830 F DEBUG   :       #00 pc 0000000000081f74  /apex/com.android.runtime/lib64/bionic/libc.so (abort+160) (BuildId: 676a709a0ee633ec9cf6ab05ec6410ae)
+02-19 18:50:20.719 23830 23830 F DEBUG   :       #01 pc 0000000000082330  /apex/com.android.runtime/lib64/bionic/libc.so (__assert2+36) (BuildId: 676a709a0ee633ec9cf6ab05ec6410ae)
+02-19 18:50:20.719 23830 23830 F DEBUG   :       #02 pc 0000000001d1abb0  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (agpu::AGLShader::useProgram()+116) (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.719 23830 23830 F DEBUG   :       #03 pc 0000000001d1c2b4  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (agpu::agpu_conv2d_buffers_sOutNc4nc(float const*, unsigned int, unsigned int, unsigned int, unsigned int, float const*, unsigned int, unsigned int, unsigned int, float const*, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, float*)+2292) (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.719 23830 23830 F DEBUG   :       #04 pc 000000000021c520  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.719 23830 23830 F DEBUG   :       #05 pc 000000000021b884  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.719 23830 23830 F DEBUG   :       #06 pc 000000000021b850  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.719 23830 23830 F DEBUG   :       #07 pc 0000000001d2d88c  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (benchmark::internal::FunctionBenchmark::Run(benchmark::State&)+32) (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.719 23830 23830 F DEBUG   :       #08 pc 0000000001d6f600  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (benchmark::internal::BenchmarkInstance::Run(unsigned long, int, benchmark::internal::ThreadTimer*, benchmark::internal::ThreadManager*) const+124) (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.719 23830 23830 F DEBUG   :       #09 pc 0000000001d522f4  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.719 23830 23830 F DEBUG   :       #10 pc 0000000001d51a24  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.719 23830 23830 F DEBUG   :       #11 pc 0000000001d50f20  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #12 pc 0000000001d50c2c  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #13 pc 0000000001d50964  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (benchmark::internal::RunBenchmark(benchmark::internal::BenchmarkInstance const&, std::__ndk1::vector<benchmark::BenchmarkReporter::Run, std::__ndk1::allocator<benchmark::BenchmarkReporter::Run>>*)+60) (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #14 pc 0000000001d25c3c  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #15 pc 0000000001d25344  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (benchmark::RunSpecifiedBenchmarks(benchmark::BenchmarkReporter*, benchmark::BenchmarkReporter*)+1116) (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #16 pc 0000000001d24edc  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (benchmark::RunSpecifiedBenchmarks()+20) (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #17 pc 0000000000213590  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (pytorch_jni_agpu::gbench_main(std::__ndk1::basic_string<char, std::__ndk1::char_traits<char>, std::__ndk1::allocator<char>> const&)+388) (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #18 pc 00000000001f8ca4  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (pytorch_jni::PyTorchAndroidJni::agpu_gbench(facebook::jni::alias_ref<_jclass*>, facebook::jni::alias_ref<_jstring*>)+48) (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #19 pc 00000000001f9978  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (_ZN8facebook3jni6detail17WrapForVoidReturnIPFvNS0_9alias_refIP7_jclassEENS3_IP8_jstringEEEXadL_ZN11pytorch_jni17PyTorchAndroidJni11agpu_gbenchES6_S9_EEvJS5_S9_EE4callEOS5_OS9_+104) (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #20 pc 00000000001f9830  /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/lib/arm64/libpytorch_jni.so (_ZN8facebook3jni6detail15FunctionWrapperIPFvNS0_9alias_refIP7_jclassEENS3_IP8_jstringEEEXadL_ZN11pytorch_jni17PyTorchAndroidJni11agpu_gbenchES6_S9_EES5_vJS9_EE4callEP7_JNIEnvP8_jobjectS8_+80) (BuildId: 1ff2d48c471a340124df965f1ac6271cef932610)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #21 pc 000000000013f350  /apex/com.android.runtime/lib64/libart.so (art_quick_generic_jni_trampoline+144) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #22 pc 00000000001365b8  /apex/com.android.runtime/lib64/libart.so (art_quick_invoke_static_stub+568) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #23 pc 000000000014508c  /apex/com.android.runtime/lib64/libart.so (art::ArtMethod::Invoke(art::Thread*, unsigned int*, unsigned int, art::JValue*, char const*)+276) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #24 pc 00000000002df75c  /apex/com.android.runtime/lib64/libart.so (art::interpreter::ArtInterpreterToCompiledCodeBridge(art::Thread*, art::ArtMethod*, art::ShadowFrame*, unsigned short, art::JValue*)+384) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #25 pc 00000000002daa3c  /apex/com.android.runtime/lib64/libart.so (bool art::interpreter::DoCall<false, false>(art::ArtMethod*, art::Thread*, art::ShadowFrame&, art::Instruction const*, unsigned short, art::JValue*)+912) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #26 pc 000000000059adb0  /apex/com.android.runtime/lib64/libart.so (MterpInvokeStatic+368) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #27 pc 0000000000130994  /apex/com.android.runtime/lib64/libart.so (mterp_op_invoke_static+20) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #28 pc 000000000001bf74  [anon:dalvik-classes2.dex extracted in memory from /data/app/org.pytorch.testapp.bench-p8S4FzChbFRMWV1u0ZhEug==/base.apk!classes2.dex] (org.pytorch.testapp.MainActivity$1.run+256)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #29 pc 0000000000599d08  /apex/com.android.runtime/lib64/libart.so (MterpInvokeInterface+1740) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #30 pc 0000000000130a14  /apex/com.android.runtime/lib64/libart.so (mterp_op_invoke_interface+20) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #31 pc 00000000002f65e8  /system/framework/framework.jar (android.os.Handler.handleCallback+4)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #32 pc 000000000059b0b0  /apex/com.android.runtime/lib64/libart.so (MterpInvokeStatic+1136) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #33 pc 0000000000130994  /apex/com.android.runtime/lib64/libart.so (mterp_op_invoke_static+20) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #34 pc 00000000002f6454  /system/framework/framework.jar (android.os.Handler.dispatchMessage+8)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #35 pc 0000000000598514  /apex/com.android.runtime/lib64/libart.so (MterpInvokeVirtual+1432) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #36 pc 0000000000130814  /apex/com.android.runtime/lib64/libart.so (mterp_op_invoke_virtual+20) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #37 pc 000000000031ab4e  /system/framework/framework.jar (android.os.Looper.loop+466)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #38 pc 000000000059b0b0  /apex/com.android.runtime/lib64/libart.so (MterpInvokeStatic+1136) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #39 pc 0000000000130994  /apex/com.android.runtime/lib64/libart.so (mterp_op_invoke_static+20) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #40 pc 00000000002f5b70  /system/framework/framework.jar (android.os.HandlerThread.run+56)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #41 pc 00000000002b03a8  /apex/com.android.runtime/lib64/libart.so (_ZN3art11interpreterL7ExecuteEPNS_6ThreadERKNS_20CodeItemDataAccessorERNS_11ShadowFrameENS_6JValueEbb.llvm.15430740532710954497+240) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #42 pc 000000000058980c  /apex/com.android.runtime/lib64/libart.so (artQuickToInterpreterBridge+1012) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #43 pc 000000000013f468  /apex/com.android.runtime/lib64/libart.so (art_quick_to_interpreter_bridge+88) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #44 pc 0000000000136334  /apex/com.android.runtime/lib64/libart.so (art_quick_invoke_stub+548) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #45 pc 000000000014506c  /apex/com.android.runtime/lib64/libart.so (art::ArtMethod::Invoke(art::Thread*, unsigned int*, unsigned int, art::JValue*, char const*)+244) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #46 pc 00000000004a9b0c  /apex/com.android.runtime/lib64/libart.so (art::(anonymous namespace)::InvokeWithArgArray(art::ScopedObjectAccessAlreadyRunnable const&, art::ArtMethod*, art::(anonymous namespace)::ArgArray*, art::JValue*, char const*)+104) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #47 pc 00000000004aaba0  /apex/com.android.runtime/lib64/libart.so (art::InvokeVirtualOrInterfaceWithJValues(art::ScopedObjectAccessAlreadyRunnable const&, _jobject*, _jmethodID*, jvalue const*)+416) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #48 pc 00000000004ea93c  /apex/com.android.runtime/lib64/libart.so (art::Thread::CreateCallback(void*)+1176) (BuildId: fae49a1a0a2c26be5c2eae7e9af12b7b)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #49 pc 00000000000e1100  /apex/com.android.runtime/lib64/bionic/libc.so (__pthread_start(void*)+36) (BuildId: 676a709a0ee633ec9cf6ab05ec6410ae)
+02-19 18:50:20.720 23830 23830 F DEBUG   :       #50 pc 0000000000083ab0  /apex/com.android.runtime/lib64/bionic/libc.so (__start_thread+64) (BuildId: 676a709a0ee633ec9cf6ab05ec6410ae)
+02-19 18:50:20.946  1017  1017 E /system/bin/tombstoned: Tombstone written to: /data/tombstones/tombstone_02
+02-19 18:50:20.950  1471 23834 I DropBoxManagerService: add tag=data_app_native_crash isTagEnabled=true flags=0x2
+02-19 18:50:20.951  1471 23833 W ActivityTaskManager:   Force finishing activity org.pytorch.testapp.bench/org.pytorch.testapp.MainActivity
+02-19 18:50:20.963  1471  1508 I BootReceiver: Copying /data/tombstones/tombstone_02 to DropBox (SYSTEM_TOMBSTONE)
+02-19 18:50:20.963  1471  1508 I DropBoxManagerService: add tag=SYSTEM_TOMBSTONE isTagEnabled=true flags=0x2
+02-19 18:50:20.989  1471  1945 W InputDispatcher: channel 'ae7c768 org.pytorch.testapp.bench/org.pytorch.testapp.MainActivity (server)' ~ Consumer closed input channel or an error occurred.  events=0x9
+02-19 18:50:20.989  1471  1945 E InputDispatcher: channel 'ae7c768 org.pytorch.testapp.bench/org.pytorch.testapp.MainActivity (server)' ~ Channel is unrecoverably broken and will be disposed!
+02-19 18:50:20.991  1471  1499 W BroadcastQueue: Background execution not allowed: receiving Intent { act=android.intent.action.DROPBOX_ENTRY_ADDED flg=0x10 (has extras) } to com.google.android.gms/.stats.service.DropBoxEntryAddedReceiver
+02-19 18:50:20.991   913   913 I Zygote  : Process 23789 exited due to signal 6 (Aborted)
+02-19 18:50:20.991  1471  1499 W BroadcastQueue: Background execution not allowed: receiving Intent { act=android.intent.action.DROPBOX_ENTRY_ADDED flg=0x10 (has extras) } to com.google.android.gms/.chimera.GmsIntentOperationService$PersistentTrustedReceiver
+02-19 18:50:20.991  1471  3037 I WindowManager: WIN DEATH: Window{ae7c768 u0 org.pytorch.testapp.bench/org.pytorch.testapp.MainActivity}
+02-19 18:50:20.991  1471  3037 W InputDispatcher: Attempted to unregister already unregistered input channel 'ae7c768 org.pytorch.testapp.bench/org.pytorch.testapp.MainActivity (server)'
+02-19 18:50:20.994   973   973 W lowmemorykiller: Failed to open /proc/23789/oom_score_adj; errno=2: process 23789 might have been killed
+02-19 18:50:20.999  1471  1501 I libprocessgroup: Successfully killed process cgroup uid 10256 pid 23789 in 0ms
+02-19 18:50:21.002  1471  3016 I ActivityManager: Process org.pytorch.testapp.bench (pid 23789) has died: vis+99 TOP
+02-19 18:50:21.025  1471  1499 W BroadcastQueue: Background execution not allowed: receiving Intent { act=android.intent.action.DROPBOX_ENTRY_ADDED flg=0x10 (has extras) } to com.google.android.gms/.stats.service.DropBoxEntryAddedReceiver
+02-19 18:50:21.025  1471  1499 W BroadcastQueue: Background execution not allowed: receiving Intent { act=android.intent.action.DROPBOX_ENTRY_ADDED flg=0x10 (has extras) } to com.google.android.gms/.chimera.GmsIntentOperationService$PersistentTrustedReceiver
+02-19 18:50:21.027  1471  1493 W ActivityManager: setHasOverlayUi called on unknown pid: 23789
+02-19 18:50:21.082 31697 31760 W ThreadPoolDumper: Queue length for executor EventBus is now 11. Perhaps some tasks are too long, or the pool is too small.
+02-19 18:50:21.095  1471  3016 I DropBoxManagerService: add tag=platform_stats_bookmark isTagEnabled=true flags=0x2
+02-19 18:50:21.097 31697 31760 I MicroDataManager: isInitializing-false locale not changed-true model not changed-true
+02-19 18:50:21.099  1471  1499 W BroadcastQueue: Background execution not allowed: receiving Intent { act=android.intent.action.DROPBOX_ENTRY_ADDED flg=0x10 (has extras) } to com.google.android.gms/.stats.service.DropBoxEntryAddedReceiver
+02-19 18:50:21.100  1471  1499 W BroadcastQueue: Background execution not allowed: receiving Intent { act=android.intent.action.DROPBOX_ENTRY_ADDED flg=0x10 (has extras) } to com.google.android.gms/.chimera.GmsIntentOperationService$PersistentTrustedReceiver
+02-19 18:50:21.104 31697 31760 I StreamController: registerScope: nowcards-15-4e776490-7848
+02-19 18:50:21.108 31197 27322 I Icing   : IndexChimeraService.getServiceInterface callingPackage=com.google.android.googlequicksearchbox componentName=null serviceId=36
+02-19 18:50:21.108 31197 15606 I Icing   : IndexChimeraService.getServiceInterface callingPackage=com.google.android.gms componentName=null serviceId=36
+02-19 18:50:21.127 31697 31808 W LocationOracle: No location history returned by ContextManager
+02-19 18:50:21.131 31697 31760 I MicroDetectionState: Should stop hotword detection immediately - false
+02-19 18:50:21.133 31697 31760 I MicroDetectionState: Should stop hotword detection immediately - false
+02-19 18:50:21.149 31197 15606 I Icing   : IndexChimeraService.getServiceInterface callingPackage=com.google.android.gms componentName=null serviceId=30
+02-19 18:50:21.157 31197 20956 I Icing   : Usage reports ok 1, Failed Usage reports 0, indexed 0, rejected 0
+02-19 18:50:21.163 31197 20956 I Icing   : Usage reports ok 0, Failed Usage reports 0, indexed 0, rejected 0
+02-19 18:50:21.169 31197 20956 I Icing   : Usage reports ok 0, Failed Usage reports 0, indexed 0, rejected 0
+02-19 18:50:27.745   935   935 I /vendor/bin/hw/android.hardware.health@2.0-service.crosshatch: Entry state_: 1 charger_status: Full batteryLevel: 99
+02-19 18:50:27.745   935   935 I /vendor/bin/hw/android.hardware.health@2.0-service.crosshatch: Exit state_: 1 batteryLevel: 100
+02-19 18:50:27.745   935   935 I /vendor/bin/hw/android.hardware.health@2.0-service.crosshatch: Recording a sample at time 1316543
+02-19 18:50:27.777  2767  3409 D PowerUI : can't show warning due to - plugged: true status unknown: false
+02-19 18:50:46.946   945  1190 I CHRE    : @ 1316564.562: [ImuCal] [NanoSensorCal:GYRO_RPS] Offset | Temperature [C]: 0.001341, -0.000173, 0.000338 | 23.96
+02-19 18:50:46.946   945  1190 I CHRE    : @ 1316564.563: [ImuCal] [NanoSensorCal:GYRO_RPS] Temp Sensitivity: -0.000090, -0.000045, 0.000076
+02-19 18:50:46.946   945  1190 I CHRE    : @ 1316564.563: [ImuCal] [NanoSensorCal:GYRO_RPS] Temp Intercept: 0.003167, 0.000854, -0.001405
+02-19 18:50:51.146 31697 23665 W GmsLocationProvider: Error removing location updates: 16
+02-19 18:50:51.163 16915 16936 I Finsky  : [1545] kaw.run(3): Stats for Executor: BlockingExecutor kct@421119a[Running, pool size = 3, active threads = 0, queued tasks = 0, completed tasks = 186]
+02-19 18:50:51.164 16915 16936 I Finsky  : [1545] kaw.run(3): Stats for Executor: LightweightExecutor kct@c8d9acb[Running, pool size = 4, active threads = 0, queued tasks = 0, completed tasks = 72]
+02-19 18:50:51.266 16915 16936 I Finsky  : [1545] kaw.run(3): Stats for Executor: bgExecutor kct@176f2a8[Running, pool size = 4, active threads = 0, queued tasks = 0, completed tasks = 639]
+

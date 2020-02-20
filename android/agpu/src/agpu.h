@@ -1,6 +1,6 @@
 #pragma once
 
-#define AGPU_VERBOSE true
+#define AGPU_VERBOSE false
 
 #include <stdint.h>
 #include <stdio.h>
@@ -22,15 +22,15 @@
 #define FUNC_PRINT_ALL(x, type) \
   APRINT(#x "=" #type " %" #type " in %s, %d \n", x, __func__, __LINE__);
 
-#define AGL_CHECK_ERROR                                                       \
-  {                                                                           \
-    GLenum error = glGetError();                                              \
-    if (GL_NO_ERROR != error) {                                               \
-      APRINT(                                                                 \
+#define AGL_CHECK_ERROR \
+  { \
+    GLenum error = glGetError(); \
+    if (GL_NO_ERROR != error) { \
+      APRINT(\
           "File = %s Line = %d Func=%s\n", __FILE__, __LINE__, __FUNCTION__); \
-      FUNC_PRINT_ALL(error, 0x);                                              \
-    }                                                                         \
-    assert(GL_NO_ERROR == error);                                             \
+      FUNC_PRINT_ALL(error, 0x); \
+    } \
+    assert(GL_NO_ERROR == error); \
   }
 namespace agpu {
 
@@ -54,7 +54,7 @@ void agpu_conv2d(
     uint32_t groups,
     float* output);
 
-void agpu_conv2d_stextures(
+void agpu_conv2d_sTextures(
     const float* input,
     uint32_t input_n,
     uint32_t input_c,
@@ -74,7 +74,7 @@ void agpu_conv2d_stextures(
     uint32_t groups,
     float* output);
 
-void agpu_conv2d_buffers_soutnc4nc(
+void agpu_conv2d_buffers_sOutNc4nc(
     const float* input,
     uint32_t input_n,
     uint32_t input_c,
@@ -94,7 +94,7 @@ void agpu_conv2d_buffers_soutnc4nc(
     uint32_t groups,
     float* output);
 
-void agpu_conv2d_buffers_soutnchw(
+void agpu_conv2d_buffers_sOutNchw(
     const float* input,
     uint32_t input_n,
     uint32_t input_c,
@@ -114,7 +114,7 @@ void agpu_conv2d_buffers_soutnchw(
     uint32_t groups,
     float* output);
 
-void agpu_conv2d_buffers_sinoutnchw(
+void agpu_conv2d_buffers_sInOutNchw(
     const float* input,
     uint32_t input_n,
     uint32_t input_c,
