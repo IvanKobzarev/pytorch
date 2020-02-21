@@ -611,10 +611,11 @@ static void BM_conv_agpu_Args(
     int64_t g,
     int64_t gcin,
     int64_t gcout) {
-  //b->Args({0, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
-  b->Args({1, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
-  //b->Args({2, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
-  //b->Args({3, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  b->Args({0, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  b->Args({10, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  b->Args({11, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  // b->Args({20, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  // b->Args({30, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
 }
 
 static void BM_conv_agpu_args_base(benchmark::internal::Benchmark* b) {
@@ -634,7 +635,7 @@ static void BM_conv_agpu_args_base(benchmark::internal::Benchmark* b) {
   /*             N   H    W   KH  KW  py  px  S  D    G  GCin  GCout */
   BM_conv_agpu_Args(b, 1, 224, 224, 3, 3, 2, 1, 1, 1, 1, 3, 32);
   // BM_conv_agpu_Args(b, 1, 112, 112, 3, 3, 2, 1, 1, 1, 96, 1, 1);
-  BM_conv_agpu_Args(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
+  // BM_conv_agpu_Args(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
   // BM_conv_agpu_Args(b, 1, 28, 28, 3, 3, 1, 1, 2, 1, 192, 1, 1);
   // BM_conv_agpu_Args(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 96);
   // BM_conv_agpu_Args(b, 1, 7, 7, 3, 3, 1, 1, 1, 1, 960, 1, 1);
@@ -709,60 +710,126 @@ static void BM_conv_agpu_args_base_test(benchmark::internal::Benchmark* b) {
            /* cout */ 2});
 }
 
+uint64_t getCurrentCpuFrequency() {
+#ifdef __linux__
+  int freq = 0;
+  char cpuinfo_name[512];
+  int cpu = sched_getcpu();
+  snprintf(
+      cpuinfo_name,
+      sizeof(cpuinfo_name),
+      "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq",
+      cpu);
+
+  FILE* f = fopen(cpuinfo_name, "r");
+  if (f) {
+    if (fscanf(f, "%d", &freq)) {
+      fclose(f);
+      return uint64_t(freq) * 1000;
+    }
+    fclose(f);
+  }
+#endif // __linux__
+  return 0;
+}
+
+static void* wipe_buffer = nullptr;
+static size_t wipe_buffer_size = 0;
+
+static pthread_once_t wipe_buffer_guard = PTHREAD_ONCE_INIT;
+
+static void initWipeBuffer() {
+  // Default: the largest know cache size (128 MB Intel Crystalwell L4 cache).
+  wipe_buffer_size = 128 * 1024 * 1024;
+#if defined(__ANDROID__)
+  // memalign is obsolete, but it is the only option on Android until API
+  // level 17.
+  wipe_buffer = memalign(128, wipe_buffer_size);
+#else
+  (void)posix_memalign((void**)&wipe_buffer, 128, wipe_buffer_size);
+#endif
+  if (wipe_buffer != nullptr) {
+    memset(wipe_buffer, 0xA5, wipe_buffer_size);
+  }
+}
+
+static uint32_t prefetchToL1(const void* ptr, size_t size) {
+  uint32_t step = 16;
+  const uint8_t* u8_ptr = static_cast<const uint8_t*>(ptr);
+  // Compute and return sum of data to prevent compiler from removing data
+  // reads.
+  uint32_t sum = 0;
+  while (size >= step) {
+    sum += uint32_t(*u8_ptr);
+    u8_ptr += step;
+    size -= step;
+  }
+  return sum;
+}
+
+uint32_t wipeCache() {
+  pthread_once(&wipe_buffer_guard, &initWipeBuffer);
+  return prefetchToL1(wipe_buffer, wipe_buffer_size);
+}
+
 static void BM_conv_agpu(benchmark::State& state, const char* name) {
+  const int64_t agpuConvX = state.range(0);
+
+  const int64_t agpuConvMethod = agpuConvX / 10;
+  const int64_t agpuConvMethodMod = agpuConvX % 10;
+
+  const int64_t n = state.range(1);
+  const int64_t h = state.range(2);
+  const int64_t w = state.range(3);
+
+  const int64_t kh = state.range(4);
+  const int64_t kw = state.range(5);
+
+  const int64_t py = state.range(6);
+  const int64_t px = state.range(7);
+
+  const int64_t stride = state.range(8);
+  const int64_t dilation = state.range(9);
+
+  const int64_t groups = state.range(10);
+  const int64_t groups_c_in = state.range(11);
+  const int64_t groups_c_out = state.range(12);
+
+  const int64_t c_in = groups_c_in;
+  const int64_t c_out = groups_c_out;
+
+  std::random_device random_device;
+  auto rng = std::mt19937(random_device());
+  auto f32rng =
+      std::bind(std::uniform_real_distribution<float>(0.0f, 1.0f), rng);
+
+  std::vector<float> input(n * c_in * h * w);
+  std::generate(input.begin(), input.end(), std::ref(f32rng));
+
+  std::vector<float> kernel(c_out * c_in * kh * kw);
+  std::generate(kernel.begin(), kernel.end(), std::ref(f32rng));
+
+  std::vector<float> bias(c_out);
+  std::generate(bias.begin(), bias.end(), std::ref(f32rng));
+
+  const size_t khe = (kh - 1) * dilation + 1;
+  const size_t kwe = (kw - 1) * dilation + 1;
+  const size_t output_h = (h + 2 * py - khe) / stride + 1;
+  const size_t output_w = (w + 2 * px - kwe) / stride + 1;
+
+  std::vector<float> output(n * c_out * output_w * output_h);
+  using fp_conv2d_t = decltype(&agpu::agpu_conv2d_);
+  static fp_conv2d_t fa[4] = {agpu::agpu_conv2d_sTextures,
+                              agpu::agpu_conv2d_buffers_sOutNc4nc,
+                              agpu::agpu_conv2d_buffers_sOutNchw,
+                              agpu::agpu_conv2d_buffers_sInOutNchw};
+
   for (auto _ : state) {
     state.PauseTiming();
-    const int64_t agpuConvX = state.range(0);
-
-    const int64_t n = state.range(1);
-    const int64_t h = state.range(2);
-    const int64_t w = state.range(3);
-
-    const int64_t kh = state.range(4);
-    const int64_t kw = state.range(5);
-
-    const int64_t py = state.range(6);
-    const int64_t px = state.range(7);
-
-    const int64_t stride = state.range(8);
-    const int64_t dilation = state.range(9);
-
-    const int64_t groups = state.range(10);
-    const int64_t groups_c_in = state.range(11);
-    const int64_t groups_c_out = state.range(12);
-
-    const int64_t c_in = groups_c_in;
-    const int64_t c_out = groups_c_out;
-
-    std::random_device random_device;
-    auto rng = std::mt19937(random_device());
-    auto f32rng =
-        std::bind(std::uniform_real_distribution<float>(0.0f, 1.0f), rng);
-
-    std::vector<float> input(n * c_in * h * w);
-    std::generate(input.begin(), input.end(), std::ref(f32rng));
-
-    std::vector<float> kernel(c_out * c_in * kh * kw);
-    std::generate(kernel.begin(), kernel.end(), std::ref(f32rng));
-
-    std::vector<float> bias(c_out);
-    std::generate(bias.begin(), bias.end(), std::ref(f32rng));
-
-    const size_t khe = (kh - 1) * dilation + 1;
-    const size_t kwe = (kw - 1) * dilation + 1;
-    const size_t output_h = (h + 2 * py - khe) / stride + 1;
-    const size_t output_w = (w + 2 * px - kwe) / stride + 1;
-
-    std::vector<float> output(n * c_out * output_w * output_h);
-
-    using fp_conv2d_t = decltype(agpu::agpu_conv2d);
-    static fp_conv2d_t* fa[4] = {agpu::agpu_conv2d_sTextures,
-                                 agpu::agpu_conv2d_buffers_sOutNc4nc,
-                                 agpu::agpu_conv2d_buffers_sOutNchw,
-                                 agpu::agpu_conv2d_buffers_sInOutNchw};
-
+    wipeCache();
+    prefetchToL1(input.data(), sizeof(float) * input.size());
     state.ResumeTiming();
-    fa[agpuConvX](
+    fa[agpuConvMethod](
         input.data(),
         n,
         c_in,
@@ -781,8 +848,9 @@ static void BM_conv_agpu(benchmark::State& state, const char* name) {
         dilation,
         groups,
         output.data(),
-        0);
+        agpuConvMethodMod);
   }
+  state.counters["Freq"] = getCurrentCpuFrequency();
 }
 
 static void baby_test_conv_agpu() {
@@ -862,11 +930,57 @@ void gbench_main(const std::string& args) {
   //    ->ReportAggregatesOnly(true)
   //    ->UseRealTime();
 
+  static const int kPreburn = 10;
   BENCHMARK_CAPTURE(BM_conv_agpu, base, "a_base")
       ->Apply(BM_conv_agpu_args_base)
       ->Iterations(1)
-      ->Repetitions(10)
-      ->Unit(benchmark::kMicrosecond)
+      ->Repetitions(kPreburn + 20)
+      ->ComputeStatistics(
+          "_mean*",
+          [](const std::vector<double>& v) -> double {
+            double sum = std::accumulate(v.begin() + kPreburn, v.end(), 0.);
+            return sum / (v.size() - kPreburn);
+          })
+      ->ComputeStatistics(
+          "_std*",
+          [](const std::vector<double>& v) -> double {
+            std::vector<double> _v{v.begin() + kPreburn, v.end()};
+            double sum = std::accumulate(_v.begin(), _v.end(), 0.);
+            double avg = sum / _v.size();
+            double var = std::accumulate(
+                _v.begin(),
+                _v.end(),
+                0.,
+                [avg](double acc, double x) -> double {
+                  double d = x - avg;
+                  return acc + d * d;
+                });
+            double std = std::sqrt(var / (_v.size() - 1));
+            return std;
+          })
+      ->ComputeStatistics(
+          "_p50",
+          [](const std::vector<double>& v) -> double {
+            std::vector<double> _v{v.begin() + kPreburn, v.end()};
+            std::sort(_v.begin(), _v.end());
+            return _v[std::round(0.50 * _v.size())];
+          })
+      ->ComputeStatistics(
+          "_p75",
+          [](const std::vector<double>& v) -> double {
+            std::vector<double> _v{v.begin() + kPreburn, v.end()};
+            std::sort(_v.begin(), _v.end());
+            int idx = std::round(0.75 * _v.size());
+            return _v[idx];
+          })
+      ->ComputeStatistics(
+          "_p90",
+          [](const std::vector<double>& v) -> double {
+            std::vector<double> _v{v.begin() + kPreburn, v.end()};
+            std::sort(_v.begin(), _v.end());
+            return _v[std::round(0.9 * _v.size())];
+          })
+      ->Unit(benchmark::kMillisecond)
       ->ReportAggregatesOnly(true)
       ->UseRealTime();
 

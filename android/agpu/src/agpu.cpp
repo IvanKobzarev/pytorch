@@ -800,7 +800,8 @@ void agpu_conv2d_buffers_sOutNc4nc(
     float* output,
     int64_t mod) {
   APRINT(
-      "agpu_conv2d_buffers_nc4nc(input nchw %d %d %d %d kernel chw %d %d %d stride hw %d %d pad yx %d %d dilation %d %d groups %d",
+      "agpu_conv2d_buffers_nc4nc mod:%d (input nchw %d %d %d %d kernel chw %d %d %d stride hw %d %d Pyx %d %d D %d %d G %d",
+      mod,
       input_n,
       input_c,
       input_h,
@@ -899,10 +900,12 @@ void agpu_conv2d_buffers_sOutNc4nc(
     std::vector<std::string> header;
     addCompGroupSizeDefines(header, workGroupSize, 1, 1, OC_4);
 
-    auto shader = getShader(
-        "convolution_buffers_out_nc4hw_glsl",
-        convolution_buffers_out_nc4hw_glsl,
-        header);
+    const char* modeShaderKey[2] = {"convolution_buffers_out_nc4hw_glsl",
+                                    "convolution_buffers_out_nc4hw_1_glsl"};
+    const char* modeShaderCode[2] = {convolution_buffers_out_nc4hw_glsl,
+                                     convolution_buffers_out_nc4hw_1_glsl};
+
+    auto shader = getShader(modeShaderKey[mod], modeShaderCode[mod], header);
 
     shader->useProgram();
     AGL_CHECK_ERROR;
@@ -1316,7 +1319,49 @@ void agpu_conv2d_buffers_sInOutNchw(
     agpu_print4d("conv2d_buffers_nchw output:", output, input_n, OC, OH, OW);
   }
 }
+
 void agpu_conv2d(
+    const float* input,
+    uint32_t input_n,
+    uint32_t input_c,
+    uint32_t input_h,
+    uint32_t input_w,
+    const float* weights,
+    uint32_t kernel_c,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    const float* bias,
+    uint32_t stride_y,
+    uint32_t stride_x,
+    uint32_t input_padding_y,
+    uint32_t input_padding_x,
+    uint32_t dilation_y,
+    uint32_t dilation_x,
+    uint32_t groups,
+    float* output) {
+  agpu_conv2d_(
+      input,
+      input_n,
+      input_c,
+      input_h,
+      input_w,
+      weights,
+      kernel_c,
+      kernel_h,
+      kernel_w,
+      bias,
+      stride_y,
+      stride_x,
+      input_padding_y,
+      input_padding_x,
+      dilation_y,
+      dilation_x,
+      groups,
+      output,
+      0);
+}
+
+void agpu_conv2d_(
     const float* input,
     uint32_t input_n,
     uint32_t input_c,
@@ -1546,7 +1591,7 @@ void agpu_conv2d_sTextures(
   }
 }
 
-//region not_convolution
+// region not_convolution
 void agpu_add2t(
     const float* input0,
     const float* input1,
@@ -1704,6 +1749,6 @@ void agpu_batch_norm(
   device2host(outputTexture->id(), output, w, h, c, false /* align */);
   agpu_print4d("agpu_batch_norm output:\n", output, n, c, h, w);
 }
-//endregion notconvolution
+// endregion notconvolution
 #endif
 } // namespace agpu

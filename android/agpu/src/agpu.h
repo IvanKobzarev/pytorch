@@ -22,19 +22,19 @@
 #define FUNC_PRINT_ALL(x, type) \
   APRINT(#x "=" #type " %" #type " in %s, %d \n", x, __func__, __LINE__);
 
-#define AGL_CHECK_ERROR \
-  { \
-    GLenum error = glGetError(); \
-    if (GL_NO_ERROR != error) { \
-      APRINT(\
+#define AGL_CHECK_ERROR                                                       \
+  {                                                                           \
+    GLenum error = glGetError();                                              \
+    if (GL_NO_ERROR != error) {                                               \
+      APRINT(                                                                 \
           "File = %s Line = %d Func=%s\n", __FILE__, __LINE__, __FUNCTION__); \
-      FUNC_PRINT_ALL(error, 0x); \
-    } \
-    assert(GL_NO_ERROR == error); \
+      FUNC_PRINT_ALL(error, 0x);                                              \
+    }                                                                         \
+    assert(GL_NO_ERROR == error);                                             \
   }
 namespace agpu {
 
-void agpu_conv2d(
+void agpu_conv2d_(
     const float* input,
     uint32_t input_n,
     uint32_t input_c,
@@ -54,6 +54,26 @@ void agpu_conv2d(
     uint32_t groups,
     float* output,
     int64_t mod = 0);
+
+void agpu_conv2d(
+    const float* input,
+    uint32_t input_n,
+    uint32_t input_c,
+    uint32_t input_h,
+    uint32_t input_w,
+    const float* weights,
+    uint32_t kernel_c,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    const float* bias,
+    uint32_t stride_y,
+    uint32_t stride_x,
+    uint32_t input_padding_y,
+    uint32_t input_padding_x,
+    uint32_t dilation_y,
+    uint32_t dilation_x,
+    uint32_t groups,
+    float* output);
 
 void agpu_conv2d_sTextures(
     const float* input,
