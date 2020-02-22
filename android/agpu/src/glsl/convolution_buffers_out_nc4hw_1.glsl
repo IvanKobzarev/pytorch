@@ -54,11 +54,15 @@ void main()
         v[1] = v[0];
         v[2] = v[0];
         v[3] = v[0];
+        int kBi_oc4i = oc_4i * (C_4 * KH * KW * 4);
         for (kyi=sfxy.y; kyi<efxy.y; ++kyi)
         {
             int sy = kyi*uDilate.y + s0.y;
+            int inBi_sy = sy * W;
+            int kBi_oc4i_kyi = kBi_oc4i + kyi*KW*4;
             for (kxi=0; kxi < KW; ++kxi)
             {
+                int kBi = kBi_oc4i_kyi + kxi * 4;
                 int sx0 = kxi*uDilate.x + s0.x;
                 int sx1 = sx0 + uStride.x;
                 int sx2 = sx1 + uStride.x;
@@ -68,10 +72,9 @@ void main()
                 float m1 = sx1 >= 0 && sx1 < W ? 1.0 : 0.0;
                 float m2 = sx2 >= 0 && sx2 < W ? 1.0 : 0.0;
                 float m3 = sx3 >= 0 && sx3 < W ? 1.0 : 0.0;
+                int inBi = inBi_sy;
                 for (ic_4i=0; ic_4i < C_4; ++ic_4i)
                 {
-                    int kBi = oc_4i * (C_4 * KH * KW * 4) + ic_4i * KH * KW * 4 + (kxi + kyi*KW) * 4;
-
                     vec4 k0 = uKernelBuffer.data[kBi+0];
                     vec4 k1 = uKernelBuffer.data[kBi+1];
                     vec4 k2 = uKernelBuffer.data[kBi+2];
@@ -79,16 +82,13 @@ void main()
 
                     mat4 k = mat4(k0, k1, k2, k3);
 
-                    int inBi = ic_4i * W * H + sy * W;
-                    int inBi0 = inBi + sx0;
-                    int inBi1 = inBi + sx1;
-                    int inBi2 = inBi + sx2;
-                    int inBi3 = inBi + sx3;
+                    v[0] += k*uInputBuffer.data[inBi + sx0] * m0;
+                    v[1] += k*uInputBuffer.data[inBi + sx1] * m1;
+                    v[2] += k*uInputBuffer.data[inBi + sx2] * m2;
+                    v[3] += k*uInputBuffer.data[inBi + sx3] * m3;
 
-                    v[0] += k*uInputBuffer.data[inBi0] * m0;
-                    v[1] += k*uInputBuffer.data[inBi1] * m1;
-                    v[2] += k*uInputBuffer.data[inBi2] * m2;
-                    v[3] += k*uInputBuffer.data[inBi3] * m3;
+                    inBi += W * H;
+                    kBi += KH * KW * 4;
                 }
             }
         }
