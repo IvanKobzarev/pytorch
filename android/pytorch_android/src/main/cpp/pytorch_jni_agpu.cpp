@@ -613,15 +613,17 @@ static void BM_conv_agpu_Args(
     int64_t gcin,
     int64_t gcout) {
   b->Args({0, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
-  // b->Args({1, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
-  // b->Args({2, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
-  // b->Args({10, n, h, w, kh, kw, py, px, s, d, g, gcin, g//cout});
-  // b->Args({10, n, h, w, kh, kw, py, px, s, d, g, gcin, g//cout});
-  // b->Args({11, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
-  // b->Args({20, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
-  // b->Args({30, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  b->Args({1, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  b->Args({2, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  // b->Args({4, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  // b->Args({5, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  b->Args({10, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  // b->Args({10, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  b->Args({11, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  b->Args({20, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  b->Args({30, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
   b->Args({31, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
-  b->Args({32, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
+  // b->Args({32, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
   b->Args({40, n, h, w, kh, kw, py, px, s, d, g, gcin, gcout});
 }
 
@@ -641,11 +643,11 @@ static void BM_conv_agpu_args_base(benchmark::internal::Benchmark* b) {
                "GCout"});
   /*             N   H    W   KH  KW  py  px  S  D    G  GCin  GCout */
   BM_conv_agpu_Args(b, 1, 224, 224, 3, 3, 2, 1, 1, 1, 1, 3, 32);
-  BM_conv_agpu_Args(b, 1, 112, 112, 3, 3, 2, 1, 1, 1, 96, 1, 1);
-  BM_conv_agpu_Args(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
-  BM_conv_agpu_Args(b, 1, 28, 28, 3, 3, 1, 1, 2, 1, 192, 1, 1);
-  BM_conv_agpu_Args(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 96);
-  BM_conv_agpu_Args(b, 1, 7, 7, 3, 3, 1, 1, 1, 1, 960, 1, 1);
+  // BM_conv_agpu_Args(b, 1, 112, 112, 3, 3, 2, 1, 1, 1, 96, 1, 1);
+  // BM_conv_agpu_Args(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
+  // BM_conv_agpu_Args(b, 1, 28, 28, 3, 3, 1, 1, 2, 1, 192, 1, 1);
+  // BM_conv_agpu_Args(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 96);
+  // BM_conv_agpu_Args(b, 1, 7, 7, 3, 3, 1, 1, 1, 1, 960, 1, 1);
 }
 
 static void BM_conv_agpu_args_base_once(benchmark::internal::Benchmark* b) {
@@ -664,12 +666,13 @@ static void BM_conv_agpu_args_base_once(benchmark::internal::Benchmark* b) {
                "GCout"});
   /*             N   H    W   KH  KW  py  px  S  D    G  GCin  GCout */
   BM_conv_agpu_Args(b, 1, 224, 224, 3, 3, 2, 1, 1, 1, 1, 3, 32);
-  BM_conv_agpu_Args(b, 1, 112, 112, 3, 3, 2, 1, 1, 1, 96, 1, 1);
+  // BM_conv_agpu_Args(b, 1, 112, 112, 3, 3, 2, 1, 1, 1, 96, 1, 1);
   // BM_conv_agpu_Args(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
   // BM_conv_agpu_Args(b, 1, 28, 28, 3, 3, 1, 1, 2, 1, 192, 1, 1);
   // BM_conv_agpu_Args(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 96);
   // BM_conv_agpu_Args(b, 1, 7, 7, 3, 3, 1, 1, 1, 1, 960, 1, 1);
 }
+
 uint64_t getCurrentCpuFrequency() {
 #ifdef __linux__
   int freq = 0;
@@ -814,19 +817,18 @@ static void BM_conv_agpu(benchmark::State& state, const char* name) {
         agpuConvMethodMod);
     state.PauseTiming();
 
-    state.counters["AS_Total"] = aresult.gpu_shader_total_time();
-
-    state.counters["AC_K_pack"] = aresult.cpu_kernel_repackO4I4_time;
-    state.counters["AS_Conv"] = aresult.gpu_shader_conv_time;
-    state.counters["AS_hK_dTex"] = aresult.gpu_shader_hkernel_to_dtex_time;
-    state.counters["AS_dTex_hCHW"] = aresult.gpu_shader_dtex_to_hchw_time;
-    state.counters["AS_hCHW_dTex"] = aresult.gpu_shader_hchw_to_dtex_time;
-    state.counters["AS_hCHW_dC4HW"] = aresult.gpu_shader_hchw_to_dc4hw_time;
-    state.counters["AS_dC4HW_hCHW"] = aresult.gpu_shader_dc4hw_to_hchw_time;
-
+    state.SetIterationTime(aresult.gpu_shader_total_time());
+    state.counters["\nS_Total     "] = aresult.gpu_shader_total_time();
+    state.counters["\nC_K_pack    "] = aresult.cpu_kernel_repackO4I4_time;
+    state.counters["\nS_Conv      "] = aresult.gpu_shader_conv_time;
+    state.counters["\nS_hK_dTex   "] = aresult.gpu_shader_hkernel_to_dtex_time;
+    state.counters["\nS_dTex_hCHW "] = aresult.gpu_shader_dtex_to_hchw_time;
+    state.counters["\nS_hCHW_dTex "] = aresult.gpu_shader_hchw_to_dtex_time;
+    state.counters["\nS_hCHW_dC4HW"] = aresult.gpu_shader_hchw_to_dc4hw_time;
+    state.counters["\nS_dC4HW_hCHW"] = aresult.gpu_shader_dc4hw_to_hchw_time;
     state.ResumeTiming();
   }
-  state.counters["Freq"] = getCurrentCpuFrequency();
+  //  state.counters["\nFreq        "] = getCurrentCpuFrequency();
 }
 
 static void baby_test_conv_agpu() {
@@ -887,6 +889,62 @@ static void baby_test_conv_agpu() {
       output.data());
 }
 
+static void baby_test_conv_agpu_nhwc() {
+  const int64_t n = 1;
+  const int64_t h = 3;
+  const int64_t w = 3;
+
+  const int64_t kh = 2;
+  const int64_t kw = 2;
+
+  const int64_t py = 0;
+  const int64_t px = 0;
+
+  const int64_t stride = 1;
+  const int64_t dilation = 1;
+
+  const int64_t groups = 1;
+  const int64_t groups_c_in = 3;
+  const int64_t groups_c_out = 2;
+
+  const int64_t c_in = groups_c_in;
+  const int64_t c_out = groups_c_out;
+
+  std::vector<float> input = {1, 101, 1001, 2, 102, 1002, 3, 103, 1003,
+                              4, 104, 1004, 5, 105, 1005, 6, 106, 1006,
+                              7, 107, 1007, 8, 108, 1008, 9, 109, 1009};
+
+  std::vector<float> kernel = {1,  0, 0, 0, 0, 1,  0, 0, 0, 0, 1,  0,
+                               -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0};
+  std::vector<float> bias = {0, 0};
+
+  const size_t effK_h = (kh - 1) * dilation + 1;
+  const size_t effK_w = (kw - 1) * dilation + 1;
+  const size_t output_h = (h + 2 * py - effK_h) / stride + 1;
+  const size_t output_w = (w + 2 * px - effK_w) / stride + 1;
+
+  std::vector<float> output(n * c_out * output_w * output_h);
+  agpu::agpu_conv2d_buffers_nhwc(
+      input.data(),
+      n,
+      c_in,
+      h,
+      w,
+      kernel.data(),
+      c_out,
+      kh,
+      kw,
+      bias.data(),
+      stride,
+      stride,
+      py,
+      px,
+      dilation,
+      dilation,
+      groups,
+      output.data());
+}
+
 void gbench_main(const std::string& args) {
   ALOGI("pytorch_android_agpu::gbench_main(%s)", args.c_str());
   auto argscv = ArgsCV{args};
@@ -906,71 +964,76 @@ void gbench_main(const std::string& args) {
   //    ->ReportAggregatesOnly(true)
   //    ->UseRealTime();
 
-  // static const int kPreburn = 10;
-  // BENCHMARK_CAPTURE(BM_conv_agpu, base, "a_base")
-  //    ->Apply(BM_conv_agpu_args_base)
-  //    ->Iterations(1)
-  //    ->Repetitions(kPreburn + 20)
-  //    ->ComputeStatistics(
-  //        "_mean*AAA",
-  //        [](const std::vector<double>& v) -> double {
-  //          double sum = std::accumulate(v.begin() + kPreburn, v.end(), 0.);
-  //          return sum / (v.size() - kPreburn);
-  //        })
-  //    ->ComputeStatistics(
-  //        "_std*AAA",
-  //        [](const std::vector<double>& v) -> double {
-  //          std::vector<double> _v{v.begin() + kPreburn, v.end()};
-  //          double sum = std::accumulate(_v.begin(), _v.end(), 0.);
-  //          double avg = sum / _v.size();
-  //          double var = std::accumulate(
-  //              _v.begin(),
-  //              _v.end(),
-  //              0.,
-  //              [avg](double acc, double x) -> double {
-  //                double d = x - avg;
-  //                return acc + d * d;
-  //              });
-  //          double std = std::sqrt(var / (_v.size() - 1));
-  //          return std;
-  //        })
-  //    ->ComputeStatistics(
-  //        "_p50",
-  //        [](const std::vector<double>& v) -> double {
-  //          std::vector<double> _v{v.begin() + kPreburn, v.end()};
-  //          std::sort(_v.begin(), _v.end());
-  //          return _v[std::round(0.50 * _v.size())];
-  //        })
-  //    ->ComputeStatistics(
-  //        "_p75",
-  //        [](const std::vector<double>& v) -> double {
-  //          std::vector<double> _v{v.begin() + kPreburn, v.end()};
-  //          std::sort(_v.begin(), _v.end());
-  //          int idx = std::round(0.75 * _v.size());
-  //          return _v[idx];
-  //        })
-  //    ->ComputeStatistics(
-  //        "_p90",
-  //        [](const std::vector<double>& v) -> double {
-  //          std::vector<double> _v{v.begin() + kPreburn, v.end()};
-  //          std::sort(_v.begin(), _v.end());
-  //          return _v[std::round(0.9 * _v.size())];
-  //        })
-  //    ->Unit(benchmark::kMillisecond)
-  //    ->ReportAggregatesOnly(true)
-  //    ->UseRealTime();
+  /*
+     static const int kPreburn = 10;
+     BENCHMARK_CAPTURE(BM_conv_agpu, base, "a_base")
+        ->Apply(BM_conv_agpu_args_base)
+        ->Iterations(1)
+        ->Repetitions(kPreburn + 20)
+        ->ComputeStatistics(
+            "_mean*AAA",
+            [](const std::vector<double>& v) -> double {
+              double sum = std::accumulate(v.begin() + kPreburn, v.end(), 0.);
+              return sum / (v.size() - kPreburn);
+            })
+        ->ComputeStatistics(
+            "_std*AAA",
+            [](const std::vector<double>& v) -> double {
+              std::vector<double> _v{v.begin() + kPreburn, v.end()};
+              double sum = std::accumulate(_v.begin(), _v.end(), 0.);
+              double avg = sum / _v.size();
+              double var = std::accumulate(
+                  _v.begin(),
+                  _v.end(),
+                  0.,
+                  [avg](double acc, double x) -> double {
+                    double d = x - avg;
+                    return acc + d * d;
+                  });
+              double std = std::sqrt(var / (_v.size() - 1));
+              return std;
+            })
+        ->ComputeStatistics(
+            "_p50",
+            [](const std::vector<double>& v) -> double {
+              std::vector<double> _v{v.begin() + kPreburn, v.end()};
+              std::sort(_v.begin(), _v.end());
+              return _v[std::round(0.50 * _v.size())];
+            })
+        ->ComputeStatistics(
+            "_p75",
+            [](const std::vector<double>& v) -> double {
+              std::vector<double> _v{v.begin() + kPreburn, v.end()};
+              std::sort(_v.begin(), _v.end());
+              int idx = std::round(0.75 * _v.size());
+              return _v[idx];
+            })
+        ->ComputeStatistics(
+            "_p90",
+            [](const std::vector<double>& v) -> double {
+              std::vector<double> _v{v.begin() + kPreburn, v.end()};
+              std::sort(_v.begin(), _v.end());
+              return _v[std::round(0.9 * _v.size())];
+            })
+        ->ReportAggregatesOnly(true)
+        ->Unit(benchmark::kMicrosecond)
+        ->UseManualTime();
+  */
 
-  BENCHMARK_CAPTURE(BM_conv_agpu, base, "conv_once")
-      ->Apply(BM_conv_agpu_args_base_once)
-      ->Iterations(1)
-      ->Repetitions(1)
-      ->Unit(benchmark::kMillisecond)
-      ->UseRealTime();
+  /*
+    BENCHMARK_CAPTURE(BM_conv_agpu, base, "conv_once")
+        ->Apply(BM_conv_agpu_args_base_once)
+        ->Iterations(1)
+        ->Repetitions(1)
+        ->Unit(benchmark::kMicrosecond)
+        ->UseManualTime();
 
-  benchmark::Initialize(&(argscv.c), argscv.v);
-  benchmark::RunSpecifiedBenchmarks();
 
-  // baby_test_conv_agpu();
+    benchmark::Initialize(&(argscv.c), argscv.v);
+    benchmark::RunSpecifiedBenchmarks();
+  */
+
+  baby_test_conv_agpu_nhwc();
 }
 
 void test_module(torch::jit::script::Module module, const std::string& args) {

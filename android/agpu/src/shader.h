@@ -1,6 +1,7 @@
 #pragma once
 extern const char* convolution_buffers_out_nc4hw_glsl;
 extern const char* convolution_buffers_inout_nchw_2_glsl;
+extern const char* convolution_buffers_inout_nhwc_glsl;
 extern const char* binary_add_glsl;
 extern const char* threshold_glsl;
 extern const char* normalization_glsl;
