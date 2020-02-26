@@ -11,6 +11,7 @@ def findAllShader(path):
   for f in vexs:
     if len(f) > 1:
       output.append(f)
+  output.sort()
   return output
 
 def getName(filePath):

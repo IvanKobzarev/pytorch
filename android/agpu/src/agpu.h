@@ -68,27 +68,6 @@ struct AResult {
   }
 };
 
-AResult agpu_conv2d_(
-    const float* input,
-    uint32_t N,
-    uint32_t C,
-    uint32_t H,
-    uint32_t W,
-    const float* weights,
-    uint32_t KC,
-    uint32_t KH,
-    uint32_t KW,
-    const float* bias,
-    uint32_t SY,
-    uint32_t SX,
-    uint32_t PY,
-    uint32_t PX,
-    uint32_t DY,
-    uint32_t DX,
-    uint32_t G,
-    float* output,
-    int64_t mod = 0);
-
 AResult agpu_conv2d(
     const float* input,
     uint32_t N,
@@ -109,131 +88,52 @@ AResult agpu_conv2d(
     uint32_t G,
     float* output);
 
-AResult agpu_conv2d_sTextures(
-    const float* input,
-    uint32_t N,
-    uint32_t C,
-    uint32_t H,
-    uint32_t W,
-    const float* weights,
-    uint32_t KC,
-    uint32_t KH,
-    uint32_t KW,
-    const float* bias,
-    uint32_t SY,
-    uint32_t SX,
-    uint32_t PY,
-    uint32_t PX,
-    uint32_t DY,
-    uint32_t DX,
-    uint32_t G,
-    float* output,
-    int64_t mod = 0);
+#define CONV_DECL(fname)    \
+  AResult fname(            \
+      const float* input,   \
+      uint32_t N,           \
+      uint32_t C,           \
+      uint32_t H,           \
+      uint32_t W,           \
+      const float* weights, \
+      uint32_t KC,          \
+      uint32_t KH,          \
+      uint32_t KW,          \
+      const float* bias,    \
+      uint32_t SY,          \
+      uint32_t SX,          \
+      uint32_t PY,          \
+      uint32_t PX,          \
+      uint32_t DY,          \
+      uint32_t DX,          \
+      uint32_t G,           \
+      float* output,        \
+      int64_t mod = 0);
 
-AResult agpu_conv2d_buffers_sOutNc4nc(
-    const float* input,
-    uint32_t N,
-    uint32_t C,
-    uint32_t H,
-    uint32_t W,
-    const float* weights,
-    uint32_t KC,
-    uint32_t KH,
-    uint32_t KW,
-    const float* bias,
-    uint32_t SY,
-    uint32_t SX,
-    uint32_t PY,
-    uint32_t PX,
-    uint32_t DY,
-    uint32_t DX,
-    uint32_t G,
-    float* output,
-    int64_t mod = 0);
+CONV_DECL(agpu_conv2d_);
 
-AResult agpu_conv2d_buffers_sOutNchw(
-    const float* input,
-    uint32_t N,
-    uint32_t C,
-    uint32_t H,
-    uint32_t W,
-    const float* weights,
-    uint32_t KC,
-    uint32_t KH,
-    uint32_t KW,
-    const float* bias,
-    uint32_t SY,
-    uint32_t SX,
-    uint32_t PY,
-    uint32_t PX,
-    uint32_t DY,
-    uint32_t DX,
-    uint32_t G,
-    float* output,
-    int64_t mod = 0);
+// Tex
+CONV_DECL(agpu_conv2d_tex_IKnc4hw); // benchId: [0, 10)
+//---
 
-AResult agpu_conv2d_buffers_sInOutNchw(
-    const float* input,
-    uint32_t N,
-    uint32_t C,
-    uint32_t H,
-    uint32_t W,
-    const float* weights,
-    uint32_t KC,
-    uint32_t KH,
-    uint32_t KW,
-    const float* bias,
-    uint32_t SY,
-    uint32_t SX,
-    uint32_t PY,
-    uint32_t PX,
-    uint32_t DY,
-    uint32_t DX,
-    uint32_t G,
-    float* output,
-    int64_t mod = 0);
+// Buf NCHW
+CONV_DECL(agpu_conv2d_buf_IKnchw_SIKOnc4hw); // benchId: [10, 20)
+CONV_DECL(agpu_conv2d_buf_IKnchw_SIKnc4hw_SOnchw); // benchId: [20, 30)
+CONV_DECL(agpu_conv2d_buf_IKnchw_SKnc4hw); // benchId: [30, 40)
+//---
 
-AResult agpu_conv2d_buffers_nhwc(
-    const float* input,
-    uint32_t N,
-    uint32_t C,
-    uint32_t H,
-    uint32_t W,
-    const float* weights,
-    uint32_t KC,
-    uint32_t KH,
-    uint32_t KW,
-    const float* bias,
-    uint32_t SY,
-    uint32_t SX,
-    uint32_t PY,
-    uint32_t PX,
-    uint32_t DY,
-    uint32_t DX,
-    uint32_t G,
-    float* output,
-    int64_t mod = 0);
+// NHWC
+CONV_DECL(agpu_conv2d_buf_Inhwc_Knchw);
+CONV_DECL(agpu_conv2d_buf_IKnhwc);
+//---
 
-AResult agpu_conv2d_kernel_repack_(
-    const float* input,
-    uint32_t N,
-    uint32_t C,
-    uint32_t H,
-    uint32_t W,
-    const float* weights,
-    uint32_t KC,
-    uint32_t KH,
-    uint32_t KW,
-    const float* bias,
-    uint32_t SY,
-    uint32_t SX,
-    uint32_t PY,
-    uint32_t PX,
-    uint32_t DY,
-    uint32_t DX,
-    uint32_t G,
-    float* output,
-    int64_t mod);
+// Depthwise
+CONV_DECL(agpu_conv2dDW_buf_IKnchw);
+CONV_DECL(agpu_conv2dDW_buf_Inhwc_Knchw);
+CONV_DECL(agpu_conv2dDW_buf_IKnhwc);
+
+// benchId: [40, 50)
+CONV_DECL(agpu_conv2d_kernel_repack_);
 
 void agpu_add2t(
     const float* input0,

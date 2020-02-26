@@ -781,9 +781,8 @@ std::unique_ptr<AGLShader> createShader(
   tc << content;
 
   auto shaderCode = tc.str();
-  APRINT("createShader prefix length:%d", prefix.size());
+  APRINT("createShader prefix length:%lu", prefix.size());
   printShaderCode(shaderCode);
-  // APRINT("\n%s\n", shaderCode.c_str());
 
   return std::make_unique<AGLShader>(tc.str());
 }
@@ -958,7 +957,7 @@ void hostCHW2deviceTex(
   AGL_CHECK_ERROR;
 }
 
-auto kernelBufferPackO4I4(
+auto kernelCHWBufferPackO4I4(
     const float* weights,
     const int OC,
     const int C,
@@ -1000,7 +999,7 @@ auto kernelBufferPackO4I4(
   return kernelBuff;
 }
 
-AResult agpu_conv2d_buffers_sOutNc4nc(
+AResult agpu_conv2d_buf_IKnchw_SIKOnc4hw(
     const float* input,
     uint32_t N,
     uint32_t C,
@@ -1036,15 +1035,12 @@ AResult agpu_conv2d_buffers_sOutNc4nc(
   const int C_4 = UP_DIV(C, 4);
   const int KWE = (KW - 1) * DX + 1;
   const int KHE = (KH - 1) * DY + 1;
-  APRINT("KHE KWE (%d,%d)", KHE, KWE);
-
   const uint32_t OW = ((W - KWE + 2 * PX) / SX) + 1;
   const uint32_t OH = ((H - KHE + 2 * PY) / SY) + 1;
-  APRINT("OH OW (%d,%d)", OH, OW);
 
   auto biasBuff = AGLSSBuffer::from(
       bias, sizeof(float) * ALIGN_UP4(OC), sizeof(float) * OC);
-  auto kernelBuff = kernelBufferPackO4I4(weights, OC, C, KH, KW, ares);
+  auto kernelBuff = kernelCHWBufferPackO4I4(weights, OC, C, KH, KW, ares);
 
   auto inputBuff = hostCHW_to_deviceC4HWBuffer(input, C, H, W, ares);
 
@@ -1056,15 +1052,16 @@ AResult agpu_conv2d_buffers_sOutNc4nc(
   }
   const int convOutC4BufferSize = sizeof(float) * 4 * OC_4 * OW * OH;
   auto convOutC4Buffer = std::make_unique<AGLSSBuffer>(convOutC4BufferSize);
+
+  static const char* modeShaderKey[2] = {"conv_buf_IKnchw_SIKOnc4hw_glsl",
+                                         "conv_buf_IKnchw_SIKOnc4hw_glsl"};
+  static const char* modeShaderCode[2] = {conv_buf_IKnchw_SIKOnc4hw_glsl,
+                                          conv_buf_IKnchw_SIKOnc4hw_glsl};
+
   {
     int workGroupSize[3];
     std::vector<std::string> header;
     addCompGroupSizeDefines(header, workGroupSize, 1, 1, OC_4);
-
-    const char* modeShaderKey[2] = {"convolution_buffers_out_nc4hw_glsl",
-                                    "convolution_buffers_out_nc4hw_1_glsl"};
-    const char* modeShaderCode[2] = {convolution_buffers_out_nc4hw_glsl,
-                                     convolution_buffers_out_nc4hw_1_glsl};
 
     auto shader = getShader(modeShaderKey[mod], modeShaderCode[mod], header);
 
@@ -1078,22 +1075,19 @@ AResult agpu_conv2d_buffers_sOutNc4nc(
 
     glUniform2i(4, PX, PY);
     glUniform2i(5, KW, KH);
-    APRINT("KW:%d KH:%d", KW, KH);
     glUniform2i(6, SX, SY);
     glUniform2i(7, DX, DY);
     AGL_CHECK_ERROR;
 
     glUniform3i(8, OW, OH, OC_4);
-    APRINT("OW:%d OH:%d OC:%d OC_4:%d", OW, OH, OC, OC_4);
     glUniform3i(9, W, H, C_4);
-    APRINT("W:%d H:%d C:%d C_4:%d", W, H, C, C_4);
     AGL_CHECK_ERROR;
 
     ares.gpu_shader_conv_time = gComputeWithTime(
         UP_DIV(OW, 4 * workGroupSize[0]),
         UP_DIV(OH, workGroupSize[1]),
         UP_DIV(OC_4, workGroupSize[2]),
-        "conv_outC4HW",
+        modeShaderKey[mod],
         workGroupSize[0],
         workGroupSize[1],
         workGroupSize[2]);
@@ -1104,14 +1098,11 @@ AResult agpu_conv2d_buffers_sOutNc4nc(
       std::vector<float> convOutC4BufferDebugVec =
           convOutC4Buffer->copyToHostVec();
       agpu_print4d(
-          "convOutC4Buffer:\n",
-          convOutC4BufferDebugVec.data(),
-          OC_4,
-          OH,
-          OW,
-          4);
+          modeShaderKey[mod], convOutC4BufferDebugVec.data(), OC_4, OH, OW, 4);
     }
   }
+
+  auto shaderKey = modeShaderKey[mod];
 
   const int outBufferSize = sizeof(float) * ALIGN_UP4(OC) * OH * OW;
   auto outBuffer = std::make_unique<AGLSSBuffer>(outBufferSize);
@@ -1124,7 +1115,6 @@ AResult agpu_conv2d_buffers_sOutNc4nc(
         "nc4hw_buffer_to_nchw_buffer_glsl",
         nc4hw_buffer_to_nchw_buffer_glsl,
         header);
-
     shader->useProgram();
     AGL_CHECK_ERROR;
 
@@ -1144,22 +1134,16 @@ AResult agpu_conv2d_buffers_sOutNc4nc(
         workGroupSize[1],
         workGroupSize[2]);
     AGL_CHECK_ERROR;
-
-    if (debugPrintTensors) {
-      wait();
-      std::vector<float> outBufferDebugVec = outBuffer->copyToHostVec();
-      agpu_print4d("outBuffer:\n", outBufferDebugVec.data(), 1, OC, OH, OW);
-    }
   }
 
   outBuffer->copyToHost(output, sizeof(float) * OC * OH * OW);
   if (debugPrintTensors) {
-    agpu_print4d("conv2d_buffers_nc4nc output:", output, N, OC, OH, OW);
+    agpu_print4d(shaderKey, output, N, OC, OH, OW);
   }
   return ares;
 }
 
-AResult agpu_conv2d_buffers_sOutNchw(
+AResult agpu_conv2d_buf_IKnchw_SIKnc4hw_SOnchw(
     const float* input,
     uint32_t N,
     uint32_t C,
@@ -1195,17 +1179,13 @@ AResult agpu_conv2d_buffers_sOutNchw(
   const int C_4 = UP_DIV(C, 4);
   const int KWE = (KW - 1) * DX + 1;
   const int KHE = (KH - 1) * DY + 1;
-  APRINT("KHE KWE (%d,%d)", KHE, KWE);
-
   const uint32_t OW = ((W - KWE + 2 * PX) / SX) + 1;
   const uint32_t OH = ((H - KHE + 2 * PY) / SY) + 1;
-  APRINT("OH OW (%d,%d)", OH, OW);
 
   auto biasBuff = AGLSSBuffer::from(
       bias, sizeof(float) * ALIGN_UP4(OC), sizeof(float) * OC);
 
-  auto kernelBuff = kernelBufferPackO4I4(weights, OC, C, KH, KW, ares);
-
+  auto kernelBuff = kernelCHWBufferPackO4I4(weights, OC, C, KH, KW, ares);
   auto inputBuff = hostCHW_to_deviceC4HWBuffer(input, C, H, W, ares);
 
   if (debugPrintTensors) {
@@ -1217,15 +1197,14 @@ AResult agpu_conv2d_buffers_sOutNchw(
 
   const int outBufferSize = sizeof(float) * ALIGN_UP4(OC) * OH * OW;
   auto outBuffer = std::make_unique<AGLSSBuffer>(outBufferSize);
+
+  static auto shaderKey = "conv_buf_IKnchw_SIKnc4hw_SOnchw_glsl";
   {
     int workGroupSize[3];
     std::vector<std::string> header;
     addCompGroupSizeDefines(header, workGroupSize, 1, 1, OC_4);
-
-    auto shader = getShader(
-        "convolution_buffers_out_nchw_glsl",
-        convolution_buffers_out_nchw_glsl,
-        header);
+    auto shader =
+        getShader(shaderKey, conv_buf_IKnchw_SIKnc4hw_SOnchw_glsl, header);
 
     shader->useProgram();
     AGL_CHECK_ERROR;
@@ -1237,22 +1216,19 @@ AResult agpu_conv2d_buffers_sOutNchw(
 
     glUniform2i(4, PX, PY);
     glUniform2i(5, KW, KH);
-    APRINT("KW:%d KH:%d", KW, KH);
     glUniform2i(6, SX, SY);
     glUniform2i(7, DX, DY);
     AGL_CHECK_ERROR;
 
     glUniform3i(8, OW, OH, OC_4);
-    APRINT("OW:%d OH:%d OC:%d OC_4:%d", OW, OH, OC, OC_4);
     glUniform3i(9, W, H, C_4);
-    APRINT("W:%d H:%d C:%d C_4:%d", W, H, C, C_4);
     AGL_CHECK_ERROR;
 
     ares.gpu_shader_conv_time = gComputeWithTime(
         UP_DIV(OW, 4 * workGroupSize[0]),
         UP_DIV(OH, workGroupSize[1]),
         UP_DIV(OC_4, workGroupSize[2]),
-        "conv_outCHW",
+        shaderKey,
         workGroupSize[0],
         workGroupSize[1],
         workGroupSize[2]);
@@ -1261,13 +1237,13 @@ AResult agpu_conv2d_buffers_sOutNchw(
     if (debugPrintTensors) {
       wait();
       std::vector<float> outBufferDebugVec = outBuffer->copyToHostVec();
-      agpu_print4d("outBuffer:\n", outBufferDebugVec.data(), 1, OC, OH, OW);
+      agpu_print4d(shaderKey, outBufferDebugVec.data(), 1, OC, OH, OW);
     }
   }
 
   outBuffer->copyToHost(output, sizeof(float) * OC * OH * OW);
   if (debugPrintTensors) {
-    agpu_print4d("conv2d_buffers_nchw output:", output, N, OC, OH, OW);
+    agpu_print4d(shaderKey, output, N, OC, OH, OW);
   }
   return ares;
 }
@@ -1318,12 +1294,12 @@ AResult agpu_conv2d_kernel_repack_(
 
   auto biasBuff = AGLSSBuffer::from(
       bias, sizeof(float) * ALIGN_UP4(OC), sizeof(float) * OC);
-  auto kernelBuff = kernelBufferPackO4I4(weights, OC, C, KH, KW, ares);
+  auto kernelBuff = kernelCHWBufferPackO4I4(weights, OC, C, KH, KW, ares);
 
   return ares;
 }
 
-AResult agpu_conv2d_buffers_sInOutNchw(
+AResult agpu_conv2d_buf_IKnchw_SKnc4hw(
     const float* input,
     uint32_t N,
     uint32_t C,
@@ -1359,21 +1335,30 @@ AResult agpu_conv2d_buffers_sInOutNchw(
   const int C_4 = UP_DIV(C, 4);
   const int KWE = (KW - 1) * DX + 1;
   const int KHE = (KH - 1) * DY + 1;
-  APRINT("KHE KWE (%d,%d)", KHE, KWE);
-
   const uint32_t OW = ((W - KWE + 2 * PX) / SX) + 1;
   const uint32_t OH = ((H - KHE + 2 * PY) / SY) + 1;
-  APRINT("OH OW (%d,%d)", OH, OW);
   auto biasBuff = AGLSSBuffer::from(
       bias, sizeof(float) * ALIGN_UP4(OC), sizeof(float) * OC);
 
-  auto kernelBuff = kernelBufferPackO4I4(weights, OC, C, KH, KW, ares);
+  auto kernelBuff = kernelCHWBufferPackO4I4(weights, OC, C, KH, KW, ares);
 
   auto inputBuff = AGLSSBuffer::from(input, sizeof(float) * C * H * W);
   if (debugPrintTensors) {
     std::vector<float> inputBuffDebugVec = inputBuff->copyToHostVec();
     agpu_print4d("input buffer nchw:\n", inputBuffDebugVec.data(), 1, C, H, W);
   }
+
+  static const char* modeShaderKey[3] = {
+      "conv_buf_IKnchw_SKnc4hw_glsl",
+      "conv_buf_IKnchw_SKnc4hw_1_glsl",
+      "conv_buf_IKnchw_SKnc4hw_2_glsl",
+  };
+  auto shaderKey = modeShaderKey[mod];
+  static const char* modeShaderCode[3] = {
+      conv_buf_IKnchw_SKnc4hw_glsl,
+      conv_buf_IKnchw_SKnc4hw_1_glsl,
+      conv_buf_IKnchw_SKnc4hw_2_glsl,
+  };
 
   const int outBufferSize = sizeof(float) * ALIGN_UP4(OC) * OH * OW;
   auto outBuffer = std::make_unique<AGLSSBuffer>(outBufferSize);
@@ -1382,16 +1367,6 @@ AResult agpu_conv2d_buffers_sInOutNchw(
     std::vector<std::string> header;
     addCompGroupSizeDefines(header, workGroupSize, 1, 1, OC_4);
 
-    const char* modeShaderKey[3] = {
-        "convolution_buffers_inout_nchw_glsl",
-        "convolution_buffers_inout_nchw_1_glsl",
-        "convolution_buffers_inout_nchw_2_glsl",
-    };
-    const char* modeShaderCode[3] = {
-        convolution_buffers_inout_nchw_glsl,
-        convolution_buffers_inout_nchw_1_glsl,
-        convolution_buffers_inout_nchw_2_glsl,
-    };
     auto shader = getShader(modeShaderKey[mod], modeShaderCode[mod], header);
 
     shader->useProgram();
@@ -1404,43 +1379,32 @@ AResult agpu_conv2d_buffers_sInOutNchw(
 
     glUniform2i(4, PX, PY);
     glUniform2i(5, KW, KH);
-    APRINT("KW:%d KH:%d", KW, KH);
     glUniform2i(6, SX, SY);
     glUniform2i(7, DX, DY);
-    AGL_CHECK_ERROR;
-
     glUniform3i(8, OW, OH, OC_4);
-    APRINT("OW:%d OH:%d OC:%d OC_4:%d", OW, OH, OC, OC_4);
     glUniform3i(9, W, H, C_4);
-    APRINT("W:%d H:%d C:%d C_4:%d", W, H, C, C_4);
     AGL_CHECK_ERROR;
 
     ares.gpu_shader_conv_time = gComputeWithTime(
         UP_DIV(OW, 4 * workGroupSize[0]),
         UP_DIV(OH, workGroupSize[1]),
         UP_DIV(OC_4, workGroupSize[2]),
-        "conv_inoutCHW",
+        shaderKey,
         workGroupSize[0],
         workGroupSize[1],
         workGroupSize[2]);
-
     AGL_CHECK_ERROR;
-    if (debugPrintTensors) {
-      wait();
-      std::vector<float> outBufferDebugVec = outBuffer->copyToHostVec();
-      agpu_print4d("outBuffer:\n", outBufferDebugVec.data(), 1, OC, OH, OW);
-    }
   }
 
   outBuffer->copyToHost(output, sizeof(float) * OC * OH * OW);
   if (debugPrintTensors) {
-    agpu_print4d("conv2d_buffers_nchw output:", output, N, OC, OH, OW);
+    agpu_print4d(shaderKey, output, N, OC, OH, OW);
   }
 
   return ares;
 }
 
-AResult agpu_conv2d_buffers_nhwc(
+AResult agpu_conv2d_buf_Inhwc_Knchw(
     const float* input,
     uint32_t N,
     uint32_t C,
@@ -1457,7 +1421,7 @@ AResult agpu_conv2d_buffers_nhwc(
     uint32_t PX,
     uint32_t DY,
     uint32_t DX,
-    uint32_t groups,
+    uint32_t G,
     float* output,
     int64_t mod) {
   setBenchId(mod);
@@ -1476,18 +1440,22 @@ AResult agpu_conv2d_buffers_nhwc(
   const int C_4 = UP_DIV(C, 4);
   const int KWE = (KW - 1) * DX + 1;
   const int KHE = (KH - 1) * DY + 1;
-  APRINT("KHE KWE (%d,%d)", KHE, KWE);
-
   const uint32_t OW = ((W - KWE + 2 * PX) / SX) + 1;
   const uint32_t OH = ((H - KHE + 2 * PY) / SY) + 1;
-  APRINT("OH OW (%d,%d)", OH, OW);
   auto biasBuff = AGLSSBuffer::from(
       bias, sizeof(float) * ALIGN_UP4(OC), sizeof(float) * OC);
 
-  auto kernelBuff = kernelBufferPackO4I4(weights, OC, C, KH, KW, ares);
+  auto kernelBuff = kernelCHWBufferPackO4I4(weights, OC, C, KH, KW, ares);
 
   auto inputBuff = AGLSSBuffer::from(input, sizeof(float) * H * W * C);
 
+  const char* modeShaderKey[1] = {
+      "conv_buf_Inhwc_Knchw_glsl",
+  };
+  auto shaderKey = modeShaderKey[0];
+  const char* modeShaderCode[1] = {
+      conv_buf_Inhwc_Knchw_glsl,
+  };
   const int outBufferSize = sizeof(float) * OH * OW * OC;
 
   auto outBuffer = std::make_unique<AGLSSBuffer>(outBufferSize);
@@ -1496,12 +1464,6 @@ AResult agpu_conv2d_buffers_nhwc(
     std::vector<std::string> header;
     addCompGroupSizeDefines(header, workGroupSize, 1, 1, OC_4);
 
-    const char* modeShaderKey[1] = {
-        "convolution_buffers_inout_nhwc_glsl",
-    };
-    const char* modeShaderCode[1] = {
-        convolution_buffers_inout_nhwc_glsl,
-    };
     auto shader = getShader(modeShaderKey[mod], modeShaderCode[mod], header);
 
     shader->useProgram();
@@ -1514,37 +1476,436 @@ AResult agpu_conv2d_buffers_nhwc(
 
     glUniform2i(4, PX, PY);
     glUniform2i(5, KW, KH);
-    APRINT("KW:%d KH:%d", KW, KH);
     glUniform2i(6, SX, SY);
     glUniform2i(7, DX, DY);
-    AGL_CHECK_ERROR;
-
     glUniform3i(8, OW, OH, OC);
-    APRINT("OW:%d OH:%d OC:%d OC_4:%d", OW, OH, OC, OC_4);
     glUniform3i(9, W, H, C);
-    APRINT("W:%d H:%d C:%d C_4:%d", W, H, C, C_4);
     AGL_CHECK_ERROR;
 
     ares.gpu_shader_conv_time = gComputeWithTime(
         UP_DIV(OW, 4 * workGroupSize[0]),
         UP_DIV(OH, workGroupSize[1]),
         UP_DIV(OC_4, workGroupSize[2]),
-        "conv_inoutHWC",
+        shaderKey,
         workGroupSize[0],
         workGroupSize[1],
         workGroupSize[2]);
 
     AGL_CHECK_ERROR;
-    if (debugPrintTensors) {
-      wait();
-      std::vector<float> outBufferDebugVec = outBuffer->copyToHostVec();
-      agpu_print4d("outBuffer:\n", outBufferDebugVec.data(), 1, OH, OW, OC);
-    }
   }
 
   outBuffer->copyToHost(output, sizeof(float) * OH * OW * OC);
   if (debugPrintTensors) {
-    agpu_print4d("conv2d_buffers_nhwc output:", output, N, OH, OW, OC);
+    agpu_print4d(shaderKey, output, N, OH, OW, OC);
+  }
+
+  return ares;
+}
+
+AResult agpu_conv2d_buf_IKnhwc(
+    const float* input,
+    uint32_t N,
+    uint32_t C,
+    uint32_t H,
+    uint32_t W,
+    const float* weights,
+    uint32_t OC,
+    uint32_t KH,
+    uint32_t KW,
+    const float* bias,
+    uint32_t SY,
+    uint32_t SX,
+    uint32_t PY,
+    uint32_t PX,
+    uint32_t DY,
+    uint32_t DX,
+    uint32_t G,
+    float* output,
+    int64_t mod) {
+  assert(false); // TODO: Not implemented
+  setBenchId(mod);
+  setPrecision(highp);
+  initAGLContextOnce();
+  AResult ares;
+  static const bool debugPrintTensors = true; // DEBUG_PRINT_TENSOR;
+  if (debugPrintTensors) {
+    agpu_print4d("input:", input, N, H, W, C);
+    agpu_print4d("kernel:", weights, OC, KH, KW, C);
+    uint32_t bdims[1] = {OC};
+    agpu_print("bias:", bias, 1, bdims);
+  }
+
+  const int OC_4 = UP_DIV(OC, 4);
+  const int C_4 = UP_DIV(C, 4);
+  const int KWE = (KW - 1) * DX + 1;
+  const int KHE = (KH - 1) * DY + 1;
+  const uint32_t OW = ((W - KWE + 2 * PX) / SX) + 1;
+  const uint32_t OH = ((H - KHE + 2 * PY) / SY) + 1;
+  auto biasBuff = AGLSSBuffer::from(
+      bias, sizeof(float) * ALIGN_UP4(OC), sizeof(float) * OC);
+
+  auto kernelBuff = kernelCHWBufferPackO4I4(weights, OC, C, KH, KW, ares);
+
+  auto inputBuff = AGLSSBuffer::from(input, sizeof(float) * H * W * C);
+
+  const char* modeShaderKey[1] = {
+      "conv_buf_IKnhwc_glsl",
+  };
+  auto shaderKey = modeShaderKey[0];
+  const char* modeShaderCode[1] = {
+      conv_buf_IKnhwc_glsl,
+  };
+  const int outBufferSize = sizeof(float) * OH * OW * OC;
+
+  auto outBuffer = std::make_unique<AGLSSBuffer>(outBufferSize);
+  {
+    int workGroupSize[3];
+    std::vector<std::string> header;
+    addCompGroupSizeDefines(header, workGroupSize, 1, 1, OC_4);
+
+    auto shader = getShader(modeShaderKey[mod], modeShaderCode[mod], header);
+
+    shader->useProgram();
+    AGL_CHECK_ERROR;
+
+    outBuffer->bindInProgram(0);
+    inputBuff->bindInProgram(1);
+    kernelBuff->bindInProgram(2);
+    biasBuff->bindInProgram(3);
+
+    glUniform2i(4, PX, PY);
+    glUniform2i(5, KW, KH);
+    glUniform2i(6, SX, SY);
+    glUniform2i(7, DX, DY);
+    glUniform3i(8, OW, OH, OC);
+    glUniform3i(9, W, H, C);
+    AGL_CHECK_ERROR;
+
+    ares.gpu_shader_conv_time = gComputeWithTime(
+        UP_DIV(OW, 4 * workGroupSize[0]),
+        UP_DIV(OH, workGroupSize[1]),
+        UP_DIV(OC_4, workGroupSize[2]),
+        shaderKey,
+        workGroupSize[0],
+        workGroupSize[1],
+        workGroupSize[2]);
+
+    AGL_CHECK_ERROR;
+  }
+
+  outBuffer->copyToHost(output, sizeof(float) * OH * OW * OC);
+  if (debugPrintTensors) {
+    agpu_print4d(shaderKey, output, N, OH, OW, OC);
+  }
+
+  return ares;
+}
+
+// Depthwise
+AResult agpu_conv2dDW_buf_IKnchw(
+    const float* input,
+    uint32_t N,
+    uint32_t C,
+    uint32_t H,
+    uint32_t W,
+    const float* weights,
+    uint32_t OC,
+    uint32_t KH,
+    uint32_t KW,
+    const float* bias,
+    uint32_t SY,
+    uint32_t SX,
+    uint32_t PY,
+    uint32_t PX,
+    uint32_t DY,
+    uint32_t DX,
+    uint32_t G,
+    float* output,
+    int64_t mod) {
+  assert(G == C);
+
+  setBenchId(mod);
+  setPrecision(highp);
+  initAGLContextOnce();
+  AResult ares;
+  static const bool debugPrintTensors = DEBUG_PRINT_TENSOR;
+  if (debugPrintTensors) {
+    agpu_print4d("input:", input, N, C, H, W);
+    agpu_print4d("kernel:", weights, OC, C, KH, KW);
+    uint32_t bdims[1] = {OC};
+    agpu_print("bias:", bias, 1, bdims);
+  }
+  const int KWE = (KW - 1) * DX + 1;
+  const int KHE = (KH - 1) * DY + 1;
+  const uint32_t OW = ((W - KWE + 2 * PX) / SX) + 1;
+  const uint32_t OH = ((H - KHE + 2 * PY) / SY) + 1;
+  const uint32_t GC = G * C;
+  const uint32_t GOC = G * OC;
+  const uint32_t OC_4 = UP_DIV(OC, 4);
+
+  auto biasBuff = AGLSSBuffer::from(
+      bias, sizeof(float) * ALIGN_UP4(OC), sizeof(float) * OC);
+  auto kernelBuff = AGLSSBuffer::from(
+      weights,
+      sizeof(float) * ALIGN_UP4(GOC) * KH * KW,
+      sizeof(float) * GOC * KH * KW);
+  auto inputBuff = AGLSSBuffer::from(
+      input, sizeof(float) * ALIGN_UP4(GC) * H * W, sizeof(float) * GC * H * W);
+
+  if (debugPrintTensors) {
+    std::vector<float> inputBuffDebugVec = inputBuff->copyToHostVec();
+    agpu_print4d("input buffer nchw:\n", inputBuffDebugVec.data(), 1, C, H, W);
+  }
+
+  const char* modeShaderKey[1] = {
+      "convDW_buf_IKnchw_glsl",
+  };
+  auto shaderKey = modeShaderKey[0];
+  const char* modeShaderCode[1] = {
+      convDW_buf_IKnchw_glsl,
+  };
+  const int outBufferSize = sizeof(float) * ALIGN_UP4(GOC) * OH * OW;
+  auto outBuffer = std::make_unique<AGLSSBuffer>(outBufferSize);
+  {
+    int workGroupSize[3];
+    std::vector<std::string> header;
+    addCompGroupSizeDefines(header, workGroupSize, 8, 8, 1);
+
+    auto shader = getShader(modeShaderKey[mod], modeShaderCode[mod], header);
+
+    shader->useProgram();
+    AGL_CHECK_ERROR;
+
+    outBuffer->bindInProgram(0);
+    inputBuff->bindInProgram(1);
+    kernelBuff->bindInProgram(2);
+    biasBuff->bindInProgram(3);
+
+    glUniform2i(4, PX, PY);
+    glUniform2i(5, KW, KH);
+    glUniform2i(6, SX, SY);
+    glUniform2i(7, DX, DY);
+    glUniform3i(8, OW, OH, OC_4);
+    glUniform3i(9, W, H, C);
+    AGL_CHECK_ERROR;
+
+    ares.gpu_shader_conv_time = gComputeWithTime(
+        UP_DIV(OW, workGroupSize[0]),
+        UP_DIV(OH, workGroupSize[1]),
+        UP_DIV(OC_4, workGroupSize[2]),
+        shaderKey,
+        workGroupSize[0],
+        workGroupSize[1],
+        workGroupSize[2]);
+
+    AGL_CHECK_ERROR;
+  }
+
+  outBuffer->copyToHost(output, sizeof(float) * OC * OH * OW);
+  if (debugPrintTensors) {
+    agpu_print4d(shaderKey, output, N, OC, OH, OW);
+  }
+
+  return ares;
+}
+
+AResult agpu_conv2dDW_buf_Inhwc_Knchw(
+    const float* input,
+    uint32_t N,
+    uint32_t C,
+    uint32_t H,
+    uint32_t W,
+    const float* weights,
+    uint32_t OC,
+    uint32_t KH,
+    uint32_t KW,
+    const float* bias,
+    uint32_t SY,
+    uint32_t SX,
+    uint32_t PY,
+    uint32_t PX,
+    uint32_t DY,
+    uint32_t DX,
+    uint32_t G,
+    float* output,
+    int64_t mod) {
+  setBenchId(mod);
+  setPrecision(highp);
+  initAGLContextOnce();
+  AResult ares;
+  static const bool debugPrintTensors = true; // DEBUG_PRINT_TENSOR;
+  if (debugPrintTensors) {
+    agpu_print4d("input:", input, N, H, W, C);
+    agpu_print4d("kernel:", weights, OC, C, KH, KW);
+    uint32_t bdims[1] = {OC};
+    agpu_print("bias:", bias, 1, bdims);
+  }
+
+  const int OC_4 = UP_DIV(OC, 4);
+  const int C_4 = UP_DIV(C, 4);
+  const int KWE = (KW - 1) * DX + 1;
+  const int KHE = (KH - 1) * DY + 1;
+  const uint32_t OW = ((W - KWE + 2 * PX) / SX) + 1;
+  const uint32_t OH = ((H - KHE + 2 * PY) / SY) + 1;
+
+  const uint32_t GC = G * C;
+  const uint32_t GOC = G * OC;
+
+  auto biasBuff = AGLSSBuffer::from(
+      bias, sizeof(float) * ALIGN_UP4(OC), sizeof(float) * OC);
+  auto kernelBuff = AGLSSBuffer::from(
+      weights,
+      sizeof(float) * ALIGN_UP4(GOC) * KH * KW,
+      sizeof(float) * GOC * KH * KW);
+  auto inputBuff = AGLSSBuffer::from(input, sizeof(float) * H * W * C);
+
+  const char* modeShaderKey[1] = {
+      "convDW_buf_Inhwc_Knchw_glsl",
+  };
+  const char* modeShaderCode[1] = {
+      convDW_buf_Inhwc_Knchw_glsl,
+  };
+  auto shaderKey = modeShaderKey[0];
+  const int outBufferSize = sizeof(float) * OH * OW * OC;
+
+  auto outBuffer = std::make_unique<AGLSSBuffer>(outBufferSize);
+  {
+    int workGroupSize[3];
+    std::vector<std::string> header;
+    addCompGroupSizeDefines(header, workGroupSize, 8, 8, 1);
+
+    auto shader = getShader(modeShaderKey[mod], modeShaderCode[mod], header);
+
+    shader->useProgram();
+    AGL_CHECK_ERROR;
+
+    outBuffer->bindInProgram(0);
+    inputBuff->bindInProgram(1);
+    kernelBuff->bindInProgram(2);
+    biasBuff->bindInProgram(3);
+
+    glUniform2i(4, PX, PY);
+    glUniform2i(5, KW, KH);
+    glUniform2i(6, SX, SY);
+    glUniform2i(7, DX, DY);
+    glUniform3i(8, OW, OH, OC);
+    glUniform3i(9, W, H, C);
+    AGL_CHECK_ERROR;
+
+    ares.gpu_shader_conv_time = gComputeWithTime(
+        UP_DIV(OW, workGroupSize[0]),
+        UP_DIV(OH, workGroupSize[1]),
+        UP_DIV(OC_4, workGroupSize[2]),
+        shaderKey,
+        workGroupSize[0],
+        workGroupSize[1],
+        workGroupSize[2]);
+
+    AGL_CHECK_ERROR;
+  }
+
+  outBuffer->copyToHost(output, sizeof(float) * OH * OW * OC);
+  if (debugPrintTensors) {
+    agpu_print4d(shaderKey, output, N, OH, OW, OC);
+  }
+  return ares;
+}
+
+AResult agpu_conv2dDW_buf_IKnhwc(
+    const float* input,
+    uint32_t N,
+    uint32_t C,
+    uint32_t H,
+    uint32_t W,
+    const float* weights,
+    uint32_t OC,
+    uint32_t KH,
+    uint32_t KW,
+    const float* bias,
+    uint32_t SY,
+    uint32_t SX,
+    uint32_t PY,
+    uint32_t PX,
+    uint32_t DY,
+    uint32_t DX,
+    uint32_t G,
+    float* output,
+    int64_t mod) {
+  setBenchId(mod);
+  setPrecision(highp);
+  initAGLContextOnce();
+  AResult ares;
+  static const bool debugPrintTensors = true; // DEBUG_PRINT_TENSOR;
+  if (debugPrintTensors) {
+    agpu_print4d("input:", input, N, H, W, C);
+    agpu_print4d("kernel:", weights, OC, KH, KW, C);
+    uint32_t bdims[1] = {OC};
+    agpu_print("bias:", bias, 1, bdims);
+  }
+
+  const int OC_4 = UP_DIV(OC, 4);
+  const int C_4 = UP_DIV(C, 4);
+  const int KWE = (KW - 1) * DX + 1;
+  const int KHE = (KH - 1) * DY + 1;
+  const uint32_t OW = ((W - KWE + 2 * PX) / SX) + 1;
+  const uint32_t OH = ((H - KHE + 2 * PY) / SY) + 1;
+  auto biasBuff = AGLSSBuffer::from(
+      bias, sizeof(float) * ALIGN_UP4(OC), sizeof(float) * OC);
+
+  auto kernelBuff = kernelCHWBufferPackO4I4(weights, OC, C, KH, KW, ares);
+
+  auto inputBuff = AGLSSBuffer::from(input, sizeof(float) * H * W * C);
+
+  const char* modeShaderKey[1] = {
+      "convDW_buf_IKnhwc_glsl",
+  };
+  const char* modeShaderCode[1] = {
+      convDW_buf_IKnhwc_glsl,
+  };
+  auto shaderKey = modeShaderKey[0];
+
+  const int outBufferSize = sizeof(float) * OH * OW * OC;
+  auto outBuffer = std::make_unique<AGLSSBuffer>(outBufferSize);
+  {
+    int workGroupSize[3];
+    std::vector<std::string> header;
+    addCompGroupSizeDefines(header, workGroupSize, 1, 1, OC_4);
+
+    auto shader = getShader(modeShaderKey[mod], modeShaderCode[mod], header);
+
+    shader->useProgram();
+    AGL_CHECK_ERROR;
+
+    outBuffer->bindInProgram(0);
+    inputBuff->bindInProgram(1);
+    kernelBuff->bindInProgram(2);
+    biasBuff->bindInProgram(3);
+
+    glUniform2i(4, PX, PY);
+    glUniform2i(5, KW, KH);
+    glUniform2i(6, SX, SY);
+    glUniform2i(7, DX, DY);
+    AGL_CHECK_ERROR;
+
+    glUniform3i(8, OW, OH, OC);
+    glUniform3i(9, W, H, C);
+    AGL_CHECK_ERROR;
+
+    ares.gpu_shader_conv_time = gComputeWithTime(
+        UP_DIV(OW, workGroupSize[0]),
+        UP_DIV(OH, workGroupSize[1]),
+        UP_DIV(OC_4, workGroupSize[2]),
+        modeShaderCode[mod],
+        workGroupSize[0],
+        workGroupSize[1],
+        workGroupSize[2]);
+
+    AGL_CHECK_ERROR;
+  }
+
+  outBuffer->copyToHost(output, sizeof(float) * OH * OW * OC);
+  if (debugPrintTensors) {
+    agpu_print4d(shaderKey, output, N, OH, OW, OC);
   }
 
   return ares;
@@ -1567,7 +1928,7 @@ AResult agpu_conv2d(
     uint32_t PX,
     uint32_t DY,
     uint32_t DX,
-    uint32_t groups,
+    uint32_t G,
     float* output) {
   return agpu_conv2d_(
       input,
@@ -1586,7 +1947,7 @@ AResult agpu_conv2d(
       PX,
       DY,
       DX,
-      groups,
+      G,
       output,
       0);
 }
@@ -1608,10 +1969,10 @@ AResult agpu_conv2d_(
     uint32_t PX,
     uint32_t DY,
     uint32_t DX,
-    uint32_t groups,
+    uint32_t G,
     float* output,
     int64_t mod) {
-  return agpu_conv2d_sTextures(
+  return agpu_conv2d_tex_IKnc4hw(
       input,
       N,
       C,
@@ -1628,12 +1989,12 @@ AResult agpu_conv2d_(
       PX,
       DY,
       DX,
-      groups,
+      G,
       output,
       mod);
 }
 
-AResult agpu_conv2d_sTextures(
+AResult agpu_conv2d_tex_IKnc4hw(
     const float* input,
     uint32_t N,
     uint32_t C,
@@ -1650,7 +2011,7 @@ AResult agpu_conv2d_sTextures(
     uint32_t PX,
     uint32_t DY,
     uint32_t DX,
-    uint32_t groups,
+    uint32_t G,
     float* output,
     int64_t mod) {
   setBenchId(mod);
@@ -1685,7 +2046,7 @@ AResult agpu_conv2d_sTextures(
 
   auto biasBuff = AGLSSBuffer::from(
       bias, sizeof(float) * ALIGN_UP4(OC), sizeof(float) * OC);
-  auto kernelBuff = kernelBufferPackO4I4(weights, OC, C, KH, KW, ares);
+  auto kernelBuff = kernelCHWBufferPackO4I4(weights, OC, C, KH, KW, ares);
 
   APRINT("kernelTex(%d, %d, %d)", C_4 * unit, OC_4, KH * KW);
   auto kernelTex = std::make_unique<AGLTexture>(
@@ -1717,7 +2078,8 @@ AResult agpu_conv2d_sTextures(
   std::vector<std::string> header;
   addCompGroupSizeDefines(header, compGroupSize, 1, 1, OC_4);
 
-  auto convProgram = getShader("convolution", convolution_glsl, header);
+  auto shaderKey = "conv_tex_IKnc4hw_glsl";
+  auto convProgram = getShader(shaderKey, conv_tex_IKnc4hw_glsl, header);
 
   auto outputTex = std::make_unique<AGLTexture>(
       W, H, OC_4, getTexFormat(), GL_TEXTURE_3D, false);
@@ -1757,7 +2119,7 @@ AResult agpu_conv2d_sTextures(
       deviceTex2hostCHW(outputTex->id(), output, OW, OH, OC, false /* C4 */);
 
   if (debugPrintTensors) {
-    agpu_print4d("conv2d output:", output, N, OC, OH, OW);
+    agpu_print4d(shaderKey, output, N, OC, OH, OW);
   }
   return ares;
 }

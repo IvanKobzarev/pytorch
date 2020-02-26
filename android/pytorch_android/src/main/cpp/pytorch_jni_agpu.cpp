@@ -782,11 +782,12 @@ static void BM_conv_agpu(benchmark::State& state, const char* name) {
 
   std::vector<float> output(n * c_out * output_w * output_h);
   using fp_conv2d_t = decltype(&agpu::agpu_conv2d_);
-  static fp_conv2d_t fa[5] = {/*  0 */ agpu::agpu_conv2d_sTextures,
-                              /* 10 */ agpu::agpu_conv2d_buffers_sOutNc4nc,
-                              /* 20 */ agpu::agpu_conv2d_buffers_sOutNchw,
-                              /* 30 */ agpu::agpu_conv2d_buffers_sInOutNchw,
-                              /* 40 */ agpu::agpu_conv2d_kernel_repack_};
+  static fp_conv2d_t fa[5] = {
+      /*  0 */ agpu::agpu_conv2d_tex_IKnc4hw,
+      /* 10 */ agpu::agpu_conv2d_buf_IKnchw_SIKOnc4hw,
+      /* 20 */ agpu::agpu_conv2d_buf_IKnchw_SIKnc4hw_SOnchw,
+      /* 30 */ agpu::agpu_conv2d_buf_IKnchw_SKnc4hw,
+      /* 40 */ agpu::agpu_conv2d_kernel_repack_};
 
   for (auto _ : state) {
     state.PauseTiming();
@@ -831,118 +832,167 @@ static void BM_conv_agpu(benchmark::State& state, const char* name) {
   //  state.counters["\nFreq        "] = getCurrentCpuFrequency();
 }
 
-static void baby_test_conv_agpu() {
-  const int64_t n = 1;
-  const int64_t h = 3;
-  const int64_t w = 3;
+static int64_t kT0_N = 1;
+static int64_t kT0_H = 3;
+static int64_t kT0_W = 3;
 
-  const int64_t kh = 2;
-  const int64_t kw = 2;
+static int64_t kT0_KH = 2;
+static int64_t kT0_KW = 2;
 
-  const int64_t py = 0;
-  const int64_t px = 0;
+static int64_t kT0_PY = 0;
+static int64_t kT0_PX = 0;
 
-  const int64_t stride = 1;
-  const int64_t dilation = 1;
+static int64_t kT0_S = 1;
+static int64_t kT0_D = 1;
 
-  const int64_t groups = 1;
-  const int64_t groups_c_in = 3;
-  const int64_t groups_c_out = 2;
+const size_t kT0_KHE = (kT0_H - 1) * kT0_D + 1;
+const size_t kT0_KWE = (kT0_W - 1) * kT0_D + 1;
+const size_t kT0_OH = (kT0_H + 2 * kT0_PY - kT0_KHE) / kT0_S + 1;
+const size_t kT0_OW = (kT0_W + 2 * kT0_PX - kT0_KWE) / kT0_S + 1;
 
-  const int64_t c_in = groups_c_in;
-  const int64_t c_out = groups_c_out;
+static std::vector<float> kT0_Bias = {0, 0};
 
-  std::vector<float> input = {1,    2,    3,    4,    5,    6,    7,
-                              8,    9,    101,  102,  103,  104,  105,
-                              106,  107,  108,  109,  1001, 1002, 1003,
-                              1004, 1005, 1006, 1007, 1008, 1009};
+static std::vector<float> kT0_InputNCHW = {
+    1,    2,    3,    4,    5,    6,    7,    8,    9,
+    101,  102,  103,  104,  105,  106,  107,  108,  109,
+    1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009};
+static std::vector<float> kT0_KernelNCHW = {
+    1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0};
 
-  std::vector<float> kernel = {1,  0, 0, 0, 0, 1,  0, 0, 0, 0, 1,  0,
+static std::vector<float> kT0_InputNHWC = {
+    1, 101, 1001, 2, 102, 1002, 3, 103, 1003, 4, 104, 1004, 5, 105, 1005,
+    6, 106, 1006, 7, 107, 1007, 8, 108, 1008, 9, 109, 1009};
 
-                               -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0};
-  std::vector<float> bias = {0, 0};
+static std::vector<float> kT0_KernelNHWC = {
+    1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0};
 
-  const size_t effK_h = (kh - 1) * dilation + 1;
-  const size_t effK_w = (kw - 1) * dilation + 1;
-  const size_t output_h = (h + 2 * py - effK_h) / stride + 1;
-  const size_t output_w = (w + 2 * px - effK_w) / stride + 1;
+static std::vector<float> kT0_OutputNCHW =
+    {1107, 1110, 1116, 1119, -1107, -1110, -1116, -1119};
 
-  std::vector<float> output(n * c_out * output_w * output_h);
-  agpu::agpu_conv2d_buffers_sInOutNchw(
-      input.data(),
-      n,
-      c_in,
-      h,
-      w,
-      kernel.data(),
-      c_out,
-      kh,
-      kw,
-      bias.data(),
-      stride,
-      stride,
-      py,
-      px,
-      dilation,
-      dilation,
-      groups,
+static std::vector<float> kT0_OutputNHWC =
+    {1107, -1107, 1110, -1110, 1116, -1116, 1119, -1119};
+
+static std::vector<float> kT0_GOutputNCHW = {
+    1,  2,  4,  5,  102,  103,  105,  106,  1004,  1005,  1007,  1008,
+    -1, -2, -4, -5, -102, -103, -105, -106, -1004, -1005, -1007, -1008};
+static std::vector<float> kT0_GOutputNHWC = {
+    1,   -1,   2,   -2,   4,    -4,    5,    -5,    102,  -102,  103,  -103,
+    105, -105, 106, -106, 1004, -1004, 1005, -1005, 1007, -1007, 1008, -1008};
+
+static void test0_conv_agpu_IKnchw() {
+  const int64_t G = 1;
+  const int64_t C = 3;
+  const int64_t OC = 2;
+
+  std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
+  agpu::agpu_conv2d_buf_IKnchw_SKnc4hw(
+      kT0_InputNCHW.data(),
+      kT0_N,
+      C,
+      kT0_H,
+      kT0_W,
+      kT0_KernelNCHW.data(),
+      OC,
+      kT0_KH,
+      kT0_KW,
+      kT0_Bias.data(),
+      kT0_S,
+      kT0_S,
+      kT0_PY,
+      kT0_PX,
+      kT0_D,
+      kT0_D,
+      G,
       output.data());
+
+  assert(kT0_OutputNCHW == output);
 }
 
-static void baby_test_conv_agpu_nhwc() {
-  const int64_t n = 1;
-  const int64_t h = 3;
-  const int64_t w = 3;
+static void test0_conv_agpu_Inhwc_Knchw() {
+  const int64_t G = 1;
+  const int64_t C = 3;
+  const int64_t OC = 2;
 
-  const int64_t kh = 2;
-  const int64_t kw = 2;
-
-  const int64_t py = 0;
-  const int64_t px = 0;
-
-  const int64_t stride = 1;
-  const int64_t dilation = 1;
-
-  const int64_t groups = 1;
-  const int64_t groups_c_in = 3;
-  const int64_t groups_c_out = 2;
-
-  const int64_t c_in = groups_c_in;
-  const int64_t c_out = groups_c_out;
-
-  std::vector<float> input = {1, 101, 1001, 2, 102, 1002, 3, 103, 1003,
-                              4, 104, 1004, 5, 105, 1005, 6, 106, 1006,
-                              7, 107, 1007, 8, 108, 1008, 9, 109, 1009};
-
-  std::vector<float> kernel = {1,  0, 0, 0, 0, 1,  0, 0, 0, 0, 1,  0,
-                               -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0};
-  std::vector<float> bias = {0, 0};
-
-  const size_t effK_h = (kh - 1) * dilation + 1;
-  const size_t effK_w = (kw - 1) * dilation + 1;
-  const size_t output_h = (h + 2 * py - effK_h) / stride + 1;
-  const size_t output_w = (w + 2 * px - effK_w) / stride + 1;
-
-  std::vector<float> output(n * c_out * output_w * output_h);
-  agpu::agpu_conv2d_buffers_nhwc(
-      input.data(),
-      n,
-      c_in,
-      h,
-      w,
-      kernel.data(),
-      c_out,
-      kh,
-      kw,
-      bias.data(),
-      stride,
-      stride,
-      py,
-      px,
-      dilation,
-      dilation,
-      groups,
+  std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
+  agpu::agpu_conv2dDW_buf_Inhwc_Knchw(
+      kT0_InputNHWC.data(),
+      kT0_N,
+      C,
+      kT0_H,
+      kT0_W,
+      kT0_KernelNCHW.data(),
+      OC,
+      kT0_KH,
+      kT0_KW,
+      kT0_Bias.data(),
+      kT0_S,
+      kT0_S,
+      kT0_PY,
+      kT0_PX,
+      kT0_D,
+      kT0_D,
+      G,
       output.data());
+
+  assert(kT0_OutputNHWC == output);
+}
+
+static void test0_convDW_agpu_IKnchw() {
+  const int64_t G = 3;
+  const int64_t C = 3;
+  const int64_t OC = 2;
+
+  std::vector<float> output(kT0_N * G * OC * kT0_OH * kT0_OW);
+  agpu::agpu_conv2dDW_buf_IKnchw(
+      kT0_InputNCHW.data(),
+      kT0_N,
+      C,
+      kT0_H,
+      kT0_W,
+      kT0_KernelNCHW.data(),
+      OC,
+      kT0_KH,
+      kT0_KW,
+      kT0_Bias.data(),
+      kT0_S,
+      kT0_S,
+      kT0_PY,
+      kT0_PX,
+      kT0_D,
+      kT0_D,
+      G,
+      output.data());
+
+  assert(kT0_GOutputNCHW == output);
+}
+
+static void test0_convDW_agpu_IKnhwc() {
+  const int64_t G = 3;
+  const int64_t C = 3;
+  const int64_t OC = 2;
+
+  std::vector<float> output(kT0_N * G * OC * kT0_OH * kT0_OW);
+  agpu::agpu_conv2dDW_buf_IKnhwc(
+      kT0_InputNHWC.data(),
+      kT0_N,
+      C,
+      kT0_H,
+      kT0_W,
+      kT0_KernelNHWC.data(),
+      OC,
+      kT0_KH,
+      kT0_KW,
+      kT0_Bias.data(),
+      kT0_S,
+      kT0_S,
+      kT0_PY,
+      kT0_PX,
+      kT0_D,
+      kT0_D,
+      G,
+      output.data());
+
+  assert(kT0_GOutputNHWC == output);
 }
 
 void gbench_main(const std::string& args) {
@@ -1033,7 +1083,10 @@ void gbench_main(const std::string& args) {
     benchmark::RunSpecifiedBenchmarks();
   */
 
-  baby_test_conv_agpu_nhwc();
+  test0_conv_agpu_IKnchw();
+  // test0_conv_agpu_Inhwc_Knchw();
+  // test0_convDW_agpu_IKnchw();
+  // test0_convDW_agpu_IKnhwc();
 }
 
 void test_module(torch::jit::script::Module module, const std::string& args) {
