@@ -96,7 +96,7 @@ AResult agpu_conv2d(
       uint32_t H,           \
       uint32_t W,           \
       const float* weights, \
-      uint32_t KC,          \
+      uint32_t OC,          \
       uint32_t KH,          \
       uint32_t KW,          \
       const float* bias,    \

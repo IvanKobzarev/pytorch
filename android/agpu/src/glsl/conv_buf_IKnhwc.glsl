@@ -8,8 +8,8 @@ layout(binding=1) readonly buffer inputBuffer{
 }uInBuffer;
 
 layout(binding=2) readonly buffer kernelBuffer{
-  vec4 data[];
-}uKernelBuffer;
+  float data[];
+}uKBuffer;
 
 layout(binding=3) readonly buffer bias{
   vec4 data[];
@@ -58,9 +58,7 @@ void main()
         v[2] = v[0];
         v[3] = v[0];
         ivec4 inBi, inBisx0, inBisx1, inBisx2, inBisx3;
-        vec4 k0, k1, k2, k3;
-        int kBi_oc4_i = oc_4i * (C_4 * KH * KW * 4);
-        int kBi;
+        vec4 k[4];
         int sx0, sx1, sx2, sx3;
         for (kyi=sfxy.y; kyi<efxy.y; ++kyi)
         {
@@ -77,16 +75,23 @@ void main()
                 float m2 = sx2 >= 0 && sx2 < W ? 1.0 : 0.0;
                 float m3 = sx3 >= 0 && sx3 < W ? 1.0 : 0.0;
 
-                kBi = kBi_oc4_i + (kxi + kyi*KW) * 4;
-
                 for (ic_4i=0; ic_4i < C_4; ++ic_4i)
                 {
-                    k0 = uKernelBuffer.data[kBi+0];
-                    k1 = uKernelBuffer.data[kBi+1];
-                    k2 = uKernelBuffer.data[kBi+2];
-                    k3 = uKernelBuffer.data[kBi+3];
+                    k[0] = vec4(0.0);
+                    k[1] = vec4(0.0);
+                    k[2] = vec4(0.0);
+                    k[3] = vec4(0.0);
+                    int ic4ie = min(4, C-4*ic_4i);
+                    int kBi0 = C*KH*KW*(oc_4i+0) + C*(kyi*KW + kxi) + ic_4i;
+                    for (int ic4i=0;ic4i<ic4ie; ++ic4i)
+                    {
+                      k[0][ic4i] = uKBuffer.data[kBi0+0];
+                      k[1][ic4i] = uKBuffer.data[kBi0+1*C*KH*KW];
+                      k[2][ic4i] = uKBuffer.data[kBi0+2*C*KH*KW];
+                      k[3][ic4i] = uKBuffer.data[kBi0+3*C*KH*KW];
+                    }
 
-                    mat4 k = mat4(k0, k1, k2, k3);
+                    mat4 kmat = mat4(k[0], k[1], k[2], k[3]);
 
                     inBi.x = W * C * sy + ic_4i + 0;
                     inBi.y = W * C * sy + ic_4i + 1;
@@ -103,11 +108,10 @@ void main()
                     vec4 invsx2 = vec4(uInBuffer.data[inBisx2.x],uInBuffer.data[inBisx2.y],uInBuffer.data[inBisx2.z],uInBuffer.data[inBisx2.w]);
                     vec4 invsx3 = vec4(uInBuffer.data[inBisx3.x],uInBuffer.data[inBisx3.y],uInBuffer.data[inBisx3.z],uInBuffer.data[inBisx3.w]);
 
-                    v[0] += k * invsx0 * m0;
-                    v[1] += k * invsx1 * m1;
-                    v[2] += k * invsx2 * m2;
-                    v[3] += k * invsx3 * m3;
-                    kBi += KH * KW * 4;
+                    v[0] += kmat * invsx0 * m0;
+                    v[1] += kmat * invsx1 * m1;
+                    v[2] += kmat * invsx2 * m2;
+                    v[3] += kmat * invsx3 * m3;
                 }
             }
         }

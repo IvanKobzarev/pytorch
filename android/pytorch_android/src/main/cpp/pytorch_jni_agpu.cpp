@@ -28,7 +28,7 @@ template <typename T>
 void log(const char* m, T t) {
   std::ostringstream os;
   os << t << std::endl;
-  ALOGI("%s typeid:%s %s", m, typeid(t).name(), os.str().c_str());
+  ALOGI("%s %s", m, os.str().c_str());
 }
 
 void agpu_print(const char* m, const float* t, uint32_t rank, uint32_t* dims) {
@@ -832,23 +832,23 @@ static void BM_conv_agpu(benchmark::State& state, const char* name) {
   //  state.counters["\nFreq        "] = getCurrentCpuFrequency();
 }
 
-static int64_t kT0_N = 1;
-static int64_t kT0_H = 3;
-static int64_t kT0_W = 3;
+static constexpr int64_t kT0_N = 1;
+static constexpr int64_t kT0_H = 3;
+static constexpr int64_t kT0_W = 3;
 
-static int64_t kT0_KH = 2;
-static int64_t kT0_KW = 2;
+static constexpr int64_t kT0_KH = 2;
+static constexpr int64_t kT0_KW = 2;
 
-static int64_t kT0_PY = 0;
-static int64_t kT0_PX = 0;
+static constexpr int64_t kT0_PY = 0;
+static constexpr int64_t kT0_PX = 0;
 
-static int64_t kT0_S = 1;
-static int64_t kT0_D = 1;
+static constexpr int64_t kT0_S = 1;
+static constexpr int64_t kT0_D = 1;
 
-const size_t kT0_KHE = (kT0_H - 1) * kT0_D + 1;
-const size_t kT0_KWE = (kT0_W - 1) * kT0_D + 1;
-const size_t kT0_OH = (kT0_H + 2 * kT0_PY - kT0_KHE) / kT0_S + 1;
-const size_t kT0_OW = (kT0_W + 2 * kT0_PX - kT0_KWE) / kT0_S + 1;
+static constexpr size_t kT0_KHE = (kT0_KH - 1) * kT0_D + 1;
+static constexpr size_t kT0_KWE = (kT0_KW - 1) * kT0_D + 1;
+static constexpr size_t kT0_OH = (kT0_H + 2 * kT0_PY - kT0_KHE) / kT0_S + 1;
+static constexpr size_t kT0_OW = (kT0_W + 2 * kT0_PX - kT0_KWE) / kT0_S + 1;
 
 static std::vector<float> kT0_Bias = {0, 0};
 
@@ -858,13 +858,20 @@ static std::vector<float> kT0_InputNCHW = {
     1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009};
 static std::vector<float> kT0_KernelNCHW = {
     1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0};
+static std::vector<float> kT0_GKernelNCHW =
+    {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
 
 static std::vector<float> kT0_InputNHWC = {
     1, 101, 1001, 2, 102, 1002, 3, 103, 1003, 4, 104, 1004, 5, 105, 1005,
     6, 106, 1006, 7, 107, 1007, 8, 108, 1008, 9, 109, 1009};
 
 static std::vector<float> kT0_KernelNHWC = {
-    1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0};
+    1,  0, 0, 0, 1,  0, 0, 0, 1,  0, 0, 0,
+
+    -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0};
+
+static std::vector<float> kT0_GKernelNHWC =
+    {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
 
 static std::vector<float> kT0_OutputNCHW =
     {1107, 1110, 1116, 1119, -1107, -1110, -1116, -1119};
@@ -872,12 +879,10 @@ static std::vector<float> kT0_OutputNCHW =
 static std::vector<float> kT0_OutputNHWC =
     {1107, -1107, 1110, -1110, 1116, -1116, 1119, -1119};
 
-static std::vector<float> kT0_GOutputNCHW = {
-    1,  2,  4,  5,  102,  103,  105,  106,  1004,  1005,  1007,  1008,
-    -1, -2, -4, -5, -102, -103, -105, -106, -1004, -1005, -1007, -1008};
-static std::vector<float> kT0_GOutputNHWC = {
-    1,   -1,   2,   -2,   4,    -4,    5,    -5,    102,  -102,  103,  -103,
-    105, -105, 106, -106, 1004, -1004, 1005, -1005, 1007, -1007, 1008, -1008};
+static std::vector<float> kT0_GOutputNCHW =
+    {1, 2, 4, 5, 102, 103, 105, 106, 1004, 1005, 1007, 1008};
+static std::vector<float> kT0_GOutputNHWC =
+    {1, 102, 1004, 2, 103, 1005, 4, 105, 1007, 5, 106, 1008};
 
 static void test0_conv_agpu_IKnchw() {
   const int64_t G = 1;
@@ -905,6 +910,8 @@ static void test0_conv_agpu_IKnchw() {
       G,
       output.data());
 
+  log("output:", output);
+  log("expected_output:", kT0_OutputNCHW);
   assert(kT0_OutputNCHW == output);
 }
 
@@ -914,7 +921,7 @@ static void test0_conv_agpu_Inhwc_Knchw() {
   const int64_t OC = 2;
 
   std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
-  agpu::agpu_conv2dDW_buf_Inhwc_Knchw(
+  agpu::agpu_conv2d_buf_Inhwc_Knchw(
       kT0_InputNHWC.data(),
       kT0_N,
       C,
@@ -934,22 +941,55 @@ static void test0_conv_agpu_Inhwc_Knchw() {
       G,
       output.data());
 
+  log("output:", output);
+  log("expected_output:", kT0_OutputNHWC);
+  assert(kT0_OutputNHWC == output);
+}
+
+static void test0_conv_agpu_IKnhwc() {
+  const int64_t G = 1;
+  const int64_t C = 3;
+  const int64_t OC = 2;
+
+  std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
+  agpu::agpu_conv2d_buf_IKnhwc(
+      kT0_InputNHWC.data(),
+      kT0_N,
+      C,
+      kT0_H,
+      kT0_W,
+      kT0_KernelNCHW.data(),
+      OC,
+      kT0_KH,
+      kT0_KW,
+      kT0_Bias.data(),
+      kT0_S,
+      kT0_S,
+      kT0_PY,
+      kT0_PX,
+      kT0_D,
+      kT0_D,
+      G,
+      output.data());
+
+  log("output:", output);
+  log("expected_output:", kT0_OutputNHWC);
   assert(kT0_OutputNHWC == output);
 }
 
 static void test0_convDW_agpu_IKnchw() {
   const int64_t G = 3;
   const int64_t C = 3;
-  const int64_t OC = 2;
+  const int64_t OC = 3;
 
-  std::vector<float> output(kT0_N * G * OC * kT0_OH * kT0_OW);
+  std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
   agpu::agpu_conv2dDW_buf_IKnchw(
       kT0_InputNCHW.data(),
       kT0_N,
       C,
       kT0_H,
       kT0_W,
-      kT0_KernelNCHW.data(),
+      kT0_GKernelNCHW.data(),
       OC,
       kT0_KH,
       kT0_KW,
@@ -963,22 +1003,24 @@ static void test0_convDW_agpu_IKnchw() {
       G,
       output.data());
 
+  log("output:", output);
+  log("expected_output:", kT0_GOutputNCHW);
   assert(kT0_GOutputNCHW == output);
 }
 
 static void test0_convDW_agpu_IKnhwc() {
   const int64_t G = 3;
   const int64_t C = 3;
-  const int64_t OC = 2;
+  const int64_t OC = 3;
 
-  std::vector<float> output(kT0_N * G * OC * kT0_OH * kT0_OW);
+  std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
   agpu::agpu_conv2dDW_buf_IKnhwc(
       kT0_InputNHWC.data(),
       kT0_N,
       C,
       kT0_H,
       kT0_W,
-      kT0_KernelNHWC.data(),
+      kT0_GKernelNHWC.data(),
       OC,
       kT0_KH,
       kT0_KW,
@@ -992,6 +1034,8 @@ static void test0_convDW_agpu_IKnhwc() {
       G,
       output.data());
 
+  log("output:", output);
+  log("expected_output:", kT0_GOutputNHWC);
   assert(kT0_GOutputNHWC == output);
 }
 
@@ -1083,8 +1127,50 @@ void gbench_main(const std::string& args) {
     benchmark::RunSpecifiedBenchmarks();
   */
 
-  test0_conv_agpu_IKnchw();
+  auto tin = torch::tensor(
+      {{{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}},
+        {{101, 102, 103}, {104, 105, 106}, {107, 108, 109}},
+        {{1001, 1002, 1003}, {1004, 1005, 1006}, {1007, 1008, 1009}}}},
+      torch::kFloat);
+  auto tw = torch::tensor(
+      {
+          {{{1, 0}, {0, 0}}, {{0, 1}, {0, 0}}, {{0, 0}, {1, 0}}},
+          {{{-1, 0}, {0, 0}}, {{0, -1}, {0, 0}}, {{0, 0}, {-1, 0}}},
+      },
+      torch::kFloat);
+
+  auto twg = torch::tensor(
+      {
+
+          {{{1, 0}, {0, 0}}},
+
+          {{{0, 1}, {0, 0}}},
+          {{{0, 0}, {1, 0}}}
+
+      },
+      torch::kFloat);
+  auto tb = torch::tensor({0, 0, 0}, torch::kFloat);
+  int64_t g = 3;
+  log("tin.sizes():", tin.sizes());
+  log("tin:", tin);
+  log("twg.sizes():", twg.sizes());
+  log("twg:", twg);
+  log("tb:", tb);
+  //  torch::nn::functional::Conv2dFuncOptions o =
+  //      torch::nn::functional::Conv2dFuncOptions().stride(stride).padding(0);
+  auto tout = at::conv2d(
+      tin,
+      twg,
+      tb,
+      c10::IntArrayRef{1}, // stride
+      c10::IntArrayRef{0}, // padding
+      c10::IntArrayRef{1}, // dilation
+      g);
+  log("tout:", tout);
+
+  // test0_conv_agpu_IKnchw();
   // test0_conv_agpu_Inhwc_Knchw();
+  test0_conv_agpu_IKnhwc();
   // test0_convDW_agpu_IKnchw();
   // test0_convDW_agpu_IKnhwc();
 }

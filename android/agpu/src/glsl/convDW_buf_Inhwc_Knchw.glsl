@@ -8,7 +8,7 @@ layout(binding=1) readonly buffer inputBuffer{
 }uInBuffer;
 
 layout(binding=2) readonly buffer kernelBuffer{
-  vec4 data[];
+  float data[];
 }uKernelBuffer;
 
 layout(binding=3) readonly buffer bias{
@@ -53,12 +53,10 @@ void main()
 
         vec4 vacc = uBias.data[pos.z];
         vec4 vin, vk;
-        ivec4 kBi, inBi;
 
         int c_4_ie = min(4, C - 4*c_4);
         int c_4_i;
-        int inBi;
-        int kBi;
+        int inBi, kBi;
 
         for (kyi=sfxy.y; kyi<efxy.y; ++kyi)
         {
