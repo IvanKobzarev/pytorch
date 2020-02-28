@@ -117,14 +117,19 @@ CONV_DECL(agpu_conv2d_tex_IKnc4hw); // benchId: [0, 10)
 //---
 
 // Buf NCHW
-CONV_DECL(agpu_conv2d_buf_IKnchw_SIKOnc4hw); // benchId: [10, 20)
-CONV_DECL(agpu_conv2d_buf_IKnchw_SIKnc4hw_SOnchw); // benchId: [20, 30)
-CONV_DECL(agpu_conv2d_buf_IKnchw_SKnc4hw); // benchId: [30, 40)
+CONV_DECL(agpu_conv2d_buf_IKnchw_SIKOnc4hw_KrO4C4HW); // [10, 20)
+CONV_DECL(agpu_conv2d_buf_IKnchw_SIKOnc4hw_KrO4HWC); // [20, 30)
+
+CONV_DECL(agpu_conv2d_buf_IKnchw_SIKnc4hw_SOnchw); // [30, 40)
+CONV_DECL(agpu_conv2d_buf_IKnchw_SKnc4hw); // [50, 60)
 //---
 
 // NHWC
 CONV_DECL(agpu_conv2d_buf_Inhwc_Knchw);
 CONV_DECL(agpu_conv2d_buf_IKnhwc);
+
+CONV_DECL(agpu_conv2d_buf_IKnhwc_KrO4C4HW);
+CONV_DECL(agpu_conv2d_buf_IKnhwc_KrO4HWC);
 //---
 
 // Depthwise

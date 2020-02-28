@@ -38,6 +38,7 @@ void main()
         int W = uInputSize.x;
         int H = uInputSize.y;
         int C_4 = uInputSize.z;
+        int CAU4 = C_4 * 4;
 
         int OW = uOutputSize.x;
         int OH = uOutputSize.y;
@@ -54,15 +55,14 @@ void main()
         v[1] = v[0];
         v[2] = v[0];
         v[3] = v[0];
-        int kBi_oc4i = oc_4i * (C_4 * KH * KW * 4);
+        int kBi_oc4i = oc_4i * CAU4 * KH * KW;
         for (kyi=sfxy.y; kyi<efxy.y; ++kyi)
         {
             int sy = kyi*uDilate.y + s0.y;
             int inBi_sy = sy * W;
-            int kBi_oc4i_kyi = kBi_oc4i + kyi*KW*4;
+            int kBi_oc4i_kyi = kBi_oc4i + kyi*KW*CAU4;
             for (kxi=0; kxi < KW; ++kxi)
             {
-                int kBi = kBi_oc4i_kyi + kxi * 4;
                 int sx0 = kxi*uDilate.x + s0.x;
                 int sx1 = sx0 + uStride.x;
                 int sx2 = sx1 + uStride.x;
@@ -73,6 +73,7 @@ void main()
                 float m2 = sx2 >= 0 && sx2 < W ? 1.0 : 0.0;
                 float m3 = sx3 >= 0 && sx3 < W ? 1.0 : 0.0;
                 int inBi = inBi_sy;
+                int kBi = kBi_oc4i_kyi + CAU4 * kxi;
                 for (ic_4i=0; ic_4i < C_4; ++ic_4i)
                 {
                     vec4 k0 = uKernelBuffer.data[kBi+0];
@@ -87,8 +88,8 @@ void main()
                     v[2] += k*uInputBuffer.data[inBi + sx2] * m2;
                     v[3] += k*uInputBuffer.data[inBi + sx3] * m3;
 
-                    inBi += W * H;
-                    kBi += KH * KW * 4;
+                    inBi += W*H;
+                    kBi += 4;
                 }
             }
         }

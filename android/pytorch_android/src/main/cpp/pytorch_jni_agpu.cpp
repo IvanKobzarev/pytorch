@@ -782,12 +782,15 @@ static void BM_conv_agpu(benchmark::State& state, const char* name) {
 
   std::vector<float> output(n * c_out * output_w * output_h);
   using fp_conv2d_t = decltype(&agpu::agpu_conv2d_);
-  static fp_conv2d_t fa[5] = {
+  static fp_conv2d_t fa[6] = {
       /*  0 */ agpu::agpu_conv2d_tex_IKnc4hw,
-      /* 10 */ agpu::agpu_conv2d_buf_IKnchw_SIKOnc4hw,
-      /* 20 */ agpu::agpu_conv2d_buf_IKnchw_SIKnc4hw_SOnchw,
-      /* 30 */ agpu::agpu_conv2d_buf_IKnchw_SKnc4hw,
-      /* 40 */ agpu::agpu_conv2d_kernel_repack_};
+
+      /* 10 */ agpu::agpu_conv2d_buf_IKnchw_SIKOnc4hw_KrO4C4HW,
+      /* 20 */ agpu::agpu_conv2d_buf_IKnchw_SIKOnc4hw_KrO4HWC,
+
+      /* 30 */ agpu::agpu_conv2d_buf_IKnchw_SIKnc4hw_SOnchw,
+      /* 40 */ agpu::agpu_conv2d_buf_IKnchw_SKnc4hw,
+      /* 50 */ agpu::agpu_conv2d_kernel_repack_};
 
   for (auto _ : state) {
     state.PauseTiming();
@@ -958,7 +961,7 @@ static void test0_conv_agpu_IKnhwc() {
       C,
       kT0_H,
       kT0_W,
-      kT0_KernelNCHW.data(),
+      kT0_KernelNHWC.data(),
       OC,
       kT0_KH,
       kT0_KW,
@@ -977,6 +980,131 @@ static void test0_conv_agpu_IKnhwc() {
   assert(kT0_OutputNHWC == output);
 }
 
+static void test0_conv_agpu_IKnhwc_KrO4C4HW() {
+  const int64_t G = 1;
+  const int64_t C = 3;
+  const int64_t OC = 2;
+
+  std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
+  agpu::agpu_conv2d_buf_IKnhwc_KrO4C4HW(
+      kT0_InputNHWC.data(),
+      kT0_N,
+      C,
+      kT0_H,
+      kT0_W,
+      kT0_KernelNHWC.data(),
+      OC,
+      kT0_KH,
+      kT0_KW,
+      kT0_Bias.data(),
+      kT0_S,
+      kT0_S,
+      kT0_PY,
+      kT0_PX,
+      kT0_D,
+      kT0_D,
+      G,
+      output.data());
+
+  log("output:", output);
+  log("expected_output:", kT0_OutputNHWC);
+  assert(kT0_OutputNHWC == output);
+}
+
+static void test0_conv_agpu_IKnhwc_KrO4HWC() {
+  const int64_t G = 1;
+  const int64_t C = 3;
+  const int64_t OC = 2;
+
+  std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
+  agpu::agpu_conv2d_buf_IKnhwc_KrO4HWC(
+      kT0_InputNHWC.data(),
+      kT0_N,
+      C,
+      kT0_H,
+      kT0_W,
+      kT0_KernelNHWC.data(),
+      OC,
+      kT0_KH,
+      kT0_KW,
+      kT0_Bias.data(),
+      kT0_S,
+      kT0_S,
+      kT0_PY,
+      kT0_PX,
+      kT0_D,
+      kT0_D,
+      G,
+      output.data());
+
+  log("output:", output);
+  log("expected_output:", kT0_OutputNHWC);
+  assert(kT0_OutputNHWC == output);
+}
+
+static void test0_conv_agpu_IKnchw_SIKOnc4hw_KrO4C4HW() {
+  const int64_t G = 1;
+  const int64_t C = 3;
+  const int64_t OC = 2;
+
+  std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
+  agpu::agpu_conv2d_buf_IKnchw_SIKOnc4hw_KrO4C4HW(
+      kT0_InputNCHW.data(),
+      kT0_N,
+      C,
+      kT0_H,
+      kT0_W,
+      kT0_KernelNCHW.data(),
+      OC,
+      kT0_KH,
+      kT0_KW,
+      kT0_Bias.data(),
+      kT0_S,
+      kT0_S,
+      kT0_PY,
+      kT0_PX,
+      kT0_D,
+      kT0_D,
+      G,
+      output.data());
+
+  log("output:", output);
+  log("expected_output:", kT0_OutputNCHW);
+  assert(kT0_OutputNCHW == output);
+}
+
+static void test0_conv_agpu_IKnchw_SIKOnc4hw_KrO4HWC() {
+  const int64_t G = 1;
+  const int64_t C = 3;
+  const int64_t OC = 2;
+
+  std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
+  agpu::agpu_conv2d_buf_IKnchw_SIKOnc4hw_KrO4HWC(
+      kT0_InputNCHW.data(),
+      kT0_N,
+      C,
+      kT0_H,
+      kT0_W,
+      kT0_KernelNCHW.data(),
+      OC,
+      kT0_KH,
+      kT0_KW,
+      kT0_Bias.data(),
+      kT0_S,
+      kT0_S,
+      kT0_PY,
+      kT0_PX,
+      kT0_D,
+      kT0_D,
+      G,
+      output.data());
+
+  log("output:", output);
+  log("expected_output:", kT0_OutputNCHW);
+  assert(kT0_OutputNCHW == output);
+}
+
+// Depthwise
 static void test0_convDW_agpu_IKnchw() {
   const int64_t G = 3;
   const int64_t C = 3;
@@ -1156,8 +1284,6 @@ void gbench_main(const std::string& args) {
   log("twg.sizes():", twg.sizes());
   log("twg:", twg);
   log("tb:", tb);
-  //  torch::nn::functional::Conv2dFuncOptions o =
-  //      torch::nn::functional::Conv2dFuncOptions().stride(stride).padding(0);
   auto tout = at::conv2d(
       tin,
       twg,
@@ -1168,11 +1294,15 @@ void gbench_main(const std::string& args) {
       g);
   log("tout:", tout);
 
-  // test0_conv_agpu_IKnchw();
-  // test0_conv_agpu_Inhwc_Knchw();
+  test0_conv_agpu_IKnchw();
+  test0_conv_agpu_Inhwc_Knchw();
   test0_conv_agpu_IKnhwc();
-  // test0_convDW_agpu_IKnchw();
-  // test0_convDW_agpu_IKnhwc();
+  test0_conv_agpu_IKnhwc_KrO4C4HW();
+  test0_conv_agpu_IKnhwc_KrO4HWC();
+  test0_convDW_agpu_IKnchw();
+  test0_convDW_agpu_IKnhwc();
+  test0_conv_agpu_IKnchw_SIKOnc4hw_KrO4C4HW();
+  test0_conv_agpu_IKnchw_SIKOnc4hw_KrO4HWC();
 }
 
 void test_module(torch::jit::script::Module module, const std::string& args) {
