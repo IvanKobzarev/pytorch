@@ -27,6 +27,7 @@ android {
         buildConfigField("String", "LOGCAT_TAG", "@string/app_name")
         buildConfigField("long[]", "INPUT_TENSOR_SHAPE", "new long[]{1, 3, 224, 224}")
         buildConfigField("String", "AGPU_GTEST", 'null')
+        buildConfigField("String", "AGPU_TEST0", 'null')
         buildConfigField("String", "AGPU_GTEST_M", 'null')
         buildConfigField("String", "AGPU_GBENCH", 'null')
         buildConfigField("String", "AGPU_GBENCH_M", 'null')
@@ -54,6 +55,14 @@ android {
             buildConfigField("String", "MODULE_ASSET_NAME", "\"mn2-fp32.pt\"")
             addManifestPlaceholders([APP_NAME: "BENCHM"])
             buildConfigField("String", "LOGCAT_TAG", "\"pytorch-benchM\"")
+        }
+        tst0 {
+            dimension "model"
+            applicationIdSuffix ".tst0"
+            buildConfigField("String", "AGPU_TEST0", "\""+project.properties['ARGS']+"\"")
+            buildConfigField("String", "MODULE_ASSET_NAME", "\"mn2-fp32.pt\"")
+            addManifestPlaceholders([APP_NAME: "TST0"])
+            buildConfigField("String", "LOGCAT_TAG", "\"pytorch-tst0\"")
         }
         tst {
             dimension "model"

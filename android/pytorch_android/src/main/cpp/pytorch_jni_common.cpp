@@ -19,7 +19,8 @@
 
 namespace pytorch_jni {
 
-class MemoryReadAdapter2 final : public caffe2::serialize::ReadAdapterInterface {
+class MemoryReadAdapter2 final
+    : public caffe2::serialize::ReadAdapterInterface {
  public:
   explicit MemoryReadAdapter2(const void* data, off_t size)
       : data_(data), size_(size){};
@@ -625,11 +626,15 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
 
   static void registerNatives() {
     javaClassStatic()->registerNatives({
-        makeNativeMethod("nativeSetNumThreads", PyTorchAndroidJni::setNumThreads),
+        makeNativeMethod(
+            "nativeSetNumThreads", PyTorchAndroidJni::setNumThreads),
         makeNativeMethod("nativeAgpuGTest", PyTorchAndroidJni::agpu_gtest),
+        makeNativeMethod("nativeAgpuTest0", PyTorchAndroidJni::agpu_test0),
         makeNativeMethod("nativeAgpuGBench", PyTorchAndroidJni::agpu_gbench),
-        makeNativeMethod("nativeAgpuGBenchModule", PyTorchAndroidJni::agpu_gbench_module),
-        makeNativeMethod("nativeAgpuGTestModule", PyTorchAndroidJni::agpu_gtest_module),
+        makeNativeMethod(
+            "nativeAgpuGBenchModule", PyTorchAndroidJni::agpu_gbench_module),
+        makeNativeMethod(
+            "nativeAgpuGTestModule", PyTorchAndroidJni::agpu_gtest_module),
     });
   }
 
@@ -641,6 +646,12 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
       facebook::jni::alias_ref<jclass>,
       facebook::jni::alias_ref<jstring> args) {
     pytorch_jni_agpu::gtest_main(args->toStdString());
+  }
+
+  static void agpu_test0(
+      facebook::jni::alias_ref<jclass>,
+      facebook::jni::alias_ref<jstring> args) {
+    pytorch_jni_agpu::test0_main(args->toStdString());
   }
 
   static void agpu_gbench(
@@ -674,8 +685,9 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
           "Could not get buffer for asset '%s'",
           assetName->toStdString().c_str());
     }
-    torch::jit::script::Module module = torch::jit::load(torch::make_unique<MemoryReadAdapter2>(
-        assetBuffer, AAsset_getLength(asset)));
+    torch::jit::script::Module module =
+        torch::jit::load(torch::make_unique<MemoryReadAdapter2>(
+            assetBuffer, AAsset_getLength(asset)));
     AAsset_close(asset);
     return module;
   }
@@ -685,7 +697,6 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
       facebook::jni::alias_ref<jstring> assetName,
       facebook::jni::alias_ref<jobject> assetManager,
       facebook::jni::alias_ref<jstring> args) {
-
     torch::autograd::AutoGradMode no_autograd_guard{false};
     torch::jit::GraphOptimizerEnabledGuard no_optimizer_guard{false};
 
@@ -700,7 +711,6 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
       facebook::jni::alias_ref<jstring> assetName,
       facebook::jni::alias_ref<jobject> assetManager,
       facebook::jni::alias_ref<jstring> args) {
-
     torch::autograd::AutoGradMode no_autograd_guard{false};
     torch::jit::GraphOptimizerEnabledGuard no_optimizer_guard{false};
 

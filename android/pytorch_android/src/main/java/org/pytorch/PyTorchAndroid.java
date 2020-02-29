@@ -41,6 +41,7 @@ public final class PyTorchAndroid {
   private static native void nativeSetNumThreads(int numThreads);
 
   public static native void nativeAgpuGTest(String args);
+  public static native void nativeAgpuTest0(String args);
 
   public static native void nativeAgpuGBench(String args);
   public static native void nativeAgpuGBenchModule(String assetName, Object assetManager, String args);

@@ -14,6 +14,7 @@
 #include <gtest/gtest.h>
 #include <torch/torch.h>
 #include "agpu.h"
+#include "agpu_glsl.h"
 #include "pytorch_jni_agpu.h"
 
 #ifdef __ANDROID__
@@ -738,8 +739,8 @@ uint32_t wipeCache() {
 static void BM_conv_agpu(benchmark::State& state, const char* name) {
   const int64_t agpuConvX = state.range(0);
 
-  const int64_t agpuConvMethod = agpuConvX / 10;
   const int64_t agpuConvMethodMod = agpuConvX % 10;
+  const int64_t agpuConvMethodCode = agpuConvX - agpuConvMethodMod;
 
   const int64_t n = state.range(1);
   const int64_t h = state.range(2);
@@ -781,16 +782,10 @@ static void BM_conv_agpu(benchmark::State& state, const char* name) {
   const size_t output_w = (w + 2 * px - kwe) / stride + 1;
 
   std::vector<float> output(n * c_out * output_w * output_h);
-  using fp_conv2d_t = decltype(&agpu::agpu_conv2d_);
-  static fp_conv2d_t fa[6] = {
-      /*  0 */ agpu::agpu_conv2d_tex_IKnc4hw,
 
-      /* 10 */ agpu::agpu_conv2d_buf_IKnchw_SIKOnc4hw_KrO4C4HW,
-      /* 20 */ agpu::agpu_conv2d_buf_IKnchw_SIKOnc4hw_KrO4HWC,
-
-      /* 30 */ agpu::agpu_conv2d_buf_IKnchw_SIKnc4hw_SOnchw,
-      /* 40 */ agpu::agpu_conv2d_buf_IKnchw_SKnc4hw,
-      /* 50 */ agpu::agpu_conv2d_kernel_repack_};
+  auto aConvCode = agpuConvMethodCode;
+  auto aConv = agpu::aConvByCode(aConvCode);
+  auto aConvFun = agpu::aConvToFun(aConv);
 
   for (auto _ : state) {
     state.PauseTiming();
@@ -799,7 +794,7 @@ static void BM_conv_agpu(benchmark::State& state, const char* name) {
     prefetchToL1(kernel.data(), sizeof(float) * kernel.size());
     prefetchToL1(input.data(), sizeof(float) * input.size());
     state.ResumeTiming();
-    auto aresult = fa[agpuConvMethod](
+    auto ares = aConvFun(
         input.data(),
         n,
         c_in,
@@ -821,15 +816,25 @@ static void BM_conv_agpu(benchmark::State& state, const char* name) {
         agpuConvMethodMod);
     state.PauseTiming();
 
-    state.SetIterationTime(aresult.gpu_shader_total_time());
-    state.counters["\nS_Total     "] = aresult.gpu_shader_total_time();
-    state.counters["\nC_K_pack    "] = aresult.cpu_kernel_repackO4I4_time;
-    state.counters["\nS_Conv      "] = aresult.gpu_shader_conv_time;
-    state.counters["\nS_hK_dTex   "] = aresult.gpu_shader_hkernel_to_dtex_time;
-    state.counters["\nS_dTex_hCHW "] = aresult.gpu_shader_dtex_to_hchw_time;
-    state.counters["\nS_hCHW_dTex "] = aresult.gpu_shader_hchw_to_dtex_time;
-    state.counters["\nS_hCHW_dC4HW"] = aresult.gpu_shader_hchw_to_dc4hw_time;
-    state.counters["\nS_dC4HW_hCHW"] = aresult.gpu_shader_dc4hw_to_hchw_time;
+    state.SetIterationTime(ares.gpu_shader_conv_time);
+    state.counters["\nC_Kr_CHW_O4C4HW    "] =
+        ares.cpu_kernel_CHW_repack_O4C4HW_time;
+    state.counters["\nC_Kr_CHW_O4HWC     "] =
+        ares.cpu_kernel_CHW_repack_O4HWC_time;
+    state.counters["\nC_Kr_HWC_O4C4HW    "] =
+        ares.cpu_kernel_HWC_repack_O4C4HW_time;
+    state.counters["\nC_Kr_HWC_O4HWC     "] =
+        ares.cpu_kernel_HWC_repack_O4HWC_time;
+
+    state.counters["\nS_Conv             "] = ares.gpu_shader_conv_time;
+    state.counters["\nS_hK_dTex          "] =
+        ares.gpu_shader_hkernel_to_dtex_time;
+    state.counters["\nS_dTex_hCHW        "] = ares.gpu_shader_dtex_to_hchw_time;
+    state.counters["\nS_hCHW_dTex        "] = ares.gpu_shader_hchw_to_dtex_time;
+    state.counters["\nS_hCHW_dC4HW       "] =
+        ares.gpu_shader_hchw_to_dc4hw_time;
+    state.counters["\nS_dC4HW_hCHW       "] =
+        ares.gpu_shader_dc4hw_to_hchw_time;
     state.ResumeTiming();
   }
   //  state.counters["\nFreq        "] = getCurrentCpuFrequency();
@@ -887,13 +892,13 @@ static std::vector<float> kT0_GOutputNCHW =
 static std::vector<float> kT0_GOutputNHWC =
     {1, 102, 1004, 2, 103, 1005, 4, 105, 1007, 5, 106, 1008};
 
-static void test0_conv_agpu_IKnchw() {
+static void test0_conv_agpu_IKnchw_KrO4C4HW() {
   const int64_t G = 1;
   const int64_t C = 3;
   const int64_t OC = 2;
 
   std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
-  agpu::agpu_conv2d_buf_IKnchw_SKnc4hw(
+  agpu::conv_buf_IKnchw_SKnc4hw_KrO4C4HW(
       kT0_InputNCHW.data(),
       kT0_N,
       C,
@@ -924,7 +929,7 @@ static void test0_conv_agpu_Inhwc_Knchw() {
   const int64_t OC = 2;
 
   std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
-  agpu::agpu_conv2d_buf_Inhwc_Knchw(
+  agpu::conv_buf_Inhwc_Knchw(
       kT0_InputNHWC.data(),
       kT0_N,
       C,
@@ -955,7 +960,7 @@ static void test0_conv_agpu_IKnhwc() {
   const int64_t OC = 2;
 
   std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
-  agpu::agpu_conv2d_buf_IKnhwc(
+  agpu::conv_buf_IKnhwc(
       kT0_InputNHWC.data(),
       kT0_N,
       C,
@@ -986,7 +991,7 @@ static void test0_conv_agpu_IKnhwc_KrO4C4HW() {
   const int64_t OC = 2;
 
   std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
-  agpu::agpu_conv2d_buf_IKnhwc_KrO4C4HW(
+  agpu::conv_buf_IKnhwc_KrO4C4HW(
       kT0_InputNHWC.data(),
       kT0_N,
       C,
@@ -1017,7 +1022,7 @@ static void test0_conv_agpu_IKnhwc_KrO4HWC() {
   const int64_t OC = 2;
 
   std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
-  agpu::agpu_conv2d_buf_IKnhwc_KrO4HWC(
+  agpu::conv_buf_IKnhwc_KrO4HWC(
       kT0_InputNHWC.data(),
       kT0_N,
       C,
@@ -1048,7 +1053,7 @@ static void test0_conv_agpu_IKnchw_SIKOnc4hw_KrO4C4HW() {
   const int64_t OC = 2;
 
   std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
-  agpu::agpu_conv2d_buf_IKnchw_SIKOnc4hw_KrO4C4HW(
+  agpu::conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW(
       kT0_InputNCHW.data(),
       kT0_N,
       C,
@@ -1079,7 +1084,7 @@ static void test0_conv_agpu_IKnchw_SIKOnc4hw_KrO4HWC() {
   const int64_t OC = 2;
 
   std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
-  agpu::agpu_conv2d_buf_IKnchw_SIKOnc4hw_KrO4HWC(
+  agpu::conv_buf_IKnchw_SIKOnc4hw_KrO4HWC(
       kT0_InputNCHW.data(),
       kT0_N,
       C,
@@ -1111,7 +1116,7 @@ static void test0_convDW_agpu_IKnchw() {
   const int64_t OC = 3;
 
   std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
-  agpu::agpu_conv2dDW_buf_IKnchw(
+  agpu::convDW_buf_IKnchw(
       kT0_InputNCHW.data(),
       kT0_N,
       C,
@@ -1142,7 +1147,7 @@ static void test0_convDW_agpu_IKnhwc() {
   const int64_t OC = 3;
 
   std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
-  agpu::agpu_conv2dDW_buf_IKnhwc(
+  agpu::convDW_buf_IKnhwc(
       kT0_InputNHWC.data(),
       kT0_N,
       C,
@@ -1254,7 +1259,9 @@ void gbench_main(const std::string& args) {
     benchmark::Initialize(&(argscv.c), argscv.v);
     benchmark::RunSpecifiedBenchmarks();
   */
+}
 
+void test0_main(const std::string& args) {
   auto tin = torch::tensor(
       {{{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}},
         {{101, 102, 103}, {104, 105, 106}, {107, 108, 109}},
@@ -1294,15 +1301,15 @@ void gbench_main(const std::string& args) {
       g);
   log("tout:", tout);
 
-  test0_conv_agpu_IKnchw();
+  test0_conv_agpu_IKnchw_KrO4C4HW();
   test0_conv_agpu_Inhwc_Knchw();
   test0_conv_agpu_IKnhwc();
   test0_conv_agpu_IKnhwc_KrO4C4HW();
   test0_conv_agpu_IKnhwc_KrO4HWC();
-  test0_convDW_agpu_IKnchw();
-  test0_convDW_agpu_IKnhwc();
   test0_conv_agpu_IKnchw_SIKOnc4hw_KrO4C4HW();
   test0_conv_agpu_IKnchw_SIKOnc4hw_KrO4HWC();
+  test0_convDW_agpu_IKnchw();
+  test0_convDW_agpu_IKnhwc();
 }
 
 void test_module(torch::jit::script::Module module, const std::string& args) {

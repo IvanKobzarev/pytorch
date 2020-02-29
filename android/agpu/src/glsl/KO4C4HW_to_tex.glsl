@@ -9,9 +9,6 @@ layout(location = 4) uniform int uIc_4;
 
 layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
-//weight buffer : oc ic h w -> oc/4, ic/4, ky kx ic4 oc4
-//index : ky kx, oc/4, ic/4
-//weight image : ky kx, oc/4, ic/4*ic4 oc4
 void main()
 {
     ivec3 pos = ivec3(gl_GlobalInvocationID) * ivec3(4, 1, 1);

@@ -18,7 +18,6 @@ layout(location=11) uniform ivec3 uInputSize;
 
 #define UP_DIV(x, y) (((x)+(y)-1)/(y))
 
-//weight : oc ic h w -> oc/4, ic/4, ky kx ic4 oc4
 layout (local_size_x = WORKGROUP_X, local_size_y = WORKGROUP_Y, local_size_z = WORKGROUP_Z) in;
 
 void main()
@@ -32,9 +31,7 @@ void main()
         ivec2 s0 = pos.xy*uStride-uPad;
         int fx, fy, fz;
         ivec2 sfxy = max(ivec2(0), (UP_DIV(-s0, uDilate)));
-        //ivec2 sfxy = ivec2(0);
         ivec2 efxy = min(uKernelSize, UP_DIV(inputSize.xy-s0, uDilate));
-        //ivec2 efxy = uKernelSize;
         vec4 color = uBias.data[pos.z];
         vec4 color2 = color;
         vec4 color3 = color;

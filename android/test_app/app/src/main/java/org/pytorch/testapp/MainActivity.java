@@ -34,6 +34,7 @@ public class MainActivity extends AppCompatActivity {
   private final Runnable mModuleForwardRunnable = new Runnable() {
     @Override
     public void run() {
+      Log.i(TAG, "BuildConfig.AGPU_TEST0:" + BuildConfig.AGPU_TEST0);
       Log.i(TAG, "BuildConfig.AGPU_GTEST:" + BuildConfig.AGPU_GTEST);
       Log.i(TAG, "BuildConfig.AGPU_GBENCH:" + BuildConfig.AGPU_GBENCH);
       Log.i(TAG, "BuildConfig.AGPU_GTEST_M:" + BuildConfig.AGPU_GTEST_M);
@@ -42,6 +43,8 @@ public class MainActivity extends AppCompatActivity {
         PyTorchAndroid.nativeAgpuGTestModule(BuildConfig.AGPU_GTEST_M, getAssets(), BuildConfig.AGPU_GTEST);
       } else if (BuildConfig.AGPU_GBENCH_M != null) {
         PyTorchAndroid.nativeAgpuGBenchModule(BuildConfig.AGPU_GBENCH_M, getAssets(), BuildConfig.AGPU_GBENCH);
+      } else if (BuildConfig.AGPU_TEST0 != null) {
+        PyTorchAndroid.nativeAgpuTest0(BuildConfig.AGPU_TEST0);
       } else if (BuildConfig.AGPU_GTEST != null) {
         PyTorchAndroid.nativeAgpuGTest(BuildConfig.AGPU_GTEST);
       } else if (BuildConfig.AGPU_GBENCH != null) {

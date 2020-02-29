@@ -1,4 +1,34 @@
-#include "shader.h"
+#include "agpu_glsl.h"
+#include <cassert>
+namespace agpu {
+const char* KO4C4HW_to_tex_glsl = 
+"layout(std430) buffer;\n"
+"layout(FORMAT, binding=0) writeonly uniform PRECISION image3D uOutput;\n"
+"layout(binding=2) readonly buffer kernel{\n"
+"    vec4 data[];\n"
+"} uKernel;\n"
+"layout(location = 3) uniform int uFxFy;\n"
+"layout(location = 4) uniform int uIc_4;\n"
+"layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;\n"
+"void main()\n"
+"{\n"
+"    ivec3 pos = ivec3(gl_GlobalInvocationID) * ivec3(4, 1, 1);\n"
+"    int kernelPos = 0\n"
+"    + pos.x * uFxFy\n"
+"    + 4*pos.y * uIc_4 * uFxFy\n"
+"    + 4*pos.z\n"
+"    ;\n"
+"    vec4 color0 = uKernel.data[kernelPos+0];\n"
+"    vec4 color1 = uKernel.data[kernelPos+1];\n"
+"    vec4 color2 = uKernel.data[kernelPos+2];\n"
+"    vec4 color3 = uKernel.data[kernelPos+3];\n"
+"    \n"
+"    imageStore(uOutput, ivec3(pos.x+0, pos.y, pos.z), color0);\n"
+"    imageStore(uOutput, ivec3(pos.x+1, pos.y, pos.z), color1);\n"
+"    imageStore(uOutput, ivec3(pos.x+2, pos.y, pos.z), color2);\n"
+"    imageStore(uOutput, ivec3(pos.x+3, pos.y, pos.z), color3);\n"
+"}\n"
+;
 const char* binary_add_glsl = 
 "layout(FORMAT, binding=0) writeonly uniform PRECISION image3D uOutput;\n"
 "layout(location=1) uniform PRECISION sampler3D uInput0;\n"
@@ -493,7 +523,7 @@ const char* conv_buf_IKnchw_SIKnc4hw_SOnchw_glsl =
 "    }\n"
 "}\n"
 ;
-const char* conv_buf_IKnchw_SKnc4hw_glsl = 
+const char* conv_buf_IKnchw_SKnc4hw_KrO4C4HW_glsl = 
 "layout(std430) buffer;\n"
 "layout(binding=0) writeonly buffer outBuffer{\n"
 "  float data[];\n"
@@ -596,117 +626,7 @@ const char* conv_buf_IKnchw_SKnc4hw_glsl =
 "    }\n"
 "}\n"
 ;
-const char* conv_buf_IKnchw_SKnc4hw_1_glsl = 
-"layout(std430) buffer;\n"
-"layout(binding=0) writeonly buffer outBuffer{\n"
-"  float data[];\n"
-"}uOutputBuffer;\n"
-"layout(binding=1) readonly buffer inputBuffer{\n"
-"  float data[];\n"
-"}uInBuffer;\n"
-"layout(binding=2) readonly buffer kernelBuffer{\n"
-"  vec4 data[];\n"
-"}uKernelBuffer;\n"
-"layout(binding=3) readonly buffer bias{\n"
-"  vec4 data[];\n"
-"}uBias;\n"
-"layout(location=4) uniform ivec2 uPad;\n"
-"layout(location=5) uniform ivec2 uKernelSize;\n"
-"layout(location=6) uniform ivec2 uStride;\n"
-"layout(location=7) uniform ivec2 uDilate;\n"
-"layout(location=8) uniform ivec3 uOutputSize;\n"
-"layout(location=9) uniform ivec3 uInputSize;\n"
-"#define UP_DIV(x, y) (((x)+(y)-1)/(y))\n"
-"layout (local_size_x = WORKGROUP_X, local_size_y = WORKGROUP_Y, local_size_z = WORKGROUP_Z) in;\n"
-"void main()\n"
-"{\n"
-"    if (all(lessThan(ivec3(gl_GlobalInvocationID), uOutputSize)))\n"
-"    {\n"
-"        ivec3 pos = ivec3(gl_GlobalInvocationID)*ivec3(4, 1, 1);\n"
-"        int KW = uKernelSize.x;\n"
-"        int KH = uKernelSize.y;\n"
-"        ivec3 inputSize = uInputSize;\n"
-"        int W = uInputSize.x;\n"
-"        int H = uInputSize.y;\n"
-"        int C_4 = uInputSize.z;\n"
-"        int OW = uOutputSize.x;\n"
-"        int OH = uOutputSize.y;\n"
-"        int OC_4 = uOutputSize.z;\n"
-"        ivec2 s0 = pos.xy*uStride-uPad;\n"
-"        int kxi, kyi, ic_4i;\n"
-"        int oc_4i = pos.z;\n"
-"        ivec2 sfxy = max(ivec2(0), (UP_DIV(-s0, uDilate)));\n"
-"        ivec2 efxy = min(uKernelSize, UP_DIV(inputSize.xy-s0, uDilate));\n"
-"        vec4 v[4];\n"
-"        v[0] = uBias.data[pos.z];\n"
-"        v[1] = v[0];\n"
-"        v[2] = v[0];\n"
-"        v[3] = v[0];\n"
-"        ivec4 inBisx0, inBisx1, inBisx2, inBisx3;\n"
-"        vec4 k0, k1, k2, k3;\n"
-"        int kBi_oc4_i = oc_4i * (C_4 * KH * KW * 4);\n"
-"        int kBi;\n"
-"        int sx0, sx1, sx2, sx3;\n"
-"        ivec4 inBi;\n"
-"        for (kyi=sfxy.y; kyi<efxy.y; ++kyi)\n"
-"        {\n"
-"            int sy = kyi*uDilate.y + s0.y;\n"
-"            for (kxi=0; kxi < KW; ++kxi)\n"
-"            {\n"
-"                sx0 = kxi*uDilate.x + s0.x;\n"
-"                sx1 = sx0 + uStride.x;\n"
-"                sx2 = sx1 + uStride.x;\n"
-"                sx3 = sx2 + uStride.x;\n"
-"                float m0 = sx0 >= 0 && sx0 < W ? 1.0 : 0.0;\n"
-"                float m1 = sx1 >= 0 && sx1 < W ? 1.0 : 0.0;\n"
-"                float m2 = sx2 >= 0 && sx2 < W ? 1.0 : 0.0;\n"
-"                float m3 = sx3 >= 0 && sx3 < W ? 1.0 : 0.0;\n"
-"                kBi = kBi_oc4_i + (kxi + kyi*KW) * 4;\n"
-"                inBi.x = sy*W;\n"
-"                for (ic_4i=0; ic_4i < C_4; ++ic_4i)\n"
-"                {\n"
-"                    k0 = uKernelBuffer.data[kBi+0];\n"
-"                    k1 = uKernelBuffer.data[kBi+1];\n"
-"                    k2 = uKernelBuffer.data[kBi+2];\n"
-"                    k3 = uKernelBuffer.data[kBi+3];\n"
-"                    mat4 k = mat4(k0, k1, k2, k3);\n"
-"                    inBi.y = inBi.x + W*H;\n"
-"                    inBi.z = inBi.y + W*H;\n"
-"                    inBi.w = inBi.z + W*H;\n"
-"                    inBisx0 = inBi + sx0;\n"
-"                    inBisx1 = inBi + sx1;\n"
-"                    inBisx2 = inBi + sx2;\n"
-"                    inBisx3 = inBi + sx3;\n"
-"                    vec4 invsx0 = vec4(uInBuffer.data[inBisx0.x],uInBuffer.data[inBisx0.y],uInBuffer.data[inBisx0.z],uInBuffer.data[inBisx0.w]);\n"
-"                    vec4 invsx1 = vec4(uInBuffer.data[inBisx1.x],uInBuffer.data[inBisx1.y],uInBuffer.data[inBisx1.z],uInBuffer.data[inBisx1.w]);\n"
-"                    vec4 invsx2 = vec4(uInBuffer.data[inBisx2.x],uInBuffer.data[inBisx2.y],uInBuffer.data[inBisx2.z],uInBuffer.data[inBisx2.w]);\n"
-"                    vec4 invsx3 = vec4(uInBuffer.data[inBisx3.x],uInBuffer.data[inBisx3.y],uInBuffer.data[inBisx3.z],uInBuffer.data[inBisx3.w]);\n"
-"                    v[0] += k * invsx0 * m0;\n"
-"                    v[1] += k * invsx1 * m1;\n"
-"                    v[2] += k * invsx2 * m2;\n"
-"                    v[3] += k * invsx3 * m3;\n"
-"                    kBi += KH * KW * 4;\n"
-"                    inBi.x += W*H;\n"
-"                }\n"
-"            }\n"
-"        }\n"
-"        int vi=0;\n"
-"        int vie=min(4, OW-pos.x);\n"
-"        int OWH = OW*OH;\n"
-"        int outBi;\n"
-"        for (;vi<vie;++vi)\n"
-"        {\n"
-"          outBi = (pos.x+vi) + OW*pos.y + 4*pos.z*OWH;\n"
-"          vec4 v = v[vi];\n"
-"          uOutputBuffer.data[outBi+0] = v.x;\n"
-"          uOutputBuffer.data[outBi+1*OWH] = v.y;\n"
-"          uOutputBuffer.data[outBi+2*OWH] = v.z;\n"
-"          uOutputBuffer.data[outBi+3*OWH] = v.w;\n"
-"        }\n"
-"    }\n"
-"}\n"
-;
-const char* conv_buf_IKnchw_SKnc4hw_2_glsl = 
+const char* conv_buf_IKnchw_SKnc4hw_KrO4C4HW_1_glsl = 
 "layout(std430) buffer;\n"
 "layout(binding=0) writeonly buffer outBuffer{\n"
 "  float data[];\n"
@@ -1277,7 +1197,6 @@ const char* conv_tex_IKnc4hw_glsl =
 "layout(location=10) uniform ivec3 uOutputSize;\n"
 "layout(location=11) uniform ivec3 uInputSize;\n"
 "#define UP_DIV(x, y) (((x)+(y)-1)/(y))\n"
-"//weight : oc ic h w -> oc/4, ic/4, ky kx ic4 oc4\n"
 "layout (local_size_x = WORKGROUP_X, local_size_y = WORKGROUP_Y, local_size_z = WORKGROUP_Z) in;\n"
 "void main()\n"
 "{\n"
@@ -1290,9 +1209,7 @@ const char* conv_tex_IKnc4hw_glsl =
 "        ivec2 s0 = pos.xy*uStride-uPad;\n"
 "        int fx, fy, fz;\n"
 "        ivec2 sfxy = max(ivec2(0), (UP_DIV(-s0, uDilate)));\n"
-"        //ivec2 sfxy = ivec2(0);\n"
 "        ivec2 efxy = min(uKernelSize, UP_DIV(inputSize.xy-s0, uDilate));\n"
-"        //ivec2 efxy = uKernelSize;\n"
 "        vec4 color = uBias.data[pos.z];\n"
 "        vec4 color2 = color;\n"
 "        vec4 color3 = color;\n"
@@ -1335,78 +1252,7 @@ const char* conv_tex_IKnc4hw_glsl =
 "    }\n"
 "}\n"
 ;
-const char* image_to_nc4hw4_buffer_glsl = 
-"layout(FORMAT, binding=0) readonly uniform PRECISION image3D uImage;\n"
-"layout(std430, binding=1) writeonly buffer destBuffer{\n"
-"    vec4 data[];\n"
-"} uOutBuffer;\n"
-"layout(location = 2) uniform int uWidth;\n"
-"layout(location = 3) uniform int uHeight;\n"
-"layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;\n"
-"void main()\n"
-"{\n"
-"    ivec3 pos = ivec3(gl_GlobalInvocationID);\n"
-"    if (pos.x < uWidth && pos.y < uHeight)\n"
-"    {\n"
-"        vec4 color = imageLoad(uImage, pos);\n"
-"        uOutBuffer.data[uWidth*pos.y+pos.x+pos.z*uWidth*uHeight] = color;\n"
-"    }\n"
-"}\n"
-;
-const char* image_to_nchw_buffer_glsl = 
-"layout(FORMAT, binding=0) readonly uniform PRECISION image3D uImage;\n"
-"layout(binding=1) writeonly buffer destBuffer{\n"
-"    float data[];\n"
-"} uOutBuffer;\n"
-"layout(location = 2) uniform int uWidth;\n"
-"layout(location = 3) uniform int uHeight;\n"
-"layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;\n"
-"void main()\n"
-"{\n"
-"    ivec3 pos = ivec3(gl_GlobalInvocationID);\n"
-"    if (pos.x < uWidth && pos.y < uHeight)\n"
-"    {\n"
-"        vec4 color = imageLoad(uImage, pos);\n"
-"        int z = pos.z*4;\n"
-"        uOutBuffer.data[uWidth*pos.y+pos.x+(z+0)*uWidth*uHeight] = color.r;\n"
-"        uOutBuffer.data[uWidth*pos.y+pos.x+(z+1)*uWidth*uHeight] = color.g;\n"
-"        uOutBuffer.data[uWidth*pos.y+pos.x+(z+2)*uWidth*uHeight] = color.b;\n"
-"        uOutBuffer.data[uWidth*pos.y+pos.x+(z+3)*uWidth*uHeight] = color.a;\n"
-"    }\n"
-"}\n"
-;
-const char* kernel2image_adreno_glsl = 
-"layout(std430) buffer;\n"
-"layout(FORMAT, binding=0) writeonly uniform PRECISION image3D uOutput;\n"
-"layout(binding=2) readonly buffer kernel{\n"
-"    vec4 data[];\n"
-"} uKernel;\n"
-"layout(location = 3) uniform int uFxFy;\n"
-"layout(location = 4) uniform int uIc_4;\n"
-"layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;\n"
-"//weight buffer : oc ic h w -> oc/4, ic/4, ky kx ic4 oc4\n"
-"//index : ky kx, oc/4, ic/4\n"
-"//weight image : ky kx, oc/4, ic/4*ic4 oc4\n"
-"void main()\n"
-"{\n"
-"    ivec3 pos = ivec3(gl_GlobalInvocationID) * ivec3(4, 1, 1);\n"
-"    int kernelPos = 0\n"
-"    + pos.x * uFxFy\n"
-"    + 4*pos.y * uIc_4 * uFxFy\n"
-"    + 4*pos.z\n"
-"    ;\n"
-"    vec4 color0 = uKernel.data[kernelPos+0];\n"
-"    vec4 color1 = uKernel.data[kernelPos+1];\n"
-"    vec4 color2 = uKernel.data[kernelPos+2];\n"
-"    vec4 color3 = uKernel.data[kernelPos+3];\n"
-"    \n"
-"    imageStore(uOutput, ivec3(pos.x+0, pos.y, pos.z), color0);\n"
-"    imageStore(uOutput, ivec3(pos.x+1, pos.y, pos.z), color1);\n"
-"    imageStore(uOutput, ivec3(pos.x+2, pos.y, pos.z), color2);\n"
-"    imageStore(uOutput, ivec3(pos.x+3, pos.y, pos.z), color3);\n"
-"}\n"
-;
-const char* nc4hw4_buffer_to_image_glsl = 
+const char* nc4hw4_buf_to_tex_glsl = 
 "layout(FORMAT, binding=0) writeonly uniform PRECISION image3D uImage;\n"
 "layout(binding=1) readonly buffer destBuffer{\n"
 "    vec4 data[];\n"
@@ -1424,7 +1270,7 @@ const char* nc4hw4_buffer_to_image_glsl =
 "    }\n"
 "}\n"
 ;
-const char* nc4hw_buffer_to_nchw_buffer_glsl = 
+const char* nc4hw_buf_to_nchw_buf_glsl = 
 "layout(binding=0) writeonly buffer outBuffer{\n"
 "  float data[];\n"
 "}uOutBuffer;\n"
@@ -1449,30 +1295,7 @@ const char* nc4hw_buffer_to_nchw_buffer_glsl =
 "    }\n"
 "}\n"
 ;
-const char* nchw_buffer_to_image_glsl = 
-"layout(FORMAT, binding=0) writeonly uniform PRECISION image3D uImage;\n"
-"layout(binding=1) readonly buffer destBuffer{\n"
-"    float data[];\n"
-"} uInBuffer;\n"
-"layout(location = 2) uniform int uWidth;\n"
-"layout(location = 3) uniform int uHeight;\n"
-"layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;\n"
-"void main()\n"
-"{\n"
-"    ivec3 pos = ivec3(gl_GlobalInvocationID);\n"
-"    if (pos.x < uWidth && pos.y < uHeight)\n"
-"    {\n"
-"        vec4 color;\n"
-"        int z = pos.z*4;\n"
-"        color.r = uInBuffer.data[uWidth*pos.y+pos.x+(z+0)*uWidth*uHeight];\n"
-"        color.g = uInBuffer.data[uWidth*pos.y+pos.x+(z+1)*uWidth*uHeight];\n"
-"        color.b = uInBuffer.data[uWidth*pos.y+pos.x+(z+2)*uWidth*uHeight];\n"
-"        color.a = uInBuffer.data[uWidth*pos.y+pos.x+(z+3)*uWidth*uHeight];\n"
-"        imageStore(uImage, pos, color);\n"
-"    }\n"
-"}\n"
-;
-const char* nchw_buffer_to_nc4hw_buffer_glsl = 
+const char* nchw_buf_to_nc4hw_buf_glsl = 
 "layout(binding=0) writeonly buffer dstBuffer{\n"
 "  float data[];\n"
 "}uOutBuffer;\n"
@@ -1498,6 +1321,29 @@ const char* nchw_buffer_to_nc4hw_buffer_glsl =
 "      uOutBuffer.data[z4*WH + y4*W + x4 + 2] = uInBuffer.data[(z4+2)*WH + W*pos.y + pos.x];\n"
 "      uOutBuffer.data[z4*WH + y4*W + x4 + 3] = uInBuffer.data[(z4+3)*WH + W*pos.y + pos.x];\n"
 "  }\n"
+"}\n"
+;
+const char* nchw_buf_to_tex_glsl = 
+"layout(FORMAT, binding=0) writeonly uniform PRECISION image3D uImage;\n"
+"layout(binding=1) readonly buffer destBuffer{\n"
+"    float data[];\n"
+"} uInBuffer;\n"
+"layout(location = 2) uniform int uWidth;\n"
+"layout(location = 3) uniform int uHeight;\n"
+"layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;\n"
+"void main()\n"
+"{\n"
+"    ivec3 pos = ivec3(gl_GlobalInvocationID);\n"
+"    if (pos.x < uWidth && pos.y < uHeight)\n"
+"    {\n"
+"        vec4 color;\n"
+"        int z = pos.z*4;\n"
+"        color.r = uInBuffer.data[uWidth*pos.y+pos.x+(z+0)*uWidth*uHeight];\n"
+"        color.g = uInBuffer.data[uWidth*pos.y+pos.x+(z+1)*uWidth*uHeight];\n"
+"        color.b = uInBuffer.data[uWidth*pos.y+pos.x+(z+2)*uWidth*uHeight];\n"
+"        color.a = uInBuffer.data[uWidth*pos.y+pos.x+(z+3)*uWidth*uHeight];\n"
+"        imageStore(uImage, pos, color);\n"
+"    }\n"
 "}\n"
 ;
 const char* normalization_glsl = 
@@ -1530,6 +1376,46 @@ const char* normalization_glsl =
 "  }\n"
 "}\n"
 ;
+const char* tex_to_nc4hw4_buf_glsl = 
+"layout(FORMAT, binding=0) readonly uniform PRECISION image3D uImage;\n"
+"layout(std430, binding=1) writeonly buffer destBuffer{\n"
+"    vec4 data[];\n"
+"} uOutBuffer;\n"
+"layout(location = 2) uniform int uWidth;\n"
+"layout(location = 3) uniform int uHeight;\n"
+"layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;\n"
+"void main()\n"
+"{\n"
+"    ivec3 pos = ivec3(gl_GlobalInvocationID);\n"
+"    if (pos.x < uWidth && pos.y < uHeight)\n"
+"    {\n"
+"        vec4 color = imageLoad(uImage, pos);\n"
+"        uOutBuffer.data[uWidth*pos.y+pos.x+pos.z*uWidth*uHeight] = color;\n"
+"    }\n"
+"}\n"
+;
+const char* tex_to_nchw_buf_glsl = 
+"layout(FORMAT, binding=0) readonly uniform PRECISION image3D uImage;\n"
+"layout(binding=1) writeonly buffer destBuffer{\n"
+"    float data[];\n"
+"} uOutBuffer;\n"
+"layout(location = 2) uniform int uWidth;\n"
+"layout(location = 3) uniform int uHeight;\n"
+"layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;\n"
+"void main()\n"
+"{\n"
+"    ivec3 pos = ivec3(gl_GlobalInvocationID);\n"
+"    if (pos.x < uWidth && pos.y < uHeight)\n"
+"    {\n"
+"        vec4 color = imageLoad(uImage, pos);\n"
+"        int z = pos.z*4;\n"
+"        uOutBuffer.data[uWidth*pos.y+pos.x+(z+0)*uWidth*uHeight] = color.r;\n"
+"        uOutBuffer.data[uWidth*pos.y+pos.x+(z+1)*uWidth*uHeight] = color.g;\n"
+"        uOutBuffer.data[uWidth*pos.y+pos.x+(z+2)*uWidth*uHeight] = color.b;\n"
+"        uOutBuffer.data[uWidth*pos.y+pos.x+(z+3)*uWidth*uHeight] = color.a;\n"
+"    }\n"
+"}\n"
+;
 const char* threshold_glsl = 
 "layout(FORMAT, binding=0, location=0) writeonly uniform PRECISION image3D uOutput;\n"
 "layout(FORMAT, binding=1, location=1) readonly uniform PRECISION sampler3D uInput;\n"
@@ -1549,3 +1435,68 @@ const char* threshold_glsl =
 "    }\n"
 "}\n"
 ;
+
+fp_agpu_conv_t aConvToFun(AConv aconv){
+  switch (aconv){
+    case AConv::convDW_buf_IKnchw:
+      return &::agpu::convDW_buf_IKnchw;
+    case AConv::convDW_buf_IKnhwc:
+      return &::agpu::convDW_buf_IKnhwc;
+    case AConv::convDW_buf_Inhwc_Knchw:
+      return &::agpu::convDW_buf_Inhwc_Knchw;
+    case AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW:
+      return &::agpu::conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW;
+    case AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4HWC:
+      return &::agpu::conv_buf_IKnchw_SIKOnc4hw_KrO4HWC;
+    case AConv::conv_buf_IKnchw_SIKnc4hw_SOnchw:
+      return &::agpu::conv_buf_IKnchw_SIKnc4hw_SOnchw;
+    case AConv::conv_buf_IKnchw_SKnc4hw_KrO4C4HW:
+      return &::agpu::conv_buf_IKnchw_SKnc4hw_KrO4C4HW;
+    case AConv::conv_buf_IKnchw_SKnc4hw_KrO4C4HW_1:
+      return &::agpu::conv_buf_IKnchw_SKnc4hw_KrO4C4HW_1;
+    case AConv::conv_buf_IKnhwc:
+      return &::agpu::conv_buf_IKnhwc;
+    case AConv::conv_buf_IKnhwc_KrO4C4HW:
+      return &::agpu::conv_buf_IKnhwc_KrO4C4HW;
+    case AConv::conv_buf_IKnhwc_KrO4HWC:
+      return &::agpu::conv_buf_IKnhwc_KrO4HWC;
+    case AConv::conv_buf_Inhwc_Knchw:
+      return &::agpu::conv_buf_Inhwc_Knchw;
+    case AConv::conv_tex_IKnc4hw:
+      return &::agpu::conv_tex_IKnc4hw;
+  }
+  assert(false);
+}
+
+AConv aConvByCode(int64_t code){
+  switch (code){
+    case 0:
+      return AConv::convDW_buf_IKnchw;
+    case 10:
+      return AConv::convDW_buf_IKnhwc;
+    case 20:
+      return AConv::convDW_buf_Inhwc_Knchw;
+    case 30:
+      return AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW;
+    case 40:
+      return AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4HWC;
+    case 50:
+      return AConv::conv_buf_IKnchw_SIKnc4hw_SOnchw;
+    case 60:
+      return AConv::conv_buf_IKnchw_SKnc4hw_KrO4C4HW;
+    case 70:
+      return AConv::conv_buf_IKnchw_SKnc4hw_KrO4C4HW_1;
+    case 80:
+      return AConv::conv_buf_IKnhwc;
+    case 90:
+      return AConv::conv_buf_IKnhwc_KrO4C4HW;
+    case 100:
+      return AConv::conv_buf_IKnhwc_KrO4HWC;
+    case 110:
+      return AConv::conv_buf_Inhwc_Knchw;
+    case 120:
+      return AConv::conv_tex_IKnc4hw;
+  }
+  assert(false);
+}
+} //namespace agpu
