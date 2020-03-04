@@ -25,12 +25,13 @@ android {
         }
         buildConfigField("String", "MODULE_ASSET_NAME", "\"mobilenet2q.pt\"")
         buildConfigField("String", "LOGCAT_TAG", "@string/app_name")
-        buildConfigField("long[]", "INPUT_TENSOR_SHAPE", "new long[]{1, 3, 224, 224}")
+        buildConfigField("long[]", "INPUT_TENSOR_SHAPE", "new long[]{16, 1, 1024}")
         buildConfigField("String", "AGPU_GTEST", 'null')
         buildConfigField("String", "AGPU_TEST0", 'null')
         buildConfigField("String", "AGPU_GTEST_M", 'null')
         buildConfigField("String", "AGPU_GBENCH", 'null')
         buildConfigField("String", "AGPU_GBENCH_M", 'null')
+        buildConfigField("String", "AGPU_GBENCH_REPORT_FILE", 'null')
         addManifestPlaceholders([APP_NAME: "@string/app_name", MAIN_ACTIVITY: "org.pytorch.testapp.MainActivity"])
     }
     buildTypes {
@@ -44,6 +45,7 @@ android {
             dimension "model"
             applicationIdSuffix ".bench"
             buildConfigField("String", "AGPU_GBENCH", "\""+project.properties['ARGS']+"\"")
+            buildConfigField("String", "AGPU_GBENCH_REPORT_FILE", "\""+project.properties['GBENCH_REPORT_FILE']+"\"")
             buildConfigField("String", "MODULE_ASSET_NAME", "\"mn2-fp32.pt\"")
             addManifestPlaceholders([APP_NAME: "BENCH"])
             buildConfigField("String", "LOGCAT_TAG", "\"pytorch-bench\"")
@@ -83,7 +85,7 @@ android {
         mbf {
             dimension "model"
             applicationIdSuffix ".mbf"
-            buildConfigField("String", "MODULE_ASSET_NAME", "\"mn2fp32.pt\"")
+            buildConfigField("String", "MODULE_ASSET_NAME", "\"model1.pt\"")
             addManifestPlaceholders([APP_NAME: "MBF"])
             buildConfigField("String", "LOGCAT_TAG", "\"pytorch-mbf\"")
         }

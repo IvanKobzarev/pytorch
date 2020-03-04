@@ -16,7 +16,7 @@
 #define ROUND_UP(x, y) (((x) + (y) - (1)) / (y) * (y))
 #define ALIGN_UP4(x) ROUND_UP((x), 4)
 
-#define DEBUG_PRINT_TENSOR true
+#define DEBUG_PRINT_TENSOR false
 
 namespace agpu {
 
@@ -693,14 +693,14 @@ void wait() {
 #endif
 }
 
-void compute(int dim0, int dim1, int dim2) {
+void compute(GLuint dim0, GLuint dim1, GLuint dim2) {
   glDispatchCompute(dim0, dim1, dim2);
 }
 
 double computeStdTime(
-    int dim0,
-    int dim1,
-    int dim2,
+    GLuint dim0,
+    GLuint dim1,
+    GLuint dim2,
     const char* log,
     int compGroupSize0,
     int compGroupSize1,
@@ -712,9 +712,9 @@ double computeStdTime(
 }
 
 double computeGLTime(
-    int dim0,
-    int dim1,
-    int dim2,
+    GLuint dim0,
+    GLuint dim1,
+    GLuint dim2,
     const char* log,
     int compGroupSize0,
     int compGroupSize1,
@@ -794,7 +794,7 @@ double computeGLTime(
 //}
 
 typedef double (
-    *fp_gComputeWithTime)(int, int, int, const char*, int, int, int);
+    *fp_gComputeWithTime)(GLuint, GLuint, GLuint, const char*, int, int, int);
 static fp_gComputeWithTime gComputeWithTime = &computeGLTime;
 
 std::string getPrecision() {
@@ -835,6 +835,7 @@ std::shared_ptr<AGLShader> getShader(
     const char* content,
     const std::vector<std::string>& prefix = {}) {
   initAGLContextOnce();
+  APRINTVIP("getShader %s", key.c_str());
 
   std::ostringstream newKey;
   for (auto s : prefix) {
@@ -863,10 +864,17 @@ void addCompGroupSizeDefines(
     int compGroupSizeX,
     int compGroupSizeY,
     int compGroupSizeZ) {
-  GLint maxCompGroupSizeX, maxCompGroupSizeY, maxCompGroupSizeZ;
-  glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 0, &maxCompGroupSizeX);
-  glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 1, &maxCompGroupSizeY);
-  glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 2, &maxCompGroupSizeZ);
+  static GLint maxCompGroupSizeX, maxCompGroupSizeY, maxCompGroupSizeZ,
+      maxCompGroupInvocations;
+  static const int once = []() {
+    glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 0, &maxCompGroupSizeX);
+    glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 1, &maxCompGroupSizeY);
+    glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 2, &maxCompGroupSizeZ);
+    glGetIntegerv(
+        GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, &maxCompGroupInvocations);
+    return 0;
+  }();
+  ((void)once);
 
   compGroupSize[0] =
       compGroupSizeX < maxCompGroupSizeX ? compGroupSizeX : maxCompGroupSizeX;
@@ -874,6 +882,24 @@ void addCompGroupSizeDefines(
       compGroupSizeY < maxCompGroupSizeY ? compGroupSizeY : maxCompGroupSizeY;
   compGroupSize[2] =
       compGroupSizeZ < maxCompGroupSizeZ ? compGroupSizeZ : maxCompGroupSizeZ;
+
+  const int compGroupInvocations =
+      compGroupSize[0] * compGroupSize[1] * compGroupSize[2];
+  if (compGroupInvocations > maxCompGroupInvocations) {
+    int oldCompGroupSizeZ = compGroupSize[2];
+    compGroupSize[2] =
+        maxCompGroupInvocations / (compGroupSize[0] * compGroupSize[1]);
+    APRINTVIP(
+        "compGroupSize(%3d, %3d, %3d) compGroupInvocations:%4d > GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS:%4d => changeZto (%3d, %3d, %3d)",
+        compGroupSize[0],
+        compGroupSize[1],
+        oldCompGroupSizeZ,
+        compGroupInvocations,
+        maxCompGroupInvocations,
+        compGroupSize[0],
+        compGroupSize[1],
+        compGroupSize[2]);
+  }
 
   header.push_back(
       std::string{"#define WORKGROUP_X "} + std::to_string(compGroupSize[0]));

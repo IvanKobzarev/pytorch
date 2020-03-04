@@ -15,6 +15,11 @@ import org.pytorch.Module;
 import org.pytorch.PyTorchAndroid;
 import org.pytorch.Tensor;
 
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.Writer;
 import java.nio.FloatBuffer;
 
 public class MainActivity extends AppCompatActivity {
@@ -48,7 +53,23 @@ public class MainActivity extends AppCompatActivity {
       } else if (BuildConfig.AGPU_GTEST != null) {
         PyTorchAndroid.nativeAgpuGTest(BuildConfig.AGPU_GTEST);
       } else if (BuildConfig.AGPU_GBENCH != null) {
-        PyTorchAndroid.nativeAgpuGBench(BuildConfig.AGPU_GBENCH);
+        final String reportFileName = BuildConfig.AGPU_GBENCH_REPORT_FILE;
+        Log.i(TAG, "III AGPU_GBENCH reportFileName:" + reportFileName);
+        final File file = new File(getExternalFilesDir(null), reportFileName);
+        final String absPath = file.getAbsolutePath();
+        Log.i(TAG, "III AGPU_GBENCH reportFile absPath:" + absPath);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(BuildConfig.AGPU_GBENCH);
+        sb.append("--benchmark_out=");
+        sb.append(absPath);
+        sb.append(" --benchmark_out_format=json");
+
+        final String args = sb.toString();
+
+        Log.i(TAG, "III AGPU_GBENCH args:" + args);
+
+        PyTorchAndroid.nativeAgpuGBench(args);
       } else {
         final Result result = doModuleForward();
         runOnUiThread(new Runnable() {

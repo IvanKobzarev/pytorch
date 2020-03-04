@@ -1,7 +1,7 @@
 #pragma once
 
-#define AGPU_VERBOSE true
-#define AGPU_VERBOSE_VIP true
+#define AGPU_VERBOSE false
+#define AGPU_VERBOSE_VIP false
 
 #include <stdint.h>
 #include <stdio.h>
