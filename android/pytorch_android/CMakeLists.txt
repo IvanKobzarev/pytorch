@@ -62,15 +62,6 @@ target_compile_options(pytorch_jni PRIVATE
 )
 message(STATUS "libtorch_include_DIR: ${libtorch_include_DIR}")
 
-set(benchmark_DIR ${CMAKE_CURRENT_LIST_DIR}/../libs/benchmark/)
-set(gtest_DIR ${CMAKE_CURRENT_LIST_DIR}/../libs/gtest/)
-
-target_include_directories(pytorch_jni PUBLIC
-  ${libtorch_include_DIR}
-  ${libtorch_include_DIR}/torch/csrc/api/include
-  ${benchmark_DIR}/include
-  ${gtest_DIR}/include
-)
 
 set(fbjni_DIR ${CMAKE_CURRENT_LIST_DIR}/../libs/fbjni/)
 set(fbjni_BUILD_DIR ${CMAKE_BINARY_DIR}/fbjni/${BUILD_SUBDIR})
@@ -78,6 +69,15 @@ set(fbjni_BUILD_DIR ${CMAKE_BINARY_DIR}/fbjni/${BUILD_SUBDIR})
 add_subdirectory(${fbjni_DIR} ${fbjni_BUILD_DIR})
 
 if (ANDROID_ABI)
+
+set(benchmark_DIR ${CMAKE_CURRENT_LIST_DIR}/../libs/benchmark/${ANDROID_ABI})
+set(gtest_DIR ${CMAKE_CURRENT_LIST_DIR}/../libs/gtest/${ANDROID_ABI})
+
+target_include_directories(pytorch_jni PUBLIC
+        ${libtorch_include_DIR}
+        ${libtorch_include_DIR}/torch/csrc/api/include
+        ${benchmark_DIR}/include
+        ${gtest_DIR}/include)
 
 set(agpu_DIR ${CMAKE_CURRENT_LIST_DIR}/../agpu/)
 set(agpu_BUILD_DIR ${CMAKE_BINARY_DIR}/agpu/${BUILD_SUBDIR})

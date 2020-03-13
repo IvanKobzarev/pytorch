@@ -1,8 +1,12 @@
 package org.pytorch.testapp;
 
+import android.app.admin.DevicePolicyManager;
+import android.content.Context;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.HardwarePropertiesManager;
 import android.os.SystemClock;
 import android.util.Log;
 import android.widget.TextView;
@@ -21,6 +25,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.Writer;
 import java.nio.FloatBuffer;
+import java.util.Arrays;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -31,14 +36,76 @@ public class MainActivity extends AppCompatActivity {
 
   protected HandlerThread mBackgroundThread;
   protected Handler mBackgroundHandler;
+
+  protected HandlerThread mLogThread;
+  protected Handler mLogHandler;
+
   private Module mModule;
   private FloatBuffer mInputTensorBuffer;
   private Tensor mInputTensor;
   private StringBuilder mTextViewStringBuilder = new StringBuilder();
 
+  private final Runnable mLogRunnable = new Runnable() {
+    @Override
+    public void run() {
+      if (Build.VERSION.SDK_INT >= 24) {
+        final DevicePolicyManager dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
+        final String pkgName = MainActivity.this.getPackageName();
+        boolean isDeviceOwnerApp = dpm.isDeviceOwnerApp(pkgName);
+        Log.i(TAG, String.format("IIILog isDeviceOwnerApp:%b", isDeviceOwnerApp));
+        if (isDeviceOwnerApp) {
+          try {
+            HardwarePropertiesManager hwpm = (HardwarePropertiesManager) getSystemService(MainActivity.this.HARDWARE_PROPERTIES_SERVICE);
+            int typeGpu = HardwarePropertiesManager.DEVICE_TEMPERATURE_GPU;
+            int typeCpu = HardwarePropertiesManager.DEVICE_TEMPERATURE_CPU;
+
+            int srcCurr = HardwarePropertiesManager.TEMPERATURE_CURRENT;
+            int srcThrtl = HardwarePropertiesManager.TEMPERATURE_THROTTLING;
+
+            float[] gpuCurr = hwpm.getDeviceTemperatures(typeGpu, srcCurr);
+            float[] gpuThrtl = hwpm.getDeviceTemperatures(typeGpu, srcThrtl);
+            Log.i(TAG, String.format("IIILog GPU temps curr:%s thrtl:%s",
+                Arrays.toString(gpuCurr), Arrays.toString(gpuThrtl)));
+
+            float[] cpuCurr = hwpm.getDeviceTemperatures(typeGpu, srcCurr);
+            float[] cpuThrtl = hwpm.getDeviceTemperatures(typeCpu, srcThrtl);
+            Log.i(TAG, String.format("IIILog CPU temps curr:%s thrtl:%s",
+                Arrays.toString(cpuCurr), Arrays.toString(cpuThrtl)));
+          } catch(Exception e) {
+            Log.e(TAG, "Error get hw temp", e);
+          }
+
+          if (mLogHandler != null) {
+            mLogHandler.postDelayed(mLogRunnable, 5000);
+          }
+        }
+      }
+    }
+  };
+
   private final Runnable mModuleForwardRunnable = new Runnable() {
     @Override
     public void run() {
+
+      final String brand = android.os.Build.BRAND;
+      final String model = android.os.Build.MODEL;
+      final int sdkInt = Build.VERSION.SDK_INT;
+      final String abis = Arrays.toString(Build.SUPPORTED_ABIS);
+      StringBuilder osbSb = new StringBuilder();
+      osbSb
+          .append(brand)
+          .append(' ')
+          .append(model)
+          .append(' ')
+          .append(sdkInt)
+          .append(' ')
+          .append(abis);
+      String osBuildInfo = osbSb.toString();
+
+
+      Log.i(TAG, "III android.os.Build:" + osBuildInfo);
+
+
       Log.i(TAG, "BuildConfig.AGPU_TEST0:" + BuildConfig.AGPU_TEST0);
       Log.i(TAG, "BuildConfig.AGPU_GTEST:" + BuildConfig.AGPU_GTEST);
       Log.i(TAG, "BuildConfig.AGPU_GBENCH:" + BuildConfig.AGPU_GBENCH);
@@ -69,7 +136,11 @@ public class MainActivity extends AppCompatActivity {
 
         Log.i(TAG, "III AGPU_GBENCH args:" + args);
 
-        PyTorchAndroid.nativeAgpuGBench(args);
+        PyTorchAndroid.nativeAgpuGBench(args, osBuildInfo);
+
+        for (int i = 0; i < 10000; i++) {
+          Log.i(TAG, "III AGPU_GBENCH COMPLETED");
+        }
       } else {
         final Result result = doModuleForward();
         runOnUiThread(new Runnable() {
@@ -92,12 +163,17 @@ public class MainActivity extends AppCompatActivity {
     mTextView = findViewById(R.id.text);
     startBackgroundThread();
     mBackgroundHandler.post(mModuleForwardRunnable);
+    mLogHandler.post(mLogRunnable);
   }
 
   protected void startBackgroundThread() {
     mBackgroundThread = new HandlerThread(TAG + "_bg");
     mBackgroundThread.start();
     mBackgroundHandler = new Handler(mBackgroundThread.getLooper());
+
+    mLogThread = new HandlerThread(TAG + "_log");
+    mLogThread.start();
+    mLogHandler = new Handler(mLogThread.getLooper());
   }
 
   @Override
@@ -114,6 +190,15 @@ public class MainActivity extends AppCompatActivity {
       mBackgroundHandler = null;
     } catch (InterruptedException e) {
       Log.e(TAG, "Error stopping background thread", e);
+    }
+
+    mLogThread.quitSafely();
+    try {
+      mLogThread.join();
+      mLogThread = null;
+      mLogHandler = null;
+    } catch (InterruptedException e) {
+      Log.e(TAG, "Error stopping log thread", e);
     }
   }
 

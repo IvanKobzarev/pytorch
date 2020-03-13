@@ -514,10 +514,24 @@ static void BM_convAgpuArgs(
              gcout});
   };
 
+  // nchw c4
   f(agpu::AConv::conv_tex_IKnc4hw);
-  f(agpu::AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW);
-  f(agpu::AConv::conv_buf_IKnhwc);
-  f(agpu::AConv::conv_buf_IKnhwc_KrO4C4HW);
+
+  //  f(agpu::AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW);
+  //
+  //  f(agpu::AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4HWC);
+  //  f(agpu::AConv::conv_buf_IKnchw_SIKnc4hw_SOnchw);
+  //  f(agpu::AConv::conv_buf_IKnchw_SKnc4hw_KrO4C4HW);
+  //
+  //  // nchw
+  //  f(agpu::AConv::conv_buf_IKnchw_KrO4C4HW);
+  //  f(agpu::AConv::conv_buf_IKnchw_KrO4HWC),
+  //
+  //  // nhwc
+  //  f(agpu::AConv::conv_buf_IKnhwc_KrO4C4HW);
+  //  f(agpu::AConv::conv_buf_IKnhwc_KrO4HWC);
+  //  f(agpu::AConv::conv_buf_Inhwc_Knchw_KrO4C4HW);
+  //  f(agpu::AConv::conv_buf_IKnhwc);
 }
 
 static void BM_conv_args_base(benchmark::internal::Benchmark* b) {
@@ -613,7 +627,6 @@ static void BM_conv_agpu_args_mobilenetv2(benchmark::internal::Benchmark* b) {
   f(b, 1, 112, 112, 1, 1, 0, 0, 1, 1, 1, 32, 16);
   f(b, 1, 112, 112, 1, 1, 0, 0, 1, 1, 1, 16, 96);
   f(b, 1, 112, 112, 3, 3, 1, 1, 2, 1, 96, 1, 1);
-  /*
   f(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 96, 24);
   f(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 24, 144);
   f(b, 1, 56, 56, 3, 3, 1, 1, 1, 1, 144, 1, 1);
@@ -636,7 +649,6 @@ static void BM_conv_agpu_args_mobilenetv2(benchmark::internal::Benchmark* b) {
   f(b, 1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 576, 160);
   f(b, 1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 160, 960);
   f(b, 1, 7, 7, 3, 3, 1, 1, 1, 1, 960, 1, 1);
-  */
   f(b, 1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 960, 160);
   f(b, 1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 960, 320);
   f(b, 1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 320, 1280);
@@ -644,6 +656,7 @@ static void BM_conv_agpu_args_mobilenetv2(benchmark::internal::Benchmark* b) {
 }
 
 torch::jit::script::Module module_;
+std::string benchLabelPrefix_;
 
 void BM_moduleForward(benchmark::State& state, const char* name) {
   for (auto _ : state) {
@@ -686,7 +699,8 @@ void gbench_module(torch::jit::script::Module module, const std::string& args) {
   benchmark::RunSpecifiedBenchmarks();
 }
 
-static void BM_conv_agpu_args_base(benchmark::internal::Benchmark* b) {
+static void BM_conv_agpu_args_mobilenetv2_base(
+    benchmark::internal::Benchmark* b) {
   b->ArgNames({"ACX",
                "N",
                "H",
@@ -703,7 +717,7 @@ static void BM_conv_agpu_args_base(benchmark::internal::Benchmark* b) {
   /*             N   H    W   KH  KW  py  px  S  D    G  GCin  GCout */
   BM_convAgpuArgs(b, 1, 224, 224, 3, 3, 2, 1, 1, 1, 1, 3, 32);
   BM_convAgpuArgs(b, 1, 112, 112, 3, 3, 2, 1, 1, 1, 96, 1, 1);
-  BM_convAgpuArgs(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
+  // BM_convAgpuArgs(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
   // BM_convAgpuArgs(b, 1, 28, 28, 3, 3, 1, 1, 2, 1, 192, 1, 1);
   // BM_convAgpuArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 96);
   // BM_convAgpuArgs(b, 1, 7, 7, 3, 3, 1, 1, 1, 1, 960, 1, 1);
@@ -844,6 +858,7 @@ static void BM_conv_agpu(benchmark::State& state, const char* name) {
   auto aConvCode = agpuConvMethodCode;
   auto aConv = agpu::aConvByCode(aConvCode);
   auto aConvFun = agpu::aConvToFun(aConv);
+  static int pauseDurationMs = 100;
 
   for (auto _ : state) {
     state.PauseTiming();
@@ -851,50 +866,77 @@ static void BM_conv_agpu(benchmark::State& state, const char* name) {
     prefetchToL1(bias.data(), sizeof(float) * bias.size());
     prefetchToL1(kernel.data(), sizeof(float) * kernel.size());
     prefetchToL1(input.data(), sizeof(float) * input.size());
-    state.ResumeTiming();
-    auto ares = aConvFun(
-        input.data(),
-        n,
-        c_in,
-        h,
-        w,
-        kernel.data(),
-        c_out,
-        kh,
-        kw,
-        bias.data(),
-        stride,
-        stride,
-        py,
-        px,
-        dilation,
-        dilation,
-        groups,
-        output.data(),
-        agpuConvMethodMod);
-    state.PauseTiming();
 
-    state.SetIterationTime(ares.gpu_shader_conv_time);
+    std::unique_ptr<agpu::AResult> ares;
+
+    bool valid = false;
+    int i = 0;
+    while (!valid) {
+      i++;
+      state.ResumeTiming();
+      auto aConvFunRet = aConvFun(
+          input.data(),
+          n,
+          c_in,
+          h,
+          w,
+          kernel.data(),
+          c_out,
+          kh,
+          kw,
+          bias.data(),
+          stride,
+          stride,
+          py,
+          px,
+          dilation,
+          dilation,
+          groups,
+          output.data(),
+          agpuConvMethodMod);
+      state.PauseTiming();
+      ares = std::make_unique<agpu::AResult>(aConvFunRet);
+      valid = !ares->isInvalid();
+
+      if (ares->isInvalid()) {
+        int progPauseMs =
+            std::min((int)std::pow(2, i) * pauseDurationMs, 15000);
+        ALOGI(
+            "INVALID(DISJOINT) invalidInARow:%d pauseDurationMs:%d",
+            i,
+            progPauseMs);
+        std::this_thread::sleep_for(std::chrono::milliseconds(progPauseMs));
+      }
+    }
+
+    state.SetIterationTime(ares->gpu_shader_conv_time);
     state.counters["\nC_Kr_CHW_O4C4HW    "] =
-        ares.cpu_kernel_CHW_repack_O4C4HW_time;
+        ares->cpu_kernel_CHW_repack_O4C4HW_time;
     state.counters["\nC_Kr_CHW_O4HWC     "] =
-        ares.cpu_kernel_CHW_repack_O4HWC_time;
+        ares->cpu_kernel_CHW_repack_O4HWC_time;
     state.counters["\nC_Kr_HWC_O4C4HW    "] =
-        ares.cpu_kernel_HWC_repack_O4C4HW_time;
+        ares->cpu_kernel_HWC_repack_O4C4HW_time;
     state.counters["\nC_Kr_HWC_O4HWC     "] =
-        ares.cpu_kernel_HWC_repack_O4HWC_time;
+        ares->cpu_kernel_HWC_repack_O4HWC_time;
 
-    state.counters["\nS_Conv             "] = ares.gpu_shader_conv_time;
+    state.counters["\nS_Conv             "] = ares->gpu_shader_conv_time;
     state.counters["\nS_hK_dTex          "] =
-        ares.gpu_shader_hkernel_to_dtex_time;
-    state.counters["\nS_dTex_hCHW        "] = ares.gpu_shader_dtex_to_hchw_time;
-    state.counters["\nS_hCHW_dTex        "] = ares.gpu_shader_hchw_to_dtex_time;
+        ares->gpu_shader_hkernel_to_dtex_time;
+    state.counters["\nS_dTex_hCHW        "] =
+        ares->gpu_shader_dtex_to_hchw_time;
+    state.counters["\nS_hCHW_dTex        "] =
+        ares->gpu_shader_hchw_to_dtex_time;
     state.counters["\nS_hCHW_dC4HW       "] =
-        ares.gpu_shader_hchw_to_dc4hw_time;
+        ares->gpu_shader_hchw_to_dc4hw_time;
     state.counters["\nS_dC4HW_hCHW       "] =
-        ares.gpu_shader_dc4hw_to_hchw_time;
+        ares->gpu_shader_dc4hw_to_hchw_time;
+    state.counters["\nD_runsFor1Valid    "] = i;
     state.ResumeTiming();
   }
+
+  std::string label = benchLabelPrefix_ + agpu::getGLInfo();
+  state.SetLabel(label);
+
   //  state.counters["\nFreq        "] = getCurrentCpuFrequency();
 }
 
@@ -950,13 +992,108 @@ static std::vector<float> kT0_GOutputNCHW =
 static std::vector<float> kT0_GOutputNHWC =
     {1, 102, 1004, 2, 103, 1005, 4, 105, 1007, 5, 106, 1008};
 
-static void test0_conv_agpu_IKnchw_KrO4C4HW() {
+static void test0_conv_agpu_IKnchw_SKnc4hw_KrO4C4HW() {
   const int64_t G = 1;
   const int64_t C = 3;
   const int64_t OC = 2;
 
   std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
   agpu::conv_buf_IKnchw_SKnc4hw_KrO4C4HW(
+      kT0_InputNCHW.data(),
+      kT0_N,
+      C,
+      kT0_H,
+      kT0_W,
+      kT0_KernelNCHW.data(),
+      OC,
+      kT0_KH,
+      kT0_KW,
+      kT0_Bias.data(),
+      kT0_S,
+      kT0_S,
+      kT0_PY,
+      kT0_PX,
+      kT0_D,
+      kT0_D,
+      G,
+      output.data());
+
+  log("         output:", output);
+  log("expected_output:", kT0_OutputNCHW);
+
+  assert(kT0_OutputNCHW == output);
+}
+
+// TODO:
+// static void test0_conv_agpu_IKnchw_SKnc4hw_KrO4HWC() {
+//  const int64_t G = 1;
+//  const int64_t C = 3;
+//  const int64_t OC = 2;
+//
+//  std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
+//  agpu::conv_buf_IKnchw_SKnc4hw_KrO4HWC(
+//      kT0_InputNCHW.data(),
+//      kT0_N,
+//      C,
+//      kT0_H,
+//      kT0_W,
+//      kT0_KernelNCHW.data(),
+//      OC,
+//      kT0_KH,
+//      kT0_KW,
+//      kT0_Bias.data(),
+//      kT0_S,
+//      kT0_S,
+//      kT0_PY,
+//      kT0_PX,
+//      kT0_D,
+//      kT0_D,
+//      G,
+//      output.data());
+//
+//  log("output:", output);
+//  log("expected_output:", kT0_OutputNCHW);
+//  assert(kT0_OutputNCHW == output);
+//}
+
+static void test0_conv_agpu_IKnchw_KrO4C4HW() {
+  const int64_t G = 1;
+  const int64_t C = 3;
+  const int64_t OC = 2;
+
+  std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
+  agpu::conv_buf_IKnchw_KrO4C4HW(
+      kT0_InputNCHW.data(),
+      kT0_N,
+      C,
+      kT0_H,
+      kT0_W,
+      kT0_KernelNCHW.data(),
+      OC,
+      kT0_KH,
+      kT0_KW,
+      kT0_Bias.data(),
+      kT0_S,
+      kT0_S,
+      kT0_PY,
+      kT0_PX,
+      kT0_D,
+      kT0_D,
+      G,
+      output.data());
+
+  log("output:", output);
+  log("expected_output:", kT0_OutputNCHW);
+  assert(kT0_OutputNCHW == output);
+}
+
+static void test0_conv_agpu_IKnchw_KrO4HWC() {
+  const int64_t G = 1;
+  const int64_t C = 3;
+  const int64_t OC = 2;
+
+  std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
+  agpu::conv_buf_IKnchw_KrO4HWC(
       kT0_InputNCHW.data(),
       kT0_N,
       C,
@@ -987,7 +1124,7 @@ static void test0_conv_agpu_Inhwc_Knchw() {
   const int64_t OC = 2;
 
   std::vector<float> output(kT0_N * OC * kT0_OH * kT0_OW);
-  agpu::conv_buf_Inhwc_Knchw(
+  agpu::conv_buf_Inhwc_Knchw_KrO4C4HW(
       kT0_InputNHWC.data(),
       kT0_N,
       C,
@@ -1230,8 +1367,12 @@ static void test0_convDW_agpu_IKnhwc() {
   assert(kT0_GOutputNHWC == output);
 }
 
-void gbench_main(const std::string& args) {
-  ALOGI("pytorch_android_agpu::gbench_main(%s)", args.c_str());
+void gbench_main(const std::string& args, const std::string& labelPrefix) {
+  ALOGI(
+      "pytorch_android_agpu::gbench_main(%s labelPrefix:%s)",
+      args.c_str(),
+      labelPrefix.c_str());
+  benchLabelPrefix_ = labelPrefix;
   auto argscv = ArgsCV{args};
   //  BENCHMARK_CAPTURE(BM_conv, mobilenet_v2, "MobileNet v2")
   //      ->Apply(BM_conv_args_mobilenetv2)
@@ -1248,12 +1389,17 @@ void gbench_main(const std::string& args) {
   //    ->ReportAggregatesOnly(true)
   //    ->UseRealTime();
 
-  static const int kPreBurn = 3; // 10;
-  static const int kRepsAfterPreBurn = 5; // 20;
+  // static const int kPreBurn = 5;
+  // static const int kRepsAfterPreBurn = 20;
+
+  static const int kPreBurn = 1;
+  static const int kRepsAfterPreBurn = 3;
+
   // BENCHMARK_CAPTURE(BM_conv_agpu, base, "a_base")
   //   ->Apply(BM_conv_agpu_args_base)
   BENCHMARK_CAPTURE(BM_conv_agpu, mobilenet_v2, "mobilenet_v2")
-      ->Apply(BM_conv_agpu_args_mobilenetv2)
+      ->Apply(BM_conv_agpu_args_mobilenetv2_base)
+      //->Apply(BM_conv_agpu_args_mobilenetv2)
       ->Iterations(1)
       ->Repetitions(kPreBurn + kRepsAfterPreBurn)
       ->ComputeStatistics(
@@ -1361,15 +1507,24 @@ void test0_main(const std::string& args) {
       g);
   log("tout:", tout);
 
-  test0_conv_agpu_IKnchw_KrO4C4HW();
+  // test0_conv_agpu_IKnchw_SKnc4hw_KrO4C4HW();
+  // test0_conv_agpu_IKnchw_SKnc4hw_KrO4HWC();
+
+  // test0_conv_agpu_IKnchw_KrO4C4HW();
+  test0_conv_agpu_IKnchw_KrO4HWC();
+
+  /*
   test0_conv_agpu_Inhwc_Knchw();
   test0_conv_agpu_IKnhwc();
+
   test0_conv_agpu_IKnhwc_KrO4C4HW();
   test0_conv_agpu_IKnhwc_KrO4HWC();
+
   test0_conv_agpu_IKnchw_SIKOnc4hw_KrO4C4HW();
   test0_conv_agpu_IKnchw_SIKOnc4hw_KrO4HWC();
   test0_convDW_agpu_IKnchw();
   test0_convDW_agpu_IKnhwc();
+  */
 }
 
 void test_module(torch::jit::script::Module module, const std::string& args) {

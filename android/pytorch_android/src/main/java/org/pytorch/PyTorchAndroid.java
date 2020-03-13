@@ -43,7 +43,7 @@ public final class PyTorchAndroid {
   public static native void nativeAgpuGTest(String args);
   public static native void nativeAgpuTest0(String args);
 
-  public static native void nativeAgpuGBench(String args);
+  public static native void nativeAgpuGBench(String args, String benchLabelPrefix);
   public static native void nativeAgpuGBenchModule(String assetName, Object assetManager, String args);
   public static native void nativeAgpuGTestModule(String assetName, Object assetManager, String args);
 }

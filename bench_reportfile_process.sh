@@ -26,8 +26,3 @@ adb shell cat $DEVICE_FILE_PATH > $REPORT_FILE_PATH
 echo "PDF REPORT_FILE_PATH:${REPORT_FILE_PDF_PATH}"
 
 python bench_reportfile_process.py $REPORT_FILE_PATH $REPORT_FILE_PDF_PATH && open $REPORT_FILE_PDF_PATH
-
-
-
-
-

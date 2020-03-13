@@ -247,6 +247,220 @@ const char* convDW_buf_Inhwc_Knchw_glsl =
 "    }\n"
 "}\n"
 ;
+const char* conv_buf_IKnchw_KrO4C4HW_glsl = 
+"layout(std430) buffer;\n"
+"layout(binding=0) writeonly buffer outBuffer{\n"
+"  float data[];\n"
+"}uOutBuffer;\n"
+"layout(binding=1) readonly buffer inputBuffer{\n"
+"  float data[];\n"
+"}uInBuffer;\n"
+"layout(binding=2) readonly buffer kernelBuffer{\n"
+"  vec4 data[];\n"
+"}uKernelBuffer;\n"
+"layout(binding=3) readonly buffer bias{\n"
+"  vec4 data[];\n"
+"}uBias;\n"
+"layout(location=4) uniform ivec2 uPad;\n"
+"layout(location=5) uniform ivec2 uKernelSize;\n"
+"layout(location=6) uniform ivec2 uStride;\n"
+"layout(location=7) uniform ivec2 uDilate;\n"
+"layout(location=8) uniform ivec4 uOutputSize;\n"
+"layout(location=9) uniform ivec4 uInputSize;\n"
+"#define UP_DIV(x, y) (((x)+(y)-1)/(y))\n"
+"layout (local_size_x = WORKGROUP_X, local_size_y = WORKGROUP_Y, local_size_z = WORKGROUP_Z) in;\n"
+"void main()\n"
+"{\n"
+"    if (all(lessThan(ivec3(gl_GlobalInvocationID), uOutputSize.xyz)))\n"
+"    {\n"
+"        ivec3 pos = ivec3(gl_GlobalInvocationID)*ivec3(4, 1, 1);\n"
+"        int KW = uKernelSize.x;\n"
+"        int KH = uKernelSize.y;\n"
+"        ivec3 inputSize = uInputSize.xyz;\n"
+"        int W = uInputSize.x;\n"
+"        int H = uInputSize.y;\n"
+"        int C_4 = uInputSize.z;\n"
+"        int C = uInputSize.w;\n"
+"        int OW = uOutputSize.x;\n"
+"        int OH = uOutputSize.y;\n"
+"        int OC_4 = uOutputSize.z;\n"
+"        int OC = uOutputSize.w;\n"
+"        ivec2 s0 = pos.xy*uStride-uPad;\n"
+"        int kxi, kyi, ic_4i;\n"
+"        int oc_4i = pos.z;\n"
+"        ivec2 sfxy = max(ivec2(0), (UP_DIV(-s0, uDilate)));\n"
+"        ivec2 efxy = min(uKernelSize, UP_DIV(inputSize.xy-s0, uDilate));\n"
+"        ivec4 inBi, inBisx0, inBisx1, inBisx2, inBisx3;\n"
+"        vec4 v[4];\n"
+"        vec4 invsx[4];\n"
+"        v[0] = uBias.data[pos.z];\n"
+"        v[1] = v[0];\n"
+"        v[2] = v[0];\n"
+"        v[3] = v[0];\n"
+"        for (kyi=sfxy.y; kyi<efxy.y; ++kyi)\n"
+"        {\n"
+"            int sy = kyi*uDilate.y + s0.y;\n"
+"            for (kxi=0; kxi < KW; ++kxi)\n"
+"            {\n"
+"                int sx0 = kxi*uDilate.x + s0.x;\n"
+"                int sx1 = sx0 + uStride.x;\n"
+"                int sx2 = sx1 + uStride.x;\n"
+"                int sx3 = sx2 + uStride.x;\n"
+"                float m0 = sx0 >= 0 && sx0 < W ? 1.0 : 0.0;\n"
+"                float m1 = sx1 >= 0 && sx1 < W ? 1.0 : 0.0;\n"
+"                float m2 = sx2 >= 0 && sx2 < W ? 1.0 : 0.0;\n"
+"                float m3 = sx3 >= 0 && sx3 < W ? 1.0 : 0.0;\n"
+"                for (ic_4i=0; ic_4i < C_4; ++ic_4i)\n"
+"                {\n"
+"                    int kBi = oc_4i * (C_4 * KH * KW * 4) + ic_4i * KH * KW * 4 + (kxi + kyi*KW) * 4;\n"
+"                    vec4 k0 = uKernelBuffer.data[kBi+0];\n"
+"                    vec4 k1 = uKernelBuffer.data[kBi+1];\n"
+"                    vec4 k2 = uKernelBuffer.data[kBi+2];\n"
+"                    vec4 k3 = uKernelBuffer.data[kBi+3];\n"
+"                    for (int i = 0; i < 4; ++i) {\n"
+"                      invsx[i] = vec4(0.0);\n"
+"                    }\n"
+"                    int ic4ie = min(4, C - 4*ic_4i);\n"
+"                    for (int ic4i=0;ic4i<ic4ie; ++ic4i)\n"
+"                    {\n"
+"                      int inBi = (4*ic_4i + ic4i)*H*W + sy*W;\n"
+"                      invsx[0][ic4i] = uInBuffer.data[inBi + sx0];\n"
+"                      invsx[1][ic4i] = uInBuffer.data[inBi + sx1];\n"
+"                      invsx[2][ic4i] = uInBuffer.data[inBi + sx2];\n"
+"                      invsx[3][ic4i] = uInBuffer.data[inBi + sx3];\n"
+"                    }\n"
+"                    mat4 k = mat4(k0, k1, k2, k3);\n"
+"                    v[0] += k * invsx[0] * m0;\n"
+"                    v[1] += k * invsx[1] * m1;\n"
+"                    v[2] += k * invsx[2] * m2;\n"
+"                    v[3] += k * invsx[3] * m3;\n"
+"                }\n"
+"            }\n"
+"        }\n"
+"        int vi=0;\n"
+"        int vie=min(4, OW-pos.x);\n"
+"        int OWH = OW*OH;\n"
+"        int outBi;\n"
+"        for (;vi<vie;++vi)\n"
+"        {\n"
+"          outBi = (pos.x+vi) + OW*pos.y + 4*pos.z*OWH;\n"
+"          vec4 v = v[vi];\n"
+"          uOutBuffer.data[outBi+0] = v.x;\n"
+"          uOutBuffer.data[outBi+1*OWH] = v.y;\n"
+"          uOutBuffer.data[outBi+2*OWH] = v.z;\n"
+"          uOutBuffer.data[outBi+3*OWH] = v.w;\n"
+"        }\n"
+"    }\n"
+"}\n"
+;
+const char* conv_buf_IKnchw_KrO4HWC_glsl = 
+"layout(std430) buffer;\n"
+"layout(binding=0) writeonly buffer outBuffer{\n"
+"  float data[];\n"
+"}uOutBuffer;\n"
+"layout(binding=1) readonly buffer inputBuffer{\n"
+"  float data[];\n"
+"}uInBuffer;\n"
+"layout(binding=2) readonly buffer kernelBuffer{\n"
+"  vec4 data[];\n"
+"}uKernelBuffer;\n"
+"layout(binding=3) readonly buffer bias{\n"
+"  vec4 data[];\n"
+"}uBias;\n"
+"layout(location=4) uniform ivec2 uPad;\n"
+"layout(location=5) uniform ivec2 uKernelSize;\n"
+"layout(location=6) uniform ivec2 uStride;\n"
+"layout(location=7) uniform ivec2 uDilate;\n"
+"layout(location=8) uniform ivec4 uOutputSize;\n"
+"layout(location=9) uniform ivec4 uInputSize;\n"
+"#define UP_DIV(x, y) (((x)+(y)-1)/(y))\n"
+"layout (local_size_x = WORKGROUP_X, local_size_y = WORKGROUP_Y, local_size_z = WORKGROUP_Z) in;\n"
+"void main()\n"
+"{\n"
+"    if (all(lessThan(ivec3(gl_GlobalInvocationID), uOutputSize.xyz)))\n"
+"    {\n"
+"        ivec3 pos = ivec3(gl_GlobalInvocationID)*ivec3(4, 1, 1);\n"
+"        int KW = uKernelSize.x;\n"
+"        int KH = uKernelSize.y;\n"
+"        ivec3 inputSize = uInputSize.xyz;\n"
+"        int W = uInputSize.x;\n"
+"        int H = uInputSize.y;\n"
+"        int C_4 = uInputSize.z;\n"
+"        int C = uInputSize.w;\n"
+"        int CAU4 = C_4 * 4;\n"
+"        int OW = uOutputSize.x;\n"
+"        int OH = uOutputSize.y;\n"
+"        int OC_4 = uOutputSize.z;\n"
+"        int OC = uOutputSize.w;\n"
+"        ivec2 s0 = pos.xy*uStride-uPad;\n"
+"        int kxi, kyi, ic_4i;\n"
+"        int oc_4i = pos.z;\n"
+"        ivec2 sfxy = max(ivec2(0), (UP_DIV(-s0, uDilate)));\n"
+"        ivec2 efxy = min(uKernelSize, UP_DIV(inputSize.xy-s0, uDilate));\n"
+"        ivec4 inBi, inBisx0, inBisx1, inBisx2, inBisx3;\n"
+"        vec4 v[4];\n"
+"        vec4 invsx[4];\n"
+"        v[0] = uBias.data[pos.z];\n"
+"        v[1] = v[0];\n"
+"        v[2] = v[0];\n"
+"        v[3] = v[0];\n"
+"        for (kyi=sfxy.y; kyi<efxy.y; ++kyi)\n"
+"        {\n"
+"            int sy = kyi*uDilate.y + s0.y;\n"
+"            for (kxi=0; kxi < KW; ++kxi)\n"
+"            {\n"
+"                int sx0 = kxi*uDilate.x + s0.x;\n"
+"                int sx1 = sx0 + uStride.x;\n"
+"                int sx2 = sx1 + uStride.x;\n"
+"                int sx3 = sx2 + uStride.x;\n"
+"                float m0 = sx0 >= 0 && sx0 < W ? 1.0 : 0.0;\n"
+"                float m1 = sx1 >= 0 && sx1 < W ? 1.0 : 0.0;\n"
+"                float m2 = sx2 >= 0 && sx2 < W ? 1.0 : 0.0;\n"
+"                float m3 = sx3 >= 0 && sx3 < W ? 1.0 : 0.0;\n"
+"                int kBi = kBi_oc4i_kyi + CAU4 * kxi;\n"
+"                for (ic_4i=0; ic_4i < C_4; ++ic_4i)\n"
+"                {\n"
+"                    vec4 k0 = uKernelBuffer.data[kBi+0];\n"
+"                    vec4 k1 = uKernelBuffer.data[kBi+1];\n"
+"                    vec4 k2 = uKernelBuffer.data[kBi+2];\n"
+"                    vec4 k3 = uKernelBuffer.data[kBi+3];\n"
+"                    for (int i = 0; i < 4; ++i) {\n"
+"                      invsx[i] = vec4(0.0);\n"
+"                    }\n"
+"                    int ic4ie = min(4, C - 4*ic_4i);\n"
+"                    for (int ic4i=0;ic4i<ic4ie; ++ic4i)\n"
+"                    {\n"
+"                      int inBi = (4*ic_4i + ic4i)*H*W + sy*W;\n"
+"                      invsx[0][ic4i] = uInBuffer.data[inBi + sx0];\n"
+"                      invsx[1][ic4i] = uInBuffer.data[inBi + sx1];\n"
+"                      invsx[2][ic4i] = uInBuffer.data[inBi + sx2];\n"
+"                      invsx[3][ic4i] = uInBuffer.data[inBi + sx3];\n"
+"                    }\n"
+"                    mat4 k = mat4(k0, k1, k2, k3);\n"
+"                    v[0] += k * invsx[0] * m0;\n"
+"                    v[1] += k * invsx[1] * m1;\n"
+"                    v[2] += k * invsx[2] * m2;\n"
+"                    v[3] += k * invsx[3] * m3;\n"
+"                    kBi += 4;\n"
+"                }\n"
+"            }\n"
+"        }\n"
+"        int vi=0;\n"
+"        int vie=min(4, OW-pos.x);\n"
+"        int OWH = OW*OH;\n"
+"        int outBi;\n"
+"        for (;vi<vie;++vi)\n"
+"        {\n"
+"          outBi = (pos.x+vi) + OW*pos.y + 4*pos.z*OWH;\n"
+"          vec4 v = v[vi];\n"
+"          uOutputBuffer.data[outBi+0] = v.x;\n"
+"          uOutputBuffer.data[outBi+1*OWH] = v.y;\n"
+"          uOutputBuffer.data[outBi+2*OWH] = v.z;\n"
+"          uOutputBuffer.data[outBi+3*OWH] = v.w;\n"
+"        }\n"
+"    }\n"
+"}\n"
+;
 const char* conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW_glsl = 
 "layout(std430) buffer;\n"
 "layout(binding=0) writeonly buffer outBuffer{\n"
@@ -524,109 +738,6 @@ const char* conv_buf_IKnchw_SIKnc4hw_SOnchw_glsl =
 "}\n"
 ;
 const char* conv_buf_IKnchw_SKnc4hw_KrO4C4HW_glsl = 
-"layout(std430) buffer;\n"
-"layout(binding=0) writeonly buffer outBuffer{\n"
-"  float data[];\n"
-"}uOutputBuffer;\n"
-"layout(binding=1) readonly buffer inputBuffer{\n"
-"  float data[];\n"
-"}uInBuffer;\n"
-"layout(binding=2) readonly buffer kernelBuffer{\n"
-"  vec4 data[];\n"
-"}uKernelBuffer;\n"
-"layout(binding=3) readonly buffer bias{\n"
-"  vec4 data[];\n"
-"}uBias;\n"
-"layout(location=4) uniform ivec2 uPad;\n"
-"layout(location=5) uniform ivec2 uKernelSize;\n"
-"layout(location=6) uniform ivec2 uStride;\n"
-"layout(location=7) uniform ivec2 uDilate;\n"
-"layout(location=8) uniform ivec3 uOutputSize;\n"
-"layout(location=9) uniform ivec3 uInputSize;\n"
-"#define UP_DIV(x, y) (((x)+(y)-1)/(y))\n"
-"layout (local_size_x = WORKGROUP_X, local_size_y = WORKGROUP_Y, local_size_z = WORKGROUP_Z) in;\n"
-"void main()\n"
-"{\n"
-"    if (all(lessThan(ivec3(gl_GlobalInvocationID), uOutputSize)))\n"
-"    {\n"
-"        ivec3 pos = ivec3(gl_GlobalInvocationID)*ivec3(4, 1, 1);\n"
-"        int KW = uKernelSize.x;\n"
-"        int KH = uKernelSize.y;\n"
-"        ivec3 inputSize = uInputSize;\n"
-"        int W = uInputSize.x;\n"
-"        int H = uInputSize.y;\n"
-"        int C_4 = uInputSize.z;\n"
-"        int OW = uOutputSize.x;\n"
-"        int OH = uOutputSize.y;\n"
-"        int OC_4 = uOutputSize.z;\n"
-"        ivec2 s0 = pos.xy*uStride-uPad;\n"
-"        int kxi, kyi, ic_4i;\n"
-"        int oc_4i = pos.z;\n"
-"        ivec2 sfxy = max(ivec2(0), (UP_DIV(-s0, uDilate)));\n"
-"        ivec2 efxy = min(uKernelSize, UP_DIV(inputSize.xy-s0, uDilate));\n"
-"        vec4 v[4];\n"
-"        v[0] = uBias.data[pos.z];\n"
-"        v[1] = v[0];\n"
-"        v[2] = v[0];\n"
-"        v[3] = v[0];\n"
-"        for (kyi=sfxy.y; kyi<efxy.y; ++kyi)\n"
-"        {\n"
-"            int sy = kyi*uDilate.y + s0.y;\n"
-"            for (kxi=0; kxi < KW; ++kxi)\n"
-"            {\n"
-"                int sx0 = kxi*uDilate.x + s0.x;\n"
-"                int sx1 = sx0 + uStride.x;\n"
-"                int sx2 = sx1 + uStride.x;\n"
-"                int sx3 = sx2 + uStride.x;\n"
-"                float m0 = sx0 >= 0 && sx0 < W ? 1.0 : 0.0;\n"
-"                float m1 = sx1 >= 0 && sx1 < W ? 1.0 : 0.0;\n"
-"                float m2 = sx2 >= 0 && sx2 < W ? 1.0 : 0.0;\n"
-"                float m3 = sx3 >= 0 && sx3 < W ? 1.0 : 0.0;\n"
-"                for (ic_4i=0; ic_4i < C_4; ++ic_4i)\n"
-"                {\n"
-"                    int kBi = oc_4i * (C_4 * KH * KW * 4) + ic_4i * KH * KW * 4 + (kxi + kyi*KW) * 4;\n"
-"                    vec4 k0 = uKernelBuffer.data[kBi+0];\n"
-"                    vec4 k1 = uKernelBuffer.data[kBi+1];\n"
-"                    vec4 k2 = uKernelBuffer.data[kBi+2];\n"
-"                    vec4 k3 = uKernelBuffer.data[kBi+3];\n"
-"                    mat4 k = mat4(k0, k1, k2, k3);\n"
-"                    ivec4 inBi;\n"
-"                    inBi.x = ic_4i*W*H + sy*W;\n"
-"                    inBi.y = inBi.x + W*H;\n"
-"                    inBi.z = inBi.y + W*H;\n"
-"                    inBi.w = inBi.z + W*H;\n"
-"                    ivec4 inBisx0 = inBi + sx0;\n"
-"                    ivec4 inBisx1 = inBi + sx1;\n"
-"                    ivec4 inBisx2 = inBi + sx2;\n"
-"                    ivec4 inBisx3 = inBi + sx3;\n"
-"                    vec4 invsx0 = vec4(uInBuffer.data[inBisx0.x],uInBuffer.data[inBisx0.y],uInBuffer.data[inBisx0.z],uInBuffer.data[inBisx0.w]);\n"
-"                    vec4 invsx1 = vec4(uInBuffer.data[inBisx1.x],uInBuffer.data[inBisx1.y],uInBuffer.data[inBisx1.z],uInBuffer.data[inBisx1.w]);\n"
-"                    vec4 invsx2 = vec4(uInBuffer.data[inBisx2.x],uInBuffer.data[inBisx2.y],uInBuffer.data[inBisx2.z],uInBuffer.data[inBisx2.w]);\n"
-"                    vec4 invsx3 = vec4(uInBuffer.data[inBisx3.x],uInBuffer.data[inBisx3.y],uInBuffer.data[inBisx3.z],uInBuffer.data[inBisx3.w]);\n"
-"                    v[0] += k * invsx0 * m0;\n"
-"                    v[1] += k * invsx1 * m1;\n"
-"                    v[2] += k * invsx2 * m2;\n"
-"                    v[3] += k * invsx3 * m3;\n"
-"                }\n"
-"            }\n"
-"        }\n"
-"        int vi=0;\n"
-"        int vie=min(4, OW-pos.x);\n"
-"        int OWH = OW*OH;\n"
-"        int outBi;\n"
-"        for (;vi<vie;++vi)\n"
-"        {\n"
-"          outBi = (pos.x+vi) + OW*pos.y + 4*pos.z*OWH;\n"
-"          vec4 v = v[vi];\n"
-"          uOutputBuffer.data[outBi+0] = v.x;\n"
-"          uOutputBuffer.data[outBi+1*OWH] = v.y;\n"
-"          uOutputBuffer.data[outBi+2*OWH] = v.z;\n"
-"          uOutputBuffer.data[outBi+3*OWH] = v.w;\n"
-"        }\n"
-"    }\n"
-"}\n"
-;
-const char* conv_buf_IKnchw_SKnc4hw_KrO4C4HW_1_glsl = 
 "layout(std430) buffer;\n"
 "layout(binding=0) writeonly buffer outBuffer{\n"
 "  float data[];\n"
@@ -1070,7 +1181,7 @@ const char* conv_buf_IKnhwc_KrO4HWC_glsl =
 "    }\n"
 "}\n"
 ;
-const char* conv_buf_Inhwc_Knchw_glsl = 
+const char* conv_buf_Inhwc_Knchw_KrO4C4HW_glsl = 
 "layout(std430) buffer;\n"
 "layout(binding=0) writeonly buffer outBuffer{\n"
 "  float data[];\n"
@@ -1444,6 +1555,10 @@ fp_agpu_conv_t aConvToFun(AConv aconv){
       return &::agpu::convDW_buf_IKnhwc;
     case AConv::convDW_buf_Inhwc_Knchw:
       return &::agpu::convDW_buf_Inhwc_Knchw;
+    case AConv::conv_buf_IKnchw_KrO4C4HW:
+      return &::agpu::conv_buf_IKnchw_KrO4C4HW;
+    case AConv::conv_buf_IKnchw_KrO4HWC:
+      return &::agpu::conv_buf_IKnchw_KrO4HWC;
     case AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW:
       return &::agpu::conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW;
     case AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4HWC:
@@ -1452,16 +1567,14 @@ fp_agpu_conv_t aConvToFun(AConv aconv){
       return &::agpu::conv_buf_IKnchw_SIKnc4hw_SOnchw;
     case AConv::conv_buf_IKnchw_SKnc4hw_KrO4C4HW:
       return &::agpu::conv_buf_IKnchw_SKnc4hw_KrO4C4HW;
-    case AConv::conv_buf_IKnchw_SKnc4hw_KrO4C4HW_1:
-      return &::agpu::conv_buf_IKnchw_SKnc4hw_KrO4C4HW_1;
     case AConv::conv_buf_IKnhwc:
       return &::agpu::conv_buf_IKnhwc;
     case AConv::conv_buf_IKnhwc_KrO4C4HW:
       return &::agpu::conv_buf_IKnhwc_KrO4C4HW;
     case AConv::conv_buf_IKnhwc_KrO4HWC:
       return &::agpu::conv_buf_IKnhwc_KrO4HWC;
-    case AConv::conv_buf_Inhwc_Knchw:
-      return &::agpu::conv_buf_Inhwc_Knchw;
+    case AConv::conv_buf_Inhwc_Knchw_KrO4C4HW:
+      return &::agpu::conv_buf_Inhwc_Knchw_KrO4C4HW;
     case AConv::conv_tex_IKnc4hw:
       return &::agpu::conv_tex_IKnc4hw;
   }
@@ -1477,24 +1590,26 @@ AConv aConvByCode(int64_t code){
     case 20:
       return AConv::convDW_buf_Inhwc_Knchw;
     case 30:
-      return AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW;
+      return AConv::conv_buf_IKnchw_KrO4C4HW;
     case 40:
-      return AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4HWC;
+      return AConv::conv_buf_IKnchw_KrO4HWC;
     case 50:
-      return AConv::conv_buf_IKnchw_SIKnc4hw_SOnchw;
+      return AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW;
     case 60:
-      return AConv::conv_buf_IKnchw_SKnc4hw_KrO4C4HW;
+      return AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4HWC;
     case 70:
-      return AConv::conv_buf_IKnchw_SKnc4hw_KrO4C4HW_1;
+      return AConv::conv_buf_IKnchw_SIKnc4hw_SOnchw;
     case 80:
-      return AConv::conv_buf_IKnhwc;
+      return AConv::conv_buf_IKnchw_SKnc4hw_KrO4C4HW;
     case 90:
-      return AConv::conv_buf_IKnhwc_KrO4C4HW;
+      return AConv::conv_buf_IKnhwc;
     case 100:
-      return AConv::conv_buf_IKnhwc_KrO4HWC;
+      return AConv::conv_buf_IKnhwc_KrO4C4HW;
     case 110:
-      return AConv::conv_buf_Inhwc_Knchw;
+      return AConv::conv_buf_IKnhwc_KrO4HWC;
     case 120:
+      return AConv::conv_buf_Inhwc_Knchw_KrO4C4HW;
+    case 130:
       return AConv::conv_tex_IKnc4hw;
   }
   assert(false);

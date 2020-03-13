@@ -656,8 +656,10 @@ class PyTorchAndroidJni : public facebook::jni::JavaClass<PyTorchAndroidJni> {
 
   static void agpu_gbench(
       facebook::jni::alias_ref<jclass>,
-      facebook::jni::alias_ref<jstring> args) {
-    pytorch_jni_agpu::gbench_main(args->toStdString());
+      facebook::jni::alias_ref<jstring> args,
+      facebook::jni::alias_ref<jstring> labelPrefix) {
+    pytorch_jni_agpu::gbench_main(
+        args->toStdString(), labelPrefix->toStdString());
   }
 
   static auto moduleFromAsset(

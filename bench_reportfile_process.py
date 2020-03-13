@@ -12,9 +12,12 @@ from matplotlib import gridspec
 PATH_AGPU_GLSL_H = "android/agpu/src/agpu_glsl.h"
 
 ### Json Parsing
+MEAN_NAME_AGPU = "_mean_afterPreBurn"
+STD_NAME_AGPU = "_std_afterPreBurn"
+
 AGG_NAMES_DICT = {
-  "_mean_afterPreBurn": "mean",
-  "_std_afterPreBurn": "std",
+  MEAN_NAME_AGPU: "mean",
+  STD_NAME_AGPU: "std",
 }
 
 # "name": "BM_conv_agpu/base/ACX:30/N:1/H:112/W:112/KH:3/KW:3/py:2/px:1/S:1/D:1/G:96/GCin:1/GCout:1/iterations:1/repeats:30/manual_time__p90",
@@ -22,28 +25,39 @@ AGG_NAMES_DICT = {
 BENCH_NAME_RE = re.compile(r'.*ACX:(\d+)/(.*repeats:\d+)')
 
 ### Figures
-FIG_W = 16
-FIG_H = 11
-GAP_RATIO = 0.05
-TIME_UNIT_MULTIPLIER = 1e6
-TIME_UNIT_LABEL = "us"
-CONV_BAR_COLOR = "#F67280"
-KR_BAR_COLOR = "#375C7D"
-DEF_BAR_COLOR = "#F8B195"
+FIG_W = 22
+FIG_H = 13
+GAP_g_RATIO = 0.05
+
+TIME_UNIT_MULTIPLIER = 1e9
+TIME_UNIT_LABEL = "ns"
+
+MEAN_FORMAT = "{:.1f}"
+STD_FORMAT= "{:.1f}"
+
+# Conv colors:
+GROUP_BAR_COLOR = "#f4eeff"
+CONV_BAR_COLOR = "#ECB390"
+
+# KR colors: https://colorhunt.co/palette/174976
+KR_BAR_COLOR = "#dcd6f7"
+
+DEF_BAR_COLOR = "#ECDFC8"
 
 class PAConv:
     COUNTERS_TO_SHOW_DICT = {
-      "conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW": ["S_Conv", "C_Kr_CHW_O4C4HW"],
-      "conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW": ["S_Conv", "C_Kr_CHW_O4C4HW"],
-      "conv_buf_IKnchw_SIKOnc4hw_KrO4HWC": ["S_Conv", "C_Kr_CHW_O4C4HW"],
-      "conv_buf_IKnchw_SIKnc4hw_SOnchw": ["S_Conv", "C_Kr_CHW_O4C4HW"],
-      "conv_buf_IKnchw_SKnc4hw_KrO4C4HW": ["S_Conv", "C_Kr_CHW_O4C4HW"],
-      "conv_buf_IKnchw_SKnc4hw_KrO4C4HW_1": ["S_Conv", "C_Kr_CHW_O4C4HW"],
-      "conv_buf_IKnhwc": ["S_Conv", "C_Kr_CHW_O4C4HW"],
-      "conv_buf_IKnhwc_KrO4C4HW": ["S_Conv", "C_Kr_CHW_O4C4HW"],
-      "conv_buf_IKnhwc_KrO4HWC": ["S_Conv", "C_Kr_CHW_O4C4HW"],
-      "conv_buf_Inhwc_Knchw": ["S_Conv", "C_Kr_CHW_O4C4HW"],
-      "conv_tex_IKnc4hw": ["S_Conv", "C_Kr_CHW_O4C4HW"],
+      "conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW": ["C_Kr_CHW_O4C4HW", "S_hCHW_dC4HW", "S_Conv", "S_dC4HW_hCHW"],
+      "conv_buf_IKnchw_SIKOnc4hw_KrO4HWC": ["C_Kr_HWC_O4HWC", "S_hCHW_dC4HW", "S_Conv", "S_dC4HW_hCHW"],
+      "conv_buf_IKnchw_SIKnc4hw_SOnchw": ["C_Kr_CHW_O4C4HW", "S_hCHW_dC4HW", "S_Conv"],
+      "conv_buf_IKnchw_SKnc4hw_KrO4C4HW": ["C_Kr_CHW_O4C4HW", "S_Conv"],
+      "conv_buf_IKnchw_SKnc4hw_KrO4C4HW_1": ["C_Kr_CHW_O4C4HW", "S_Conv"],
+      "conv_buf_IKnhwc": ["S_Conv"],
+      "conv_buf_IKnhwc_KrO4C4HW": ["C_Kr_HWC_O4C4HW", "S_Conv"],
+      "conv_buf_IKnhwc_KrO4HWC": ["C_Kr_HWC_O4HWC", "S_Conv"],
+      "conv_buf_Inhwc_Knchw_KrO4C4HW": ["C_Kr_CHW_O4C4HW", "S_Conv"],
+      "conv_tex_IKnc4hw": ["C_Kr_CHW_O4C4HW", "S_hCHW_dTex", "S_Conv", "S_dTex_hCHW"],
+      "conv_buf_IKnchw_KrO4C4HW" : ["C_Kr_CHW_O4C4HW", "S_Conv"],
+      "conv_buf_IKnchw_KrO4HWC": ["C_Kr_HWC_O4HWC", "S_Conv"],
     }
 
     def getCountersToShow(aconvName):
@@ -87,8 +101,9 @@ class PAConv:
 
 
 class PBenchmark:
-    def __init__(self, name):
+    def __init__(self, name, label):
       self.name = name
+      self.label = label
       self.aconvsAggs = {}
 
     def addAconvAgg(self, aconvName, agg, aconv):
@@ -97,7 +112,7 @@ class PBenchmark:
       self.aconvsAggs[aconvName][agg] = aconv
 
     def __repr__(self):
-      return "\n\nPBenchmark(\n  name:{}\n  aconvAggs:{})\n".format(self.name, self.aconvs)
+      return "\n\nPBenchmark(\n  name:{}\n label:{}\n aconvAggs:{})\n".format(self.name, self.label, self.aconvs)
 
 def showBench(bench, pdf):
     meanColumn = f"mean({TIME_UNIT_LABEL})"
@@ -108,7 +123,7 @@ def showBench(bench, pdf):
     for aconvName in bench.aconvsAggs.keys():
       aconvAggs = bench.aconvsAggs[aconvName]
       aconvMean = aconvAggs['mean']
-      aconvStd = aconvAggs['std']
+      aconvStd = aconvAggs['std'] if 'std' in aconvAggs else None
       ci = 0
       for cname, cvalue in aconvMean.getCountersToShowDict().items():
         row = {}
@@ -116,7 +131,7 @@ def showBench(bench, pdf):
         row['counter'] = cname
 
         meanv = TIME_UNIT_MULTIPLIER * cvalue
-        stdv = TIME_UNIT_MULTIPLIER * aconvStd.getCounter(cname)
+        stdv = TIME_UNIT_MULTIPLIER * aconvStd.getCounter(cname) if aconvStd is not None else 0
 
         row[meanColumn] = ("{:7.3f}".format(meanv))
         row[stdColumn] = ("{:7.3f}".format(stdv))
@@ -126,8 +141,9 @@ def showBench(bench, pdf):
 
     ### Table
     fig = plt.figure(figsize=(FIG_W, FIG_H))
-    fig.suptitle(bench.name, fontweight='bold', fontsize=12)
-    gs = gridspec.GridSpec(2, 1, height_ratios=[1, 3])
+    supTitle = "{} {}".format(bench.name, bench.label)
+    fig.suptitle(supTitle, fontweight='bold', fontsize=12, y=0.999)
+    gs = gridspec.GridSpec(2, 1, height_ratios=[1, 2.5])
 
     axTable = plt.subplot(gs[0])
     axChart = plt.subplot(gs[1])
@@ -138,86 +154,115 @@ def showBench(bench, pdf):
     ### Chart
 
     barX = []
+    groupX = []
     barMeanValues = []
     barStdValues = []
     groupLabels = []
     barLabels = []
     barColors = []
 
-    nAconvs = len(bench.aconvsAggs)
+    nBars = 0
+    nG = []
 
-    maxCounters = -1
+    maxH = 0
     for aconvName, aggsDict in bench.aconvsAggs.items():
       for aconv in aggsDict.values():
-        countersToShowLen = len(aconv.getCountersToShow())
-        if (countersToShowLen > maxCounters):
-          maxCounters = countersToShowLen
+        nG.append(nBars)
+        nBars += len(aconv.getCountersToShow())
+        for cv in aconv.getCountersToShowDict().values():
+          if maxH < cv*TIME_UNIT_MULTIPLIER: maxH = cv*TIME_UNIT_MULTIPLIER
 
     nGroups = len(bench.aconvsAggs)
-    nW = nGroups * (maxCounters + 1)
-    barWidth = FIG_W / (nW + (nW - 1) * GAP_RATIO)
-    gapWidth = barWidth * GAP_RATIO
-    X = np.arange(nW) * (barWidth + gapWidth)
+    ngw = nBars - nGroups
+
+    barWidth = FIG_W / (nBars + ngw * GAP_g_RATIO)
+
+    gw = barWidth * GAP_g_RATIO
 
     gi = 0
+    bi = 0
+    x = 0
+    gxStart = []
     for aconvName, aconvAggs in bench.aconvsAggs.items():
       aconvMean = aconvAggs['mean']
-      aconvStd = aconvAggs['std']
+      aconvStd = aconvAggs['std'] if 'std' in aconvAggs else None
 
       groupLabels.append(aconvName)
-      bi = 0
+      gx = (x + barWidth) if gi > 0 else 0
+      gxStart.append(gx)
+      barX.append(gx)
 
+      barMeanValues.append(maxH)
+      barStdValues.append(-1)
+      barLabels.append(aconvName)
+      barColors.append(GROUP_BAR_COLOR)
+
+      gii = 0
       for cName, cMeanValue in aconvMean.getCountersToShowDict().items():
-        xidx = maxCounters * gi + bi
-        barX.append(X[xidx])
-
+        x = (gi + 1) * barWidth + bi * barWidth + (bi - gi) * gw
+        stdv = TIME_UNIT_MULTIPLIER * aconvStd.getCounter(cName) if aconvStd is not None else -1
+        barLabel = f"{cName}"
+        barX.append(x)
         barMeanValues.append(TIME_UNIT_MULTIPLIER * cMeanValue)
-        barStdValues.append(TIME_UNIT_MULTIPLIER * aconvStd.getCounter(cName))
-
-        barLabels.append(f"{aconvName}\n{cName}")
+        barStdValues.append(stdv)
+        barLabels.append(barLabel)
         barColors.append(getColorByCounterName(cName))
+
+        gii = gii + 1
         bi = bi + 1
+
+      groupX.append((x + barWidth + gx) / 2)
       gi = gi + 1
 
     rects = plt.bar(barX, barMeanValues, width=barWidth, color=barColors)
     i = 0
     stdBarWidth = barWidth
+
     for rect in rects:
       x = rect.get_x()
       w = rect.get_width()
       h = rect.get_height()
       std = barStdValues[i]
+      barLabel = barLabels[i]
       stdK = 2
+      barLabelH = maxH * 0.25
 
-      axChart.annotate('{:.3f}\nstd {:.3f}'.format(h, std),
-                       xy=(x + w / 2, h),
-                       xytext=(0, 3),
-                       textcoords="offset points",
-                       ha='center', va='bottom')
+      if (std != -1):
+          axChart.annotate((MEAN_FORMAT+'\nstd'+STD_FORMAT).format(h, std),
+                           xy=(x + w / 2, h),
+                           xytext=(0, 3),
+                           textcoords="offset points",
+                           ha='center', va='bottom')
+      else:
+          barLabelH = 0.6 * maxH
 
-      pr = patches.Rectangle(
-        (x + (w - stdBarWidth) / 2, h - stdK * std),
-        stdBarWidth, 2 * stdK * std,
-        linewidth=4,
-        edgecolor='r',
-        facecolor='none')
-      axChart.add_patch(pr)
+      if (std != -1):
+        axChart.annotate(barLabel, xy=(x + w / 4, barLabelH), rotation=90)
+      else:
+        axChart.annotate(barLabel, xy=(x + w / 4, barLabelH), rotation=90, fontweight="bold", fontsize=12)
 
+      if std != -1:
+          pr = patches.Rectangle(
+            (x + (w - stdBarWidth) / 2, h - stdK * std),
+            stdBarWidth, 2 * stdK * std,
+            linewidth=1,
+            edgecolor='r',
+            facecolor='none')
+          axChart.add_patch(pr)
       i = i + 1
 
-    plt.xticks(rotation=15)
-    plt.xticks(barX, barLabels)
+    plt.xticks(rotation=5)
+    #plt.xticks(barX, barLabels)
+    plt.xticks(groupX, groupLabels)
 
     for tick in axChart.xaxis.get_major_ticks():
       tick.label.set_fontsize(8)
 
     axChart.grid()
     axChart.set_ylabel(TIME_UNIT_LABEL, fontweight='bold')
-    fig.tight_layout(pad=0.05)
-    #plt.show()
+    fig.tight_layout(pad=0.01)
     pdf.savefig(fig)
-
-
+    plt.close()
 
 def getColorByCounterName(counterName):
   if (counterName == 'S_Conv'):
@@ -237,7 +282,8 @@ def benchName_from_runName(runName):
 
 
 def processJsonBench(jsonBench, acxToAConvNameDict, outPBenchmarks):
-  aggNameRaw = jsonBench["aggregate_name"]
+  aggNameRaw = jsonBench["aggregate_name"] if "aggregate_name" in jsonBench else MEAN_NAME_AGPU
+
   if aggNameRaw not in AGG_NAMES_DICT:
     return
 
@@ -248,11 +294,13 @@ def processJsonBench(jsonBench, acxToAConvNameDict, outPBenchmarks):
   aconvName = acxToAConvNameDict[acx]
   benchName = benchName_from_runName(jsonRunName)
 
+  label = jsonBench["label"]
+
   pBenchmark = None
   if (benchName in outPBenchmarks):
     pBenchmark = outPBenchmarks[benchName]
   else:
-    pBenchmark = PBenchmark(benchName)
+    pBenchmark = PBenchmark(benchName, label)
     outPBenchmarks[benchName] = pBenchmark
 
   aconv = PAConv(aconvName, aggName, jsonBench)

@@ -6,15 +6,16 @@ extern const char* binary_add_glsl;
 extern const char* convDW_buf_IKnchw_glsl;
 extern const char* convDW_buf_IKnhwc_glsl;
 extern const char* convDW_buf_Inhwc_Knchw_glsl;
+extern const char* conv_buf_IKnchw_KrO4C4HW_glsl;
+extern const char* conv_buf_IKnchw_KrO4HWC_glsl;
 extern const char* conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW_glsl;
 extern const char* conv_buf_IKnchw_SIKOnc4hw_KrO4HWC_glsl;
 extern const char* conv_buf_IKnchw_SIKnc4hw_SOnchw_glsl;
 extern const char* conv_buf_IKnchw_SKnc4hw_KrO4C4HW_glsl;
-extern const char* conv_buf_IKnchw_SKnc4hw_KrO4C4HW_1_glsl;
 extern const char* conv_buf_IKnhwc_glsl;
 extern const char* conv_buf_IKnhwc_KrO4C4HW_glsl;
 extern const char* conv_buf_IKnhwc_KrO4HWC_glsl;
-extern const char* conv_buf_Inhwc_Knchw_glsl;
+extern const char* conv_buf_Inhwc_Knchw_KrO4C4HW_glsl;
 extern const char* conv_tex_IKnc4hw_glsl;
 extern const char* nc4hw4_buf_to_tex_glsl;
 extern const char* nc4hw_buf_to_nchw_buf_glsl;
@@ -30,16 +31,17 @@ enum class AConv : int32_t {
   convDW_buf_IKnchw = 0,
   convDW_buf_IKnhwc = 10,
   convDW_buf_Inhwc_Knchw = 20,
-  conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW = 30,
-  conv_buf_IKnchw_SIKOnc4hw_KrO4HWC = 40,
-  conv_buf_IKnchw_SIKnc4hw_SOnchw = 50,
-  conv_buf_IKnchw_SKnc4hw_KrO4C4HW = 60,
-  conv_buf_IKnchw_SKnc4hw_KrO4C4HW_1 = 70,
-  conv_buf_IKnhwc = 80,
-  conv_buf_IKnhwc_KrO4C4HW = 90,
-  conv_buf_IKnhwc_KrO4HWC = 100,
-  conv_buf_Inhwc_Knchw = 110,
-  conv_tex_IKnc4hw = 120,
+  conv_buf_IKnchw_KrO4C4HW = 30,
+  conv_buf_IKnchw_KrO4HWC = 40,
+  conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW = 50,
+  conv_buf_IKnchw_SIKOnc4hw_KrO4HWC = 60,
+  conv_buf_IKnchw_SIKnc4hw_SOnchw = 70,
+  conv_buf_IKnchw_SKnc4hw_KrO4C4HW = 80,
+  conv_buf_IKnhwc = 90,
+  conv_buf_IKnhwc_KrO4C4HW = 100,
+  conv_buf_IKnhwc_KrO4HWC = 110,
+  conv_buf_Inhwc_Knchw_KrO4C4HW = 120,
+  conv_tex_IKnc4hw = 130,
 };
 
 using fp_agpu_conv_t = decltype(&::agpu::conv_);

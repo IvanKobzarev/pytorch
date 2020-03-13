@@ -34,9 +34,20 @@ android {
         buildConfigField("String", "AGPU_GBENCH_REPORT_FILE", 'null')
         addManifestPlaceholders([APP_NAME: "@string/app_name", MAIN_ACTIVITY: "org.pytorch.testapp.MainActivity"])
     }
+    signingConfigs {
+        debug {
+            storeFile file("debug.keystore")
+            storePassword 'password'
+            keyAlias 'alias'
+            keyPassword 'password'
+        }
+    }
     buildTypes {
         debug {
             minifyEnabled false
+            debuggable true
+            jniDebuggable true
+            signingConfig signingConfigs.debug
         }
     }
     flavorDimensions "model", "build", "activity"

@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">PyTest</string>
+    <string name="profile_name">Sample Device Owner</string>
 </resources>

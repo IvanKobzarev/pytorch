@@ -20,6 +20,11 @@
 
 namespace agpu {
 
+std::string gGLInfo;
+std::string getGLInfo() {
+  return gGLInfo;
+}
+
 bool isVerbose() {
   return AGPU_VERBOSE;
 }
@@ -243,6 +248,18 @@ class AGLContext {
       APRINTVIP(
           "GLContext: GL_SHADING_LANGUAGE_VERSION:%s",
           (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION));
+
+      std::string vendor{(const char*)glGetString(GL_VENDOR)};
+      std::string renderer{(const char*)glGetString(GL_RENDERER)};
+      APRINTVIP("GLContext: GL_VENDOR:%s", vendor.c_str());
+      APRINTVIP("GLContext: GL_RENDERER:%s", renderer.c_str());
+
+      std::string s;
+      s.append(vendor);
+      s.append(" ");
+      s.append(renderer);
+      gGLInfo = s;
+      APRINTVIP("GLContext gGLInfo: %s", gGLInfo.c_str());
 
       int maxShaderStorageBlockSize;
       glGetIntegerv(
@@ -708,8 +725,25 @@ double computeStdTime(
   auto tp = atime_now();
   compute(dim0, dim1, dim2);
   glFinish();
-  return atime_duration_to_now(tp);
+  auto ret = atime_duration_to_now(tp);
+
+  APRINTVIP(
+      "B{%ld}compute %16s(%3d,%3d,%3d)xCG(%3d,%3d,%3d) cpuTime:%.6fs",
+      gBenchId,
+      log,
+      dim0,
+      dim1,
+      dim2,
+      compGroupSize0,
+      compGroupSize1,
+      compGroupSize2,
+      ret);
+
+  return ret;
 }
+
+template <typename T>
+void logPfngl(T pfngl) {}
 
 double computeGLTime(
     GLuint dim0,
@@ -719,20 +753,102 @@ double computeGLTime(
     int compGroupSize0,
     int compGroupSize1,
     int compGroupSize2) {
+  static auto _glGenQueriesEXT =
+      (PFNGLGENQUERIESEXTPROC)eglGetProcAddress("glGenQueriesEXT");
+  static auto _glDeleteQueriesEXT =
+      (PFNGLDELETEQUERIESEXTPROC)eglGetProcAddress("glDeleteQueriesEXT");
+  static auto _glIsQueryEXT =
+      (PFNGLISQUERYEXTPROC)eglGetProcAddress("glIsQueryEXT");
+  static auto _glBeginQueryEXT =
+      (PFNGLBEGINQUERYEXTPROC)eglGetProcAddress("glBeginQueryEXT");
+  static auto _glEndQueryEXT =
+      (PFNGLENDQUERYEXTPROC)eglGetProcAddress("glEndQueryEXT");
+  static auto _glQueryCounterEXT =
+      (PFNGLQUERYCOUNTEREXTPROC)eglGetProcAddress("glQueryCounterEXT");
+  static auto _glGetQueryivEXT =
+      (PFNGLGETQUERYIVEXTPROC)eglGetProcAddress("glGetQueryivEXT");
+  static auto _glGetQueryObjectivEXT =
+      (PFNGLGETQUERYOBJECTIVEXTPROC)eglGetProcAddress("glGetQueryObjectivEXT");
+  static auto _glGetQueryObjectuivEXT =
+      (PFNGLGETQUERYOBJECTUIVEXTPROC)eglGetProcAddress(
+          "glGetQueryObjectuivEXT");
+  static auto _glGetQueryObjecti64vEXT =
+      (PFNGLGETQUERYOBJECTI64VEXTPROC)eglGetProcAddress(
+          "glGetQueryObjecti64vEXT");
+  static auto _glGetQueryObjectui64vEXT =
+      (PFNGLGETQUERYOBJECTUI64VEXTPROC)eglGetProcAddress(
+          "glGetQueryObjectui64vEXT");
+
+  glFlush();
+  glFinish();
+
   GLint gpu_ts0 = 0;
   GLint gpu_ts1 = 0;
-  double gpu_time_ts = 0;
+
+  double gpu_time_ts = -1;
+  double gpu_time_q = -1;
+
+  GLuint q[2];
+  GLint disjointOccurred = 0;
+
+  _glGenQueriesEXT(2, q);
+  AGL_CHECK_ERROR;
+
+  static int N = 0;
+  static int disjointN = 0;
+  glGetIntegerv(GL_GPU_DISJOINT_EXT, &disjointOccurred);
+  AGL_CHECK_ERROR;
 
   glGetIntegerv(GL_TIMESTAMP_EXT, &gpu_ts0);
+  AGL_CHECK_ERROR;
+
+  _glQueryCounterEXT(q[0], GL_TIMESTAMP_EXT);
+  AGL_CHECK_ERROR;
 
   compute(dim0, dim1, dim2);
 
-  glGetIntegerv(GL_TIMESTAMP_EXT, &gpu_ts1);
+  _glQueryCounterEXT(q[1], GL_TIMESTAMP_EXT);
+  AGL_CHECK_ERROR;
 
+  glGetIntegerv(GL_TIMESTAMP_EXT, &gpu_ts1);
+  AGL_CHECK_ERROR;
+
+  GLuint done = GL_FALSE;
+  while (done == GL_FALSE) {
+    glGetQueryObjectuiv(q[1], GL_QUERY_RESULT_AVAILABLE_EXT, &done);
+  }
+  AGL_CHECK_ERROR;
+
+  glGetIntegerv(GL_GPU_DISJOINT_EXT, &disjointOccurred);
+
+  N++;
+  if (disjointOccurred) {
+    disjointN++;
+  }
+  APRINTVIP(
+      "GL_GPU_DISJOINT=%d ratio:%.3f(%5d/%5d)",
+      disjointOccurred,
+      ((float)disjointN / N),
+      disjointN,
+      N);
+
+  GLuint64 timeQStart;
+  GLuint64 timeQStop;
+
+  _glGetQueryObjectui64vEXT(q[0], GL_QUERY_RESULT, &timeQStart);
+  _glGetQueryObjectui64vEXT(q[1], GL_QUERY_RESULT, &timeQStop);
+  AGL_CHECK_ERROR;
+
+  GLuint64 timeQ = timeQStop - timeQStart;
+
+  gpu_time_q = timeQ;
   gpu_time_ts = gpu_ts1 - gpu_ts0;
 
+  _glDeleteQueriesEXT(2, q);
+  AGL_CHECK_ERROR;
+
   APRINTVIP(
-      "B{%ld}compute %16s(%3d,%3d,%3d)xCG(%3d,%3d,%3d) %.3fus",
+      "B{%ld}compute %16s(%3d,%3d,%3d)xCG(%3d,%3d,%3d) glTimeTs:%9.0f glTimeQ:%9.0f",
       gBenchId,
       log,
       dim0,
@@ -741,61 +857,20 @@ double computeGLTime(
       compGroupSize0,
       compGroupSize1,
       compGroupSize2,
-      (gpu_time_ts / 1e3));
+      gpu_time_ts,
+      gpu_time_q);
 
-  return gpu_time_ts / 1e9;
+  return disjointOccurred ? -1.f : (gpu_time_q / 1e9);
 }
-
-// double computeGLTime2(int dim0, int dim1, int dim2, const char* log) {
-//  //GLuint q;
-//  //glGenQueries(1, &q);
-//  //AGL_CHECK_ERROR;
-//  //glBeginQuery(GL_TIME_ELAPSED_EXT, q);
-//  GLint gpu_ts0 = 0;
-//  GLint gpu_ts1 = 0;
-//  auto tp = atime_now();
-//  glGetIntegerv(GL_TIMESTAMP_EXT, &gpu_ts0);
-//
-//
-//  compute(dim0, dim1, dim2);
-//  //glFinish();
-//
-//
-//  glGetIntegerv(GL_TIMESTAMP_EXT, &gpu_ts1);
-//
-//  double cpu_time = atime_duration_to_now(tp);
-//  //glEndQuery(GL_TIME_ELAPSED_EXT);
-//  //AGL_CHECK_ERROR;
-//
-//  //GLuint done = GL_FALSE;
-//  //while (done == GL_FALSE) {
-//  //  glGetQueryObjectuiv(q, GL_QUERY_RESULT_AVAILABLE_EXT, &done);
-//  //}
-//  AGL_CHECK_ERROR;
-//
-//  GLuint elapsed_time = 0;
-//  //glGetQueryObjectuiv(q, GL_QUERY_RESULT_EXT, &elapsed_time);
-//  //AGL_CHECK_ERROR;
-//  //glDeleteQueries(1, &q);
-//  //AGL_CHECK_ERROR;
-//
-//  double gpu_time = elapsed_time;
-//  double gpu_time_ts = gpu_ts1 - gpu_ts0;
-//
-//  std::cout
-//      << "compute " << log
-//      << "(" << dim0 << "," << dim1 << "," << dim2 << ")"
-//      << " cpu_t:" << (1e6 * cpu_time) << "us"
-//      //<< " gpu_t:" << (gpu_time) << "ns "
-//      << " gpu_t_ts:" << (gpu_time_ts/1e3) << "us"
-//      << std::endl;
-//
-//  return gpu_time;
-//}
 
 typedef double (
     *fp_gComputeWithTime)(GLuint, GLuint, GLuint, const char*, int, int, int);
+
+#ifdef AGPU_USE_GL_TIME
 static fp_gComputeWithTime gComputeWithTime = &computeGLTime;
+#else
+static fp_gComputeWithTime gComputeWithTime = &computeStdTime;
+#endif
 
 std::string getPrecision() {
   static const char* precisionStr[AGLPrecision::count] = {
@@ -835,7 +910,6 @@ std::shared_ptr<AGLShader> getShader(
     const char* content,
     const std::vector<std::string>& prefix = {}) {
   initAGLContextOnce();
-  APRINTVIP("getShader %s", key.c_str());
 
   std::ostringstream newKey;
   for (auto s : prefix) {
@@ -916,8 +990,6 @@ double deviceTex2hostCHW(
     int d1,
     int d2,
     bool outputC4HW) {
-  APRINT("deviceTex2hostCHW(%d %d %d align %d)", d0, d1, d2, outputC4HW);
-  wait();
   auto d2_4 = UP_DIV(d2, 4);
   auto size = d2_4 * 4 * d0 * d1 * sizeof(float);
   auto buffer = std::make_unique<AGLSSBuffer>(size);
@@ -959,8 +1031,6 @@ auto hostCHW_to_deviceC4HWBuffer(
     const int h,
     const int w,
     AResult& ares) {
-  APRINT("hostCHW_to_deviceC4HWBuffer(c %d h %d w %d)", c, h, w);
-
   const int c_4 = UP_DIV(c, 4);
   buffer_size_t size = ROUND_UP(c, 4) * w * h * sizeof(float);
   auto src = AGLSSBuffer::from(inputData, size, c * h * w * sizeof(float));
@@ -1448,6 +1518,7 @@ AResult conv_buf_IKnchw_SIKOnc4hw_KrO4HWC(
   }
   return ares;
 }
+
 AResult conv_buf_IKnchw_SIKnc4hw_SOnchw(
     const float* input,
     uint32_t N,
@@ -1535,6 +1606,182 @@ AResult conv_buf_IKnchw_SIKnc4hw_SOnchw(
   return ares;
 }
 
+AResult conv_buf_IKnchw_KrO4C4HW(
+    const float* input,
+    uint32_t N,
+    uint32_t C,
+    uint32_t H,
+    uint32_t W,
+    const float* weights,
+    uint32_t OC,
+    uint32_t KH,
+    uint32_t KW,
+    const float* bias,
+    uint32_t SY,
+    uint32_t SX,
+    uint32_t PY,
+    uint32_t PX,
+    uint32_t DY,
+    uint32_t DX,
+    uint32_t groups,
+    float* output,
+    int64_t mod) {
+  setBenchId(mod);
+  setPrecision(highp);
+  initAGLContextOnce();
+  AResult ares;
+  static const bool debugPrintTensors = DEBUG_PRINT_TENSOR;
+  if (debugPrintTensors) {
+    agpu_print_NCHW(input, N, C, H, W, weights, OC, KH, KW, bias);
+  }
+
+  const int OC_4 = UP_DIV(OC, 4);
+  const int OCau4 = ALIGN_UP4(OC);
+  const int C_4 = UP_DIV(C, 4);
+  const int KWE = (KW - 1) * DX + 1;
+  const int KHE = (KH - 1) * DY + 1;
+  const uint32_t OW = ((W - KWE + 2 * PX) / SX) + 1;
+  const uint32_t OH = ((H - KHE + 2 * PY) / SY) + 1;
+
+  auto biasBuf =
+      AGLSSBuffer::from(bias, sizeof(float) * OCau4, sizeof(float) * OC);
+
+  auto kernelBuf =
+      kernelNCHW_OCHW_repack_O4C4HWi4o4(weights, OC, C, KH, KW, ares);
+
+  auto inputBuf = AGLSSBuffer::from(input, sizeof(float) * C * H * W);
+
+  auto outBuffer =
+      std::make_unique<AGLSSBuffer>(sizeof(float) * OCau4 * OH * OW);
+
+  static auto shaderKey = "conv_buf_IKnchw_KrO4C4HW_glsl";
+  {
+    int workGroupSize[3];
+    std::vector<std::string> header;
+    addCompGroupSizeDefines(header, workGroupSize, 1, 1, OC_4);
+    auto shader = getShader(shaderKey, conv_buf_IKnchw_KrO4C4HW_glsl, header);
+
+    shader->useProgram();
+    AGL_CHECK_ERROR;
+
+    outBuffer->bindInProgram(0);
+    inputBuf->bindInProgram(1);
+    kernelBuf->bindInProgram(2);
+    biasBuf->bindInProgram(3);
+
+    glUniform2i(4, PX, PY);
+    glUniform2i(5, KW, KH);
+    glUniform2i(6, SX, SY);
+    glUniform2i(7, DX, DY);
+    glUniform4i(8, OW, OH, OC_4, OC);
+    glUniform4i(9, W, H, C_4, C);
+    AGL_CHECK_ERROR;
+
+    ares.gpu_shader_conv_time = gComputeWithTime(
+        UP_DIV(OW, 4 * workGroupSize[0]),
+        UP_DIV(OH, workGroupSize[1]),
+        UP_DIV(OC_4, workGroupSize[2]),
+        shaderKey,
+        workGroupSize[0],
+        workGroupSize[1],
+        workGroupSize[2]);
+    AGL_CHECK_ERROR;
+  }
+
+  outBuffer->copyToHost(output, sizeof(float) * OC * OH * OW);
+  if (debugPrintTensors) {
+    agpu_print4d(shaderKey, output, N, OC, OH, OW);
+  }
+  return ares;
+}
+
+AResult conv_buf_IKnchw_KrO4HWC(
+    const float* input,
+    uint32_t N,
+    uint32_t C,
+    uint32_t H,
+    uint32_t W,
+    const float* weights,
+    uint32_t OC,
+    uint32_t KH,
+    uint32_t KW,
+    const float* bias,
+    uint32_t SY,
+    uint32_t SX,
+    uint32_t PY,
+    uint32_t PX,
+    uint32_t DY,
+    uint32_t DX,
+    uint32_t groups,
+    float* output,
+    int64_t mod) {
+  setBenchId(mod);
+  setPrecision(highp);
+  initAGLContextOnce();
+  AResult ares;
+  static const bool debugPrintTensors = DEBUG_PRINT_TENSOR;
+  if (debugPrintTensors) {
+    agpu_print_NCHW(input, N, C, H, W, weights, OC, KH, KW, bias);
+  }
+
+  const int OC_4 = UP_DIV(OC, 4);
+  const int OCau4 = ALIGN_UP4(OC);
+  const int C_4 = UP_DIV(C, 4);
+  const int KWE = (KW - 1) * DX + 1;
+  const int KHE = (KH - 1) * DY + 1;
+  const uint32_t OW = ((W - KWE + 2 * PX) / SX) + 1;
+  const uint32_t OH = ((H - KHE + 2 * PY) / SY) + 1;
+
+  auto biasBuf =
+      AGLSSBuffer::from(bias, sizeof(float) * OCau4, sizeof(float) * OC);
+
+  auto kernelBuf = kernelNCHW_OCHW_repack_O4HWC(weights, OC, C, KH, KW, ares);
+
+  auto inputBuf = AGLSSBuffer::from(input, sizeof(float) * C * H * W);
+
+  auto outBuffer =
+      std::make_unique<AGLSSBuffer>(sizeof(float) * OCau4 * OH * OW);
+
+  static auto shaderKey = "conv_buf_IKnchw_KrO4HWC_glsl";
+  {
+    int workGroupSize[3];
+    std::vector<std::string> header;
+    addCompGroupSizeDefines(header, workGroupSize, 1, 1, OC_4);
+    auto shader = getShader(shaderKey, conv_buf_IKnchw_KrO4C4HW_glsl, header);
+
+    shader->useProgram();
+    AGL_CHECK_ERROR;
+
+    outBuffer->bindInProgram(0);
+    inputBuf->bindInProgram(1);
+    kernelBuf->bindInProgram(2);
+    biasBuf->bindInProgram(3);
+
+    glUniform2i(4, PX, PY);
+    glUniform2i(5, KW, KH);
+    glUniform2i(6, SX, SY);
+    glUniform2i(7, DX, DY);
+    glUniform4i(8, OW, OH, OC_4, OC);
+    glUniform4i(9, W, H, C_4, C);
+    AGL_CHECK_ERROR;
+
+    ares.gpu_shader_conv_time = gComputeWithTime(
+        UP_DIV(OW, 4 * workGroupSize[0]),
+        UP_DIV(OH, workGroupSize[1]),
+        UP_DIV(OC_4, workGroupSize[2]),
+        shaderKey,
+        workGroupSize[0],
+        workGroupSize[1],
+        workGroupSize[2]);
+    AGL_CHECK_ERROR;
+  }
+
+  outBuffer->copyToHost(output, sizeof(float) * OC * OH * OW);
+  if (debugPrintTensors) {
+    agpu_print4d(shaderKey, output, N, OC, OH, OW);
+  }
+  return ares;
+}
 AResult conv_kernel_repack_(
     const float* input,
     uint32_t N,
@@ -1624,12 +1871,10 @@ AResult conv_buf_IKnchw_SKnc4hw_KrO4C4HW(
 
   static const char* modeShaderKey[3] = {
       "conv_buf_IKnchw_SKnc4hw_KrO4C4HW_glsl",
-      "conv_buf_IKnchw_SKnc4hw_KrO4C4HW_1_glsl",
   };
   auto shaderKey = modeShaderKey[mod];
   static const char* modeShaderCode[3] = {
       agpu::conv_buf_IKnchw_SKnc4hw_KrO4C4HW_glsl,
-      agpu::conv_buf_IKnchw_SKnc4hw_KrO4C4HW_1_glsl,
   };
 
   const int outBufferSize = sizeof(float) * ALIGN_UP4(OC) * OH * OW;
@@ -1674,7 +1919,7 @@ AResult conv_buf_IKnchw_SKnc4hw_KrO4C4HW(
   return ares;
 }
 
-AResult conv_buf_Inhwc_Knchw(
+AResult conv_buf_Inhwc_Knchw_KrO4C4HW(
     const float* input,
     uint32_t N,
     uint32_t C,
@@ -1718,11 +1963,11 @@ AResult conv_buf_Inhwc_Knchw(
   auto inputBuf = AGLSSBuffer::from(input, sizeof(float) * H * W * C);
 
   const char* modeShaderKey[1] = {
-      "conv_buf_Inhwc_Knchw_glsl",
+      "conv_buf_Inhwc_Knchw_KrO4C4HW_glsl",
   };
   auto shaderKey = modeShaderKey[0];
   const char* modeShaderCode[1] = {
-      conv_buf_Inhwc_Knchw_glsl,
+      conv_buf_Inhwc_Knchw_KrO4C4HW_glsl,
   };
   const int outBufferSize = sizeof(float) * OH * OW * OC;
 
