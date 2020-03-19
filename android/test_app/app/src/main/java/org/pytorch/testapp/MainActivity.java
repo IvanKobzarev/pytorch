@@ -2,13 +2,16 @@ package org.pytorch.testapp;
 
 import android.app.admin.DevicePolicyManager;
 import android.content.Context;
+import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.HardwarePropertiesManager;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
+import android.view.View;
 import android.widget.TextView;
 import androidx.annotation.Nullable;
 import androidx.annotation.UiThread;
@@ -19,11 +22,7 @@ import org.pytorch.Module;
 import org.pytorch.PyTorchAndroid;
 import org.pytorch.Tensor;
 
-import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.Writer;
 import java.nio.FloatBuffer;
 import java.util.Arrays;
 
@@ -33,12 +32,14 @@ public class MainActivity extends AppCompatActivity {
   private static final int TEXT_TRIM_SIZE = 4096;
 
   private TextView mTextView;
+  private View mStartInteractiveButton;
 
   protected HandlerThread mBackgroundThread;
   protected Handler mBackgroundHandler;
 
   protected HandlerThread mLogThread;
   protected Handler mLogHandler;
+  protected Handler mUiHandler = new Handler(Looper.getMainLooper());
 
   private Module mModule;
   private FloatBuffer mInputTensorBuffer;
@@ -86,7 +87,6 @@ public class MainActivity extends AppCompatActivity {
   private final Runnable mModuleForwardRunnable = new Runnable() {
     @Override
     public void run() {
-
       final String brand = android.os.Build.BRAND;
       final String model = android.os.Build.MODEL;
       final int sdkInt = Build.VERSION.SDK_INT;
@@ -102,9 +102,7 @@ public class MainActivity extends AppCompatActivity {
           .append(abis);
       String osBuildInfo = osbSb.toString();
 
-
       Log.i(TAG, "III android.os.Build:" + osBuildInfo);
-
 
       Log.i(TAG, "BuildConfig.AGPU_TEST0:" + BuildConfig.AGPU_TEST0);
       Log.i(TAG, "BuildConfig.AGPU_GTEST:" + BuildConfig.AGPU_GTEST);
@@ -120,27 +118,46 @@ public class MainActivity extends AppCompatActivity {
       } else if (BuildConfig.AGPU_GTEST != null) {
         PyTorchAndroid.nativeAgpuGTest(BuildConfig.AGPU_GTEST);
       } else if (BuildConfig.AGPU_GBENCH != null) {
-        final String reportFileName = BuildConfig.AGPU_GBENCH_REPORT_FILE;
-        Log.i(TAG, "III AGPU_GBENCH reportFileName:" + reportFileName);
-        final File file = new File(getExternalFilesDir(null), reportFileName);
-        final String absPath = file.getAbsolutePath();
-        Log.i(TAG, "III AGPU_GBENCH reportFile absPath:" + absPath);
 
-        StringBuilder sb = new StringBuilder();
-        sb.append(BuildConfig.AGPU_GBENCH);
-        sb.append("--benchmark_out=");
-        sb.append(absPath);
-        sb.append(" --benchmark_out_format=json");
 
-        final String args = sb.toString();
+        int i = 0;
+        Log.i(TAG, "BuildConfig.AGPU_GBENCH_INF:" + BuildConfig.AGPU_GBENCH_INF);
+        int iLimit = BuildConfig.AGPU_GBENCH_INF
+            ? Integer.MAX_VALUE
+            : 1;
+        while (i < iLimit) {
+          String reportFileName = BuildConfig.AGPU_GBENCH_REPORT_FILE;
+          if (i > 0) {
+            reportFileName += Integer.toString(i);
+          }
+          Log.i(TAG, "III AGPU_GBENCH reportFileName:" + reportFileName);
+          final File file = new File(getExternalFilesDir(null), reportFileName);
+          final String absPath = file.getAbsolutePath();
+          Log.i(TAG, "III AGPU_GBENCH reportFile absPath:" + absPath);
 
-        Log.i(TAG, "III AGPU_GBENCH args:" + args);
+          StringBuilder sb = new StringBuilder();
+          sb
+              .append(BuildConfig.AGPU_GBENCH)
+              .append("--benchmark_out=")
+              .append(absPath)
+              .append(" --benchmark_out_format=json");
+          final String args = sb.toString();
 
-        PyTorchAndroid.nativeAgpuGBench(args, osBuildInfo);
+          Log.i(TAG, "III AGPU_GBENCH args:" + args);
 
-        for (int i = 0; i < 10000; i++) {
-          Log.i(TAG, "III AGPU_GBENCH COMPLETED");
+          PyTorchAndroid.nativeAgpuGBench(args, osBuildInfo);
+
+          for (int _i = 0; _i < 10000; _i++) {
+            Log.i(TAG, "III AGPU_GBENCH COMPLETED " + i + " " + reportFileName);
+          }
+          i++;
         }
+        mUiHandler.post(new Runnable() {
+          @Override
+          public void run() {
+            mTextView.setBackgroundColor(Color.RED);
+          }
+        });
       } else {
         final Result result = doModuleForward();
         runOnUiThread(new Runnable() {
@@ -155,14 +172,81 @@ public class MainActivity extends AppCompatActivity {
       }
     }
   };
+  private View mStartPreburnButton;
+  private boolean mPreburnStarted = false;
+
+  private void gbench_run(String absFilePath, String info) {
+
+    Log.i(TAG, "III AGPU_GBENCH reportFile absPath:" + absFilePath);
+    StringBuilder sb = new StringBuilder();
+    sb.append(BuildConfig.AGPU_GBENCH);
+
+    if (absFilePath != null) {
+        sb.append("--benchmark_out=")
+          .append(absFilePath)
+          .append(" --benchmark_out_format=json");
+    }
+    final String args = sb.toString();
+    Log.i(TAG, "III AGPU_GBENCH args:" + args);
+
+    PyTorchAndroid.nativeAgpuGBench(args, info);
+  }
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
     setContentView(R.layout.activity_main);
     mTextView = findViewById(R.id.text);
+    mStartInteractiveButton = findViewById(R.id.start_interactive);
+    mStartPreburnButton = findViewById(R.id.start_preburn);
     startBackgroundThread();
-    mBackgroundHandler.post(mModuleForwardRunnable);
+
+    Log.i(TAG, "BuildConfig.AGPU_GBENCH_INTERACTIVE:" + BuildConfig.AGPU_GBENCH_INTERACTIVE);
+
+    if (BuildConfig.AGPU_GBENCH_INTERACTIVE) {
+      mStartPreburnButton.setVisibility(View.VISIBLE);
+      mStartInteractiveButton.setVisibility(View.VISIBLE);
+      mStartPreburnButton.setOnClickListener(new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+          if (mPreburnStarted) {
+            return;
+          }
+          mPreburnStarted = true;
+
+          mBackgroundHandler.post(new Runnable() {
+            @Override
+            public void run() {
+              String reportFileName = BuildConfig.AGPU_GBENCH_REPORT_FILE+"-preburn";
+              final File file = new File(getExternalFilesDir(null), reportFileName);
+              final String absPath = file.getAbsolutePath();
+              gbench_run(absPath, "");
+              for (int _i = 0; _i < 10000; _i++) {
+                Log.i(TAG, "III AGPU_GBENCH PREBURN COMPLETED " + reportFileName);
+              }
+              mUiHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                  mStartPreburnButton.setBackgroundColor(Color.GREEN);
+                }
+              });
+            }
+          });
+
+          mStartPreburnButton.setBackgroundColor(Color.GRAY);
+          mStartPreburnButton.setEnabled(false);
+        }
+      });
+      mStartInteractiveButton.setOnClickListener(new View.OnClickListener() {
+        @Override
+        public void onClick(View v) {
+          mStartInteractiveButton.setVisibility(View.INVISIBLE);
+          mBackgroundHandler.post(mModuleForwardRunnable);
+        }
+      });
+    } else {
+      mBackgroundHandler.post(mModuleForwardRunnable);
+    }
     mLogHandler.post(mLogRunnable);
   }
 

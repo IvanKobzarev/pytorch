@@ -1,9 +1,9 @@
 #pragma once
 
 #define AGPU_VERBOSE false
-#define AGPU_VERBOSE_VIP true
+#define AGPU_VERBOSE_VIP false
 // TODO:? why does not work GL time #define AGPU_USE_GL_TIME
-#define AGPU_USE_GL_TIME
+//#define AGPU_USE_GL_TIME
 
 #include <stdint.h>
 #include <stdio.h>

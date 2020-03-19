@@ -32,6 +32,8 @@ android {
         buildConfigField("String", "AGPU_GBENCH", 'null')
         buildConfigField("String", "AGPU_GBENCH_M", 'null')
         buildConfigField("String", "AGPU_GBENCH_REPORT_FILE", 'null')
+        buildConfigField("boolean", "AGPU_GBENCH_INTERACTIVE", 'false')
+        buildConfigField("boolean", "AGPU_GBENCH_INF", 'false')
         addManifestPlaceholders([APP_NAME: "@string/app_name", MAIN_ACTIVITY: "org.pytorch.testapp.MainActivity"])
     }
     signingConfigs {
@@ -60,6 +62,8 @@ android {
             buildConfigField("String", "MODULE_ASSET_NAME", "\"mn2-fp32.pt\"")
             addManifestPlaceholders([APP_NAME: "BENCH"])
             buildConfigField("String", "LOGCAT_TAG", "\"pytorch-bench\"")
+            buildConfigField("boolean", "AGPU_GBENCH_INTERACTIVE", "Boolean.parseBoolean(\"" + project.properties['IS'] + "\")")
+            buildConfigField("boolean", "AGPU_GBENCH_INF", "Boolean.parseBoolean(\"" + project.properties['INF'] + "\")" )
         }
         benchM {
             dimension "model"

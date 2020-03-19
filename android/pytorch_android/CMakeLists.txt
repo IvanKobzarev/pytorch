@@ -2,8 +2,10 @@ cmake_minimum_required(VERSION 3.4.1)
 project(pytorch_jni CXX)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_VERBOSE_MAKEFILE ON)
-
+set(CMAKE_C_COMPILE_OBJECT "${target_compiler} -c <FLAGS> -o <OBJECT>")
 set(TRACE_ENABLED OFF)
+set(CMAKE_CXX_FLAGS "-fno-inline -fno-omit-frame-pointer")
+
 if(DEFINED ENV{TRACE_ENABLED})
   if($ENV{TRACE_ENABLED} STREQUAL "1")
     message(STATUS "TRACE_ENABLED ON")

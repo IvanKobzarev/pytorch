@@ -11,6 +11,7 @@
 
 #include "agpu.h"
 #include "agpu_glsl.h"
+#include "streamline_annotate.h"
 
 #define UP_DIV(x, y) (((x) + (y) - (1)) / (y))
 #define ROUND_UP(x, y) (((x) + (y) - (1)) / (y) * (y))
@@ -722,6 +723,12 @@ double computeStdTime(
     int compGroupSize0,
     int compGroupSize1,
     int compGroupSize2) {
+  glFlush();
+  glFinish();
+
+  ANNOTATE(log);
+  ANNOTATE_COLOR(ANNOTATE_PURPLE, log);
+
   auto tp = atime_now();
   compute(dim0, dim1, dim2);
   glFinish();
@@ -739,6 +746,10 @@ double computeStdTime(
       compGroupSize2,
       ret);
 
+  auto s = std::string{log} + std::to_string(ret);
+  ANNOTATE_MARKER_COLOR_STR(ANNOTATE_YELLOW, s.c_str());
+
+  ANNOTATE_END();
   return ret;
 }
 
@@ -753,6 +764,10 @@ double computeGLTime(
     int compGroupSize0,
     int compGroupSize1,
     int compGroupSize2) {
+
+  ANNOTATE(log);
+  ANNOTATE_COLOR(ANNOTATE_PURPLE, log);
+
   static auto _glGenQueriesEXT =
       (PFNGLGENQUERIESEXTPROC)eglGetProcAddress("glGenQueriesEXT");
   static auto _glDeleteQueriesEXT =
@@ -859,7 +874,9 @@ double computeGLTime(
       compGroupSize2,
       gpu_time_ts,
       gpu_time_q);
-
+  auto s = std::string{log} + std::to_string(gpu_time_q);
+  ANNOTATE_MARKER_COLOR_STR(ANNOTATE_YELLOW, s.c_str());
+  ANNOTATE_END();
   return disjointOccurred ? -1.f : (gpu_time_q / 1e9);
 }
 

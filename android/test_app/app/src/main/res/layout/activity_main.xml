@@ -14,4 +14,26 @@
         android:background="@android:color/black"
         android:textColor="@android:color/white" />
 
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:orientation="vertical">
+        <Button
+            android:id="@+id/start_preburn"
+            android:layout_width="match_parent"
+            android:layout_height="72dp"
+            android:textSize="14sp"
+            android:visibility="gone"
+            android:text="Start Preburn" />
+        <Button
+            android:id="@+id/start_interactive"
+            android:layout_width="match_parent"
+            android:layout_height="72dp"
+            android:layout_gravity="top"
+            android:textSize="14sp"
+            android:visibility="gone"
+            android:text="Start (Interactive)" />
+    </LinearLayout>
+
 </FrameLayout>

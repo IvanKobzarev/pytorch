@@ -23,6 +23,9 @@
 #define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, "XXX", __VA_ARGS__)
 #endif
 
+#include <android/trace.h>
+#include <dlfcn.h>
+
 namespace pytorch_jni_agpu {
 
 template <typename T>
@@ -513,25 +516,25 @@ static void BM_convAgpuArgs(
              gcin,
              gcout});
   };
-
+  // AConvList
   // nchw c4
   f(agpu::AConv::conv_tex_IKnc4hw);
 
-  //  f(agpu::AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW);
-  //
-  //  f(agpu::AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4HWC);
-  //  f(agpu::AConv::conv_buf_IKnchw_SIKnc4hw_SOnchw);
-  //  f(agpu::AConv::conv_buf_IKnchw_SKnc4hw_KrO4C4HW);
-  //
-  //  // nchw
-  //  f(agpu::AConv::conv_buf_IKnchw_KrO4C4HW);
-  //  f(agpu::AConv::conv_buf_IKnchw_KrO4HWC),
-  //
-  //  // nhwc
-  //  f(agpu::AConv::conv_buf_IKnhwc_KrO4C4HW);
-  //  f(agpu::AConv::conv_buf_IKnhwc_KrO4HWC);
-  //  f(agpu::AConv::conv_buf_Inhwc_Knchw_KrO4C4HW);
-  //  f(agpu::AConv::conv_buf_IKnhwc);
+  f(agpu::AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4C4HW);
+
+  f(agpu::AConv::conv_buf_IKnchw_SIKOnc4hw_KrO4HWC);
+  f(agpu::AConv::conv_buf_IKnchw_SIKnc4hw_SOnchw);
+  f(agpu::AConv::conv_buf_IKnchw_SKnc4hw_KrO4C4HW);
+
+  // nchw
+  f(agpu::AConv::conv_buf_IKnchw_KrO4C4HW);
+  f(agpu::AConv::conv_buf_IKnchw_KrO4HWC),
+
+  // nhwc
+  f(agpu::AConv::conv_buf_IKnhwc_KrO4C4HW);
+  f(agpu::AConv::conv_buf_IKnhwc_KrO4HWC);
+  f(agpu::AConv::conv_buf_Inhwc_Knchw_KrO4C4HW);
+  f(agpu::AConv::conv_buf_IKnhwc);
 }
 
 static void BM_conv_args_base(benchmark::internal::Benchmark* b) {
@@ -717,10 +720,10 @@ static void BM_conv_agpu_args_mobilenetv2_base(
   /*             N   H    W   KH  KW  py  px  S  D    G  GCin  GCout */
   BM_convAgpuArgs(b, 1, 224, 224, 3, 3, 2, 1, 1, 1, 1, 3, 32);
   BM_convAgpuArgs(b, 1, 112, 112, 3, 3, 2, 1, 1, 1, 96, 1, 1);
-  // BM_convAgpuArgs(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
-  // BM_convAgpuArgs(b, 1, 28, 28, 3, 3, 1, 1, 2, 1, 192, 1, 1);
-  // BM_convAgpuArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 96);
-  // BM_convAgpuArgs(b, 1, 7, 7, 3, 3, 1, 1, 1, 1, 960, 1, 1);
+  BM_convAgpuArgs(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
+  BM_convAgpuArgs(b, 1, 28, 28, 3, 3, 1, 1, 2, 1, 192, 1, 1);
+  BM_convAgpuArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 96);
+  BM_convAgpuArgs(b, 1, 7, 7, 3, 3, 1, 1, 1, 1, 960, 1, 1);
 }
 
 static void BM_conv_agpu_args_base_once(benchmark::internal::Benchmark* b) {
@@ -739,11 +742,11 @@ static void BM_conv_agpu_args_base_once(benchmark::internal::Benchmark* b) {
                "GCout"});
   /*             N   H    W   KH  KW  py  px  S  D    G  GCin  GCout */
   BM_convAgpuArgs(b, 1, 224, 224, 3, 3, 2, 1, 1, 1, 1, 3, 32);
-  // BM_convAgpuArgs(b, 1, 112, 112, 3, 3, 2, 1, 1, 1, 96, 1, 1);
-  // BM_convAgpuArgs(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
-  // BM_convAgpuArgs(b, 1, 28, 28, 3, 3, 1, 1, 2, 1, 192, 1, 1);
-  // BM_convAgpuArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 96);
-  // BM_convAgpuArgs(b, 1, 7, 7, 3, 3, 1, 1, 1, 1, 960, 1, 1);
+  BM_convAgpuArgs(b, 1, 112, 112, 3, 3, 2, 1, 1, 1, 96, 1, 1);
+  BM_convAgpuArgs(b, 1, 56, 56, 1, 1, 0, 0, 1, 1, 1, 144, 24);
+  BM_convAgpuArgs(b, 1, 28, 28, 3, 3, 1, 1, 2, 1, 192, 1, 1);
+  BM_convAgpuArgs(b, 1, 14, 14, 1, 1, 0, 0, 1, 1, 1, 384, 96);
+  BM_convAgpuArgs(b, 1, 7, 7, 3, 3, 1, 1, 1, 1, 960, 1, 1);
 }
 
 uint64_t getCurrentCpuFrequency() {
@@ -807,6 +810,56 @@ uint32_t wipeCache() {
   pthread_once(&wipe_buffer_guard, &initWipeBuffer);
   return prefetchToL1(wipe_buffer, wipe_buffer_size);
 }
+
+class Trace {
+ public:
+  typedef void* (*fp_ATrace_beginSection)(const char* sectionName);
+  typedef void* (*fp_ATrace_endSection)(void);
+
+  static fp_ATrace_beginSection ATrace_beginSection;
+  static fp_ATrace_endSection ATrace_endSection;
+
+  static void ensureInit() {
+    if (!Trace::is_initialized_) {
+      init();
+      Trace::is_initialized_ = true;
+    }
+  }
+
+  static void beginSection(const char* name) {
+    Trace::ensureInit();
+    ATrace_beginSection(name);
+  }
+
+  static void endSection() {
+    ATrace_endSection();
+  }
+
+  Trace(const char* name) {
+    ensureInit();
+    beginSection(name);
+  }
+
+  ~Trace() {
+    endSection();
+  }
+
+ private:
+  static void init() {
+    void* lib = dlopen("libandroid.so", RTLD_NOW || RTLD_LOCAL);
+    if (lib != NULL) {
+      Trace::ATrace_beginSection = reinterpret_cast<fp_ATrace_beginSection>(
+          dlsym(lib, "ATrace_beginSection"));
+      Trace::ATrace_endSection =
+          reinterpret_cast<fp_ATrace_endSection>(dlsym(lib, "ATrace_endSection"));
+    }
+  }
+  static bool is_initialized_;
+};
+
+bool Trace::is_initialized_ = false;
+Trace::fp_ATrace_beginSection Trace::ATrace_beginSection;
+Trace::fp_ATrace_endSection Trace::ATrace_endSection;
 
 static void BM_conv_agpu(benchmark::State& state, const char* name) {
   const int64_t agpuConvX = state.range(0);
@@ -1392,24 +1445,24 @@ void gbench_main(const std::string& args, const std::string& labelPrefix) {
   // static const int kPreBurn = 5;
   // static const int kRepsAfterPreBurn = 20;
 
-  static const int kPreBurn = 1;
-  static const int kRepsAfterPreBurn = 3;
+  static const int kPreBurn = 5;
+  static const int kRepsAfterPreBurn = 30;
 
   // BENCHMARK_CAPTURE(BM_conv_agpu, base, "a_base")
   //   ->Apply(BM_conv_agpu_args_base)
   BENCHMARK_CAPTURE(BM_conv_agpu, mobilenet_v2, "mobilenet_v2")
-      ->Apply(BM_conv_agpu_args_mobilenetv2_base)
-      //->Apply(BM_conv_agpu_args_mobilenetv2)
+      //->Apply(BM_conv_agpu_args_mobilenetv2_base)
+      ->Apply(BM_conv_agpu_args_mobilenetv2)
       ->Iterations(1)
       ->Repetitions(kPreBurn + kRepsAfterPreBurn)
       ->ComputeStatistics(
-          "_mean_afterPreBurn",
+          "_mean",
           [](const std::vector<double>& v) -> double {
             double sum = std::accumulate(v.begin() + kPreBurn, v.end(), 0.);
             return sum / (v.size() - kPreBurn);
           })
       ->ComputeStatistics(
-          "_std_afterPreBurn",
+          "_std",
           [](const std::vector<double>& v) -> double {
             std::vector<double> _v{v.begin() + kPreBurn, v.end()};
             double sum = std::accumulate(_v.begin(), _v.end(), 0.);
@@ -1426,14 +1479,30 @@ void gbench_main(const std::string& args, const std::string& labelPrefix) {
             return std;
           })
       ->ComputeStatistics(
-          "_p50_afterPreBurn",
+          "_p5",
+          [](const std::vector<double>& v) -> double {
+            std::vector<double> _v{v.begin() + kPreBurn, v.end()};
+            std::sort(_v.begin(), _v.end());
+            int idx = std::round(0.05 * _v.size());
+            return _v[idx];
+          })
+      ->ComputeStatistics(
+          "_p25",
+          [](const std::vector<double>& v) -> double {
+            std::vector<double> _v{v.begin() + kPreBurn, v.end()};
+            std::sort(_v.begin(), _v.end());
+            int idx = std::round(0.25 * _v.size());
+            return _v[idx];
+          })
+      ->ComputeStatistics(
+          "_p50",
           [](const std::vector<double>& v) -> double {
             std::vector<double> _v{v.begin() + kPreBurn, v.end()};
             std::sort(_v.begin(), _v.end());
             return _v[std::round(0.50 * _v.size())];
           })
       ->ComputeStatistics(
-          "_p75_afterPreBurn",
+          "_p75",
           [](const std::vector<double>& v) -> double {
             std::vector<double> _v{v.begin() + kPreBurn, v.end()};
             std::sort(_v.begin(), _v.end());
@@ -1441,13 +1510,14 @@ void gbench_main(const std::string& args, const std::string& labelPrefix) {
             return _v[idx];
           })
       ->ComputeStatistics(
-          "_p90_afterPreBurn",
+          "_p90",
           [](const std::vector<double>& v) -> double {
             std::vector<double> _v{v.begin() + kPreBurn, v.end()};
             std::sort(_v.begin(), _v.end());
             return _v[std::round(0.9 * _v.size())];
           })
       ->ReportAggregatesOnly(true)
+      //->ReportAggregatesOnly(false)
       ->Unit(benchmark::kMicrosecond)
       ->UseManualTime();
 

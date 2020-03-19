@@ -12,12 +12,16 @@ from matplotlib import gridspec
 PATH_AGPU_GLSL_H = "android/agpu/src/agpu_glsl.h"
 
 ### Json Parsing
-MEAN_NAME_AGPU = "_mean_afterPreBurn"
-STD_NAME_AGPU = "_std_afterPreBurn"
+MEAN_NAME_JSON = "_mean"
+STD_NAME_JSON = "_std"
+P5_NAME_JSON = "_p5"
+P25_NAME_JSON = "_p25"
 
-AGG_NAMES_DICT = {
-  MEAN_NAME_AGPU: "mean",
-  STD_NAME_AGPU: "std",
+AGG_NAMES_JSON_TO_REPORT_DICT = {
+  MEAN_NAME_JSON: "mean",
+  STD_NAME_JSON: "std",
+  P25_NAME_JSON: "p25",
+  P5_NAME_JSON: "p5"
 }
 
 # "name": "BM_conv_agpu/base/ACX:30/N:1/H:112/W:112/KH:3/KW:3/py:2/px:1/S:1/D:1/G:96/GCin:1/GCout:1/iterations:1/repeats:30/manual_time__p90",
@@ -29,10 +33,10 @@ FIG_W = 22
 FIG_H = 13
 GAP_g_RATIO = 0.05
 
-TIME_UNIT_MULTIPLIER = 1e9
-TIME_UNIT_LABEL = "ns"
+TIME_UNIT_MULTIPLIER = 1e6
+TIME_UNIT_LABEL = "us"
 
-MEAN_FORMAT = "{:.1f}"
+BARV_FORMAT = "{:.1f}"
 STD_FORMAT= "{:.1f}"
 
 # Conv colors:
@@ -117,11 +121,16 @@ class PBenchmark:
 def showBench(bench, pdf):
     meanColumn = f"mean({TIME_UNIT_LABEL})"
     stdColumn = f"std({TIME_UNIT_LABEL})"
-    columnNames = ['aconv', 'counter', meanColumn, stdColumn]
+    p5Column = f"p5({TIME_UNIT_LABEL})"
+    p25Column = f"p25({TIME_UNIT_LABEL})"
+
+    columnNames = ['aconv', 'counter', p5Column, p25Column, meanColumn, stdColumn]
     df = pd.DataFrame(columns=columnNames, dtype=np.float64)
 
     for aconvName in bench.aconvsAggs.keys():
       aconvAggs = bench.aconvsAggs[aconvName]
+      aconvP5 = aconvAggs['p5']
+      aconvP25 = aconvAggs['p25']
       aconvMean = aconvAggs['mean']
       aconvStd = aconvAggs['std'] if 'std' in aconvAggs else None
       ci = 0
@@ -132,12 +141,15 @@ def showBench(bench, pdf):
 
         meanv = TIME_UNIT_MULTIPLIER * cvalue
         stdv = TIME_UNIT_MULTIPLIER * aconvStd.getCounter(cname) if aconvStd is not None else 0
+        p5v = TIME_UNIT_MULTIPLIER * aconvP5.getCounter(cname)
+        p25v = TIME_UNIT_MULTIPLIER * aconvP25.getCounter(cname)
 
+        row[p5Column] = ("{:7.3f}".format(p5v))
+        row[p25Column] = ("{:7.3f}".format(p25v))
         row[meanColumn] = ("{:7.3f}".format(meanv))
         row[stdColumn] = ("{:7.3f}".format(stdv))
         df.loc[len(df)] = row
         ci = ci + 1
-
 
     ### Table
     fig = plt.figure(figsize=(FIG_W, FIG_H))
@@ -155,6 +167,9 @@ def showBench(bench, pdf):
 
     barX = []
     groupX = []
+    barP5Values = []
+    barP25Values = []
+    barValues = []
     barMeanValues = []
     barStdValues = []
     groupLabels = []
@@ -184,6 +199,8 @@ def showBench(bench, pdf):
     x = 0
     gxStart = []
     for aconvName, aconvAggs in bench.aconvsAggs.items():
+      aconvP5 = aconvAggs['p5']
+      aconvP25 = aconvAggs['p25']
       aconvMean = aconvAggs['mean']
       aconvStd = aconvAggs['std'] if 'std' in aconvAggs else None
 
@@ -192,19 +209,34 @@ def showBench(bench, pdf):
       gxStart.append(gx)
       barX.append(gx)
 
-      barMeanValues.append(maxH)
+      # Title bar for AConv
+      barValues.append(maxH)
+      barP5Values.append(-1)
+      barP25Values.append(-1)
       barStdValues.append(-1)
+      barMeanValues.append(-1)
       barLabels.append(aconvName)
       barColors.append(GROUP_BAR_COLOR)
 
+      
       gii = 0
       for cName, cMeanValue in aconvMean.getCountersToShowDict().items():
         x = (gi + 1) * barWidth + bi * barWidth + (bi - gi) * gw
-        stdv = TIME_UNIT_MULTIPLIER * aconvStd.getCounter(cName) if aconvStd is not None else -1
+
+        meanv = TIME_UNIT_MULTIPLIER * aconvMean.getCounter(cName)
+        p5v = TIME_UNIT_MULTIPLIER * aconvP5.getCounter(cName)
+        p25v = TIME_UNIT_MULTIPLIER * aconvP25.getCounter(cName)
+        stdv = (TIME_UNIT_MULTIPLIER * aconvStd.getCounter(cName)) if aconvStd is not None else -1
+
         barLabel = f"{cName}"
         barX.append(x)
-        barMeanValues.append(TIME_UNIT_MULTIPLIER * cMeanValue)
+
+        barMeanValues.append(meanv)
+        barP5Values.append(p5v)
+        barP25Values.append(p25v)
+        barValues.append(p25v)
         barStdValues.append(stdv)
+
         barLabels.append(barLabel)
         barColors.append(getColorByCounterName(cName))
 
@@ -214,7 +246,7 @@ def showBench(bench, pdf):
       groupX.append((x + barWidth + gx) / 2)
       gi = gi + 1
 
-    rects = plt.bar(barX, barMeanValues, width=barWidth, color=barColors)
+    rects = plt.bar(barX, barValues, width=barWidth, color=barColors)
     i = 0
     stdBarWidth = barWidth
 
@@ -223,12 +255,14 @@ def showBench(bench, pdf):
       w = rect.get_width()
       h = rect.get_height()
       std = barStdValues[i]
+      mean = barMeanValues[i]
+      p5 = barP5Values[i]
       barLabel = barLabels[i]
       stdK = 2
       barLabelH = maxH * 0.25
 
       if (std != -1):
-          axChart.annotate((MEAN_FORMAT+'\nstd'+STD_FORMAT).format(h, std),
+          axChart.annotate(("p25:" + BARV_FORMAT+'\nstd'+STD_FORMAT).format(h, std),
                            xy=(x + w / 2, h),
                            xytext=(0, 3),
                            textcoords="offset points",
@@ -242,13 +276,41 @@ def showBench(bench, pdf):
         axChart.annotate(barLabel, xy=(x + w / 4, barLabelH), rotation=90, fontweight="bold", fontsize=12)
 
       if std != -1:
-          pr = patches.Rectangle(
+          stdr = patches.Rectangle(
             (x + (w - stdBarWidth) / 2, h - stdK * std),
             stdBarWidth, 2 * stdK * std,
             linewidth=1,
             edgecolor='r',
             facecolor='none')
-          axChart.add_patch(pr)
+          axChart.add_patch(stdr)
+
+      if mean != -1:
+          meanr = patches.Rectangle(
+            (x + (w - stdBarWidth) / 2, mean),
+            stdBarWidth, 0,
+            linewidth=1,
+            edgecolor='b',
+            facecolor='none')
+          axChart.add_patch(meanr)
+          axChart.annotate(("mean:"+BARV_FORMAT).format(mean),
+                           xy=(x + w / 2, mean),
+                           xytext=(0, 45),
+                           textcoords="offset points",
+                           ha='center', va='bottom')
+
+      if p5 != -1:
+        p5r = patches.Rectangle(
+          (x + (w - stdBarWidth) / 2, p5),
+          stdBarWidth, 0,
+          linewidth=1,
+          edgecolor='b',
+          facecolor='none')
+        axChart.add_patch(p5r)
+        axChart.annotate(("p5:"+BARV_FORMAT).format(p5),
+                         xy=(x + w / 2, p5),
+                         xytext=(0, -15),
+                         textcoords="offset points",
+                         ha='center', va='bottom')
       i = i + 1
 
     plt.xticks(rotation=5)
@@ -282,12 +344,12 @@ def benchName_from_runName(runName):
 
 
 def processJsonBench(jsonBench, acxToAConvNameDict, outPBenchmarks):
-  aggNameRaw = jsonBench["aggregate_name"] if "aggregate_name" in jsonBench else MEAN_NAME_AGPU
+  aggNameJson = jsonBench["aggregate_name"] if "aggregate_name" in jsonBench else MEAN_NAME_JSON
 
-  if aggNameRaw not in AGG_NAMES_DICT:
+  if aggNameJson not in AGG_NAMES_JSON_TO_REPORT_DICT:
     return
 
-  aggName = AGG_NAMES_DICT[aggNameRaw]
+  aggName = AGG_NAMES_JSON_TO_REPORT_DICT[aggNameJson]
   jsonRunName = jsonBench["run_name"]
 
   acx = acx_from_runName(jsonRunName)
