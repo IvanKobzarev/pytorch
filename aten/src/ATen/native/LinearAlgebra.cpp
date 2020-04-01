@@ -341,6 +341,9 @@ Tensor matmul(
     c10::optional<Tensor> out_opt,
     const Tensor& tensor1,
     const Tensor& tensor2) {
+  std::cout << "XXX OOOP LinearAlgebra.cpp:" << __LINE__ << " matmul" << std::endl;
+  std::cout << "XXX tensor1:" << tensor1 << std::endl;
+  std::cout << "XXX tensor2:" << tensor2 << std::endl;
   NoNamesGuard guard;
   auto dim_tensor1 = tensor1.dim();
   auto dim_tensor2 = tensor2.dim();

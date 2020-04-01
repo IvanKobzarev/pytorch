@@ -293,6 +293,7 @@ void THTensor_(cumprod)(THTensor *r_, THTensor *t, int dimension)
 
 void THTensor_(baddbmm)(THTensor *result, scalar_t beta, THTensor *t, scalar_t alpha, THTensor *batch1, THTensor *batch2)
 {
+  std::cout << "XXX OOOP THTensorMoreMath.cpp:"<<__LINE__<< " baddmm" << std::endl;
   int64_t batch;
 
   THArgCheck(THTensor_(nDimensionLegacyNoScalars)(batch1) == 3, 1, "expected 3D tensor, got %dD", THTensor_(nDimensionLegacyNoScalars)(batch1));
