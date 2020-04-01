@@ -1081,22 +1081,18 @@ auto hostCHW_to_deviceC4HWBuffer(
   return dst;
 }
 
-void hostCHW2deviceTex(
+void hostCHW_to_deviceTex(
     GLuint texId,
     const float* inputData,
     const int C,
     const int H,
     const int W,
-    const bool inputC4HW,
     AResult& ares) {
   const int C_4 = UP_DIV(C, 4);
   GLsizeiptr size = ROUND_UP(C, 4) * W * H * sizeof(float);
-  auto buffer = AGLSSBuffer::from(
-      inputData, size, inputC4HW ? size : C * H * W * sizeof(float));
+  auto buffer = AGLSSBuffer::from(inputData, size, C * H * W * sizeof(float));
 
-  auto shader = inputC4HW
-      ? getShader("nc4hw4_buf_to_tex_glsl", nc4hw4_buf_to_tex_glsl)
-      : getShader("nchw_buf_to_tex_glsl", nchw_buf_to_tex_glsl);
+  auto shader = getShader("nchw_buf_to_tex_glsl", nchw_buf_to_tex_glsl);
   shader->useProgram();
 
   glBindImageTexture(0, texId, 0, GL_TRUE, 0, GL_WRITE_ONLY, getTexFormat());
@@ -1109,6 +1105,37 @@ void hostCHW2deviceTex(
 
   ares.gpu_shader_hchw_to_dtex_time =
       gComputeWithTime(UP_DIV(W, 8), UP_DIV(H, 8), C_4, "hCHW2dTex", 8, 8, 1);
+  AGL_CHECK_ERROR;
+}
+
+void hostHWC_to_deviceTex(
+    GLuint texId,
+    const float* inputData,
+    const int C,
+    const int H,
+    const int W,
+    AResult& ares) {
+  const int C_4 = UP_DIV(C, 4);
+  GLsizeiptr size = ROUND_UP(C, 4) * W * H * sizeof(float);
+  auto buffer = AGLSSBuffer::from(inputData, size, C * H * W * sizeof(float));
+
+  auto shader = getShader("nhwc_buf_to_tex_glsl", nhwc_buf_to_tex_glsl);
+  shader->useProgram();
+
+  glBindImageTexture(0, texId, 0, GL_TRUE, 0, GL_WRITE_ONLY, getTexFormat());
+  AGL_CHECK_ERROR;
+
+  buffer->bindInProgram(1);
+  glUniform4i(2, W, H, C, C_4);
+  AGL_CHECK_ERROR;
+
+  ares.gpu_shader_hhwc_to_dtex_time =
+      gComputeWithTime(
+        UP_DIV(W, 8),
+        UP_DIV(H, 8),
+        C_4,
+        "hHWC2dTex",
+        8, 8, 1);
   AGL_CHECK_ERROR;
 }
 
@@ -2757,7 +2784,7 @@ AResult conv_tex_IKnc4hw(
 
   auto inputTex = std::make_unique<AGLTexture>(
       W, H, C_4, getTexFormat(), GL_TEXTURE_3D, false);
-  hostCHW2deviceTex(inputTex->id(), input, C, H, W, false /* isC4HW */, ares);
+  hostCHW_to_deviceTex(inputTex->id(), input, C, H, W, ares);
 
   int compGroupSize[3];
   std::vector<std::string> header;
@@ -2828,10 +2855,10 @@ void agpu_add2t(
 
   auto input0Tex = std::make_unique<AGLTexture>(
       w, h, c_4, getTexFormat(), GL_TEXTURE_3D, false);
-  hostCHW2deviceTex(input0Tex->id(), input0, c, h, w, false /* C4 */, ares);
+  hostCHW_to_deviceTex(input0Tex->id(), input0, c, h, w, ares);
   auto input1Tex = std::make_unique<AGLTexture>(
       w, h, c_4, getTexFormat(), GL_TEXTURE_3D, false);
-  hostCHW2deviceTex(input1Tex->id(), input1, c, h, w, false /* C4 */, ares);
+  hostCHW_to_deviceTex(input1Tex->id(), input1, c, h, w, ares);
 
   auto outputTex = std::make_unique<AGLTexture>(
       w, h, c_4, getTexFormat(), GL_TEXTURE_3D, false);
@@ -2878,7 +2905,7 @@ void agpu_threshold(
   auto inputTex = std::make_unique<AGLTexture>(
       w, h, c_4, getTexFormat(), GL_TEXTURE_3D, false);
 
-  hostCHW2deviceTex(inputTex->id(), input, c, h, w, false /* C4 */, ares);
+  hostCHW_to_deviceTex(inputTex->id(), input, c, h, w, ares);
 
   auto outputTex = std::make_unique<AGLTexture>(
       w, h, c_4, getTexFormat(), GL_TEXTURE_3D, false);
@@ -2929,7 +2956,7 @@ void agpu_batch_norm(
 
   auto inputTex = std::make_unique<AGLTexture>(
       w, h, c_4, getTexFormat(), GL_TEXTURE_3D, false);
-  hostCHW2deviceTex(inputTex->id(), input, c, h, w, false /* align */, ares);
+  hostCHW_to_deviceTex(inputTex->id(), input, c, h, w, ares);
 
   auto outputTex = std::make_unique<AGLTexture>(
       w, h, c_4, getTexFormat(), GL_TEXTURE_3D, false);
