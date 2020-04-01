@@ -247,6 +247,21 @@ CONV_DECL(convDW_buf_IKnhwc);
 
 CONV_DECL(conv2d_kernel_repack_);
 
+void agpu_addmm(
+    const float* m1,
+    uint32_t m1dim,
+    uint32_t* m1sizes,
+    const float* m2,
+    uint32_t m2dim,
+    uint32_t* m2sizes,
+    float beta,
+    float alpha,
+    const float* t,
+    uint32_t tdim,
+    uint32_t* tsizes,
+
+    float* output);
+
 void agpu_add2t(
     const float* input0,
     const float* input1,

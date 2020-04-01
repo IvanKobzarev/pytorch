@@ -6,6 +6,8 @@
 #include <ATen/NamedTensorUtils.h>
 #include <ATen/AgpuUtils.h>
 
+#include "agpu.h"
+
 // HEY YOU!
 //
 // Looking for a function which used to be in THTensorMath.cpp, but
@@ -32,7 +34,6 @@ static void THTensor_(addmmImpl)(THTensor *r_, THTensor *t, THTensor *m1, THTens
   auto pf = [](auto x, auto s) {
     auto n = x->numel();
     std::cout << "pf " << s << " n:" << n << " dim:" << x->dim() << " sizes:" << x->sizes() << std::endl;
-    std::cout << "defined():" << x.defined() << std::endl;
     float* d = (float*) x->data();
     for (int _i = 0; _i < n; ++_i) {
       std::cout << _i << ": " << d[_i] << std::endl;
@@ -93,23 +94,19 @@ static void THTensor_(addmmImpl)(THTensor *r_, THTensor *t, THTensor *m1, THTens
   }
 
   if (useAgpu) {
-    auto m1_ = m1->contiguous();
-    auto m2_ = m2->contiguous();
-    auto t_ = t->contiguous();
-
     agpu::agpu_addmm(
-        m1_->data_ptr<float>(),
-        m1_->dim(),
-        m1_->sizes()->data(),
-        m2_->data_ptr<float>(),
-        m2_->dim(),
-        m2_->sizes()->data(),
+        (float*) m1->data<scalar_t>(),
+        m1->dim(),
+        (uint32_t*) m1->sizes().data(),
+        (float*) m2->data<scalar_t>(),
+        m2->dim(),
+        (uint32_t*) m2->sizes().data(),
         beta,
         alpha,
-        t_->dim(),
-        t_->sizes()->data(),
-        t_->data_ptr<float>(),
-        r_->data_ptr<float>());
+        (float*) t->data<scalar_t>(),
+        t->dim(),
+        (uint32_t*) t->sizes().data(),
+        (float*) r_->data<scalar_t>());
         //ATODO: what is going on with transpositions?
   }
 

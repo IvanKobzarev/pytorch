@@ -21,6 +21,7 @@ extern const char* nc4hw4_buf_to_tex_glsl;
 extern const char* nc4hw_buf_to_nchw_buf_glsl;
 extern const char* nchw_buf_to_nc4hw_buf_glsl;
 extern const char* nchw_buf_to_tex_glsl;
+extern const char* nhwc_buf_to_tex_glsl;
 extern const char* normalization_glsl;
 extern const char* tex_to_nc4hw4_buf_glsl;
 extern const char* tex_to_nchw_buf_glsl;

@@ -134,7 +134,7 @@ void agpu_print_NHWC(
 #ifndef __ANDROID__
 // not android
 
-ares agpu_conv2d(
+AResult agpu_conv2d(
     const float* input,
     uint32_t N,
     uint32_t C,
@@ -1129,7 +1129,8 @@ void hostHWC_to_deviceTex(
   glUniform4i(2, W, H, C, C_4);
   AGL_CHECK_ERROR;
 
-  ares.gpu_shader_hhwc_to_dtex_time =
+  //TODO: uncomment
+  //ares.gpu_shader_hhwc_to_dtex_time =
       gComputeWithTime(
         UP_DIV(W, 8),
         UP_DIV(H, 8),
@@ -2837,6 +2838,29 @@ AResult conv_tex_IKnc4hw(
 }
 
 // region not_convolution
+
+void agpu_addmm(
+    const float* m1,
+    uint32_t m1dim,
+    uint32_t* m1sizes,
+
+    const float* m2,
+    uint32_t m2dim,
+    uint32_t* m2sizes,
+
+    float beta,
+    float alpha,
+
+    const float* t,
+    uint32_t tdim,
+    uint32_t* tsizes,
+
+    float* output) {
+
+  
+}
+
+
 void agpu_add2t(
     const float* input0,
     const float* input1,
