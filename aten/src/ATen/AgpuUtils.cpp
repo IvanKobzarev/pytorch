@@ -20,6 +20,10 @@ bool kUseAgpuAdd = false;
 void setUseAgpuAdd(bool o) { kUseAgpuAdd = o; }
 bool getUseAgpuAdd() { return kUseAgpuAdd; }
 
+bool kUseAgpuAddmm = false;
+void setUseAgpuAddmm(bool o) { kUseAgpuAddmm = o; }
+bool getUseAgpuAddmm() { return kUseAgpuAddmm; }
+
 bool kAgpuVerbose = false;
 
 

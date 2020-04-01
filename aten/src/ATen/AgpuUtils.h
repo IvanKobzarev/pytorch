@@ -17,6 +17,8 @@ bool getUseAgpuRelu();
 void setUseAgpuAdd(bool o);
 bool getUseAgpuAdd();
 
+void setUseAgpuAddmm(bool o);
+bool getUseAgpuAddmm();
 
 void setAgpuVerbose(bool agpuVerbose);
 bool isAgpuVerbose();

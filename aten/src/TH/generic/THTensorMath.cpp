@@ -88,7 +88,7 @@ static void THTensor_(addmmImpl)(THTensor *r_, THTensor *t, THTensor *m1, THTens
     return;
   }
 
-  bool useAgpu = at::getUseAgpuConv();
+  bool useAgpu = at::getUseAgpuAddmm();
   if (at::isAgpuVerbose()) {
     std::cout << "XXX THTensorMath.cpp addmmImpl useAgpu:" << useAgpu << std::endl;
   }
