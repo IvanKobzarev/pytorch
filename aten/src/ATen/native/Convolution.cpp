@@ -802,22 +802,22 @@ at::Tensor _convolution_nogroup(
 
           if (at::isAgpuVerbose())std::cout << "weight cdhw:" << kernel_c << " " << kernel_d << " " << kernel_h << " " << kernel_w << std::endl;
           
-          agpu::agpu_conv2d(
-              inputData,
-              input_n,
-              input_c,
-              input_h,
-              input_w,
-              weightData,
-              kernel_c,
-              kernel_h,
-              kernel_w,
-              biasData,
-              stride[0], stride[1],
-              padding[0], padding[1],
-              dilation[0], dilation[1],
-              1 /* groups */,
-              outputData);
+          //agpu::AResult = agpu::agpu_conv2d(
+          //    inputData,
+          //    input_n,
+          //    input_c,
+          //    input_h,
+          //    input_w,
+          //    weightData,
+          //    kernel_c,
+          //    kernel_h,
+          //    kernel_w,
+          //    biasData,
+          //    stride[0], stride[1],
+          //    padding[0], padding[1],
+          //    dilation[0], dilation[1],
+          //    1 /* groups */,
+          //    outputData);
           return output;
         }
         if (params.use_nnpack(input)) {

@@ -28,6 +28,23 @@
 
 static void THTensor_(addmmImpl)(THTensor *r_, THTensor *t, THTensor *m1, THTensor *m2, scalar_t beta, scalar_t alpha)
 {
+  std::cout << "XXX OOOP THTensorMath.cpp:"<<__LINE__<< " addmmImpl "<< __FILE__ << std::endl;
+  auto pf = [](auto x, auto s) {
+    auto n = x->numel();
+    std::cout << "pf " << s << " n:" << n << " dim:" << x->dim() << " sizes:" << x->sizes() << std::endl;
+    std::cout << "defined():" << x.defined() << std::endl;
+    float* d = (float*) x->data();
+    for (int _i = 0; _i < n; ++_i) {
+      std::cout << _i << ": " << d[_i] << std::endl;
+    } 
+  }; 
+  pf(r_, "r_");
+  pf(t, "t");
+  pf(m1, "m1");
+  pf(m2, "m2");
+  std::cout << "beta:" << beta << std::endl;
+  std::cout << "alpha:" << alpha << std::endl;
+
   if (at::isAgpuVerbose()) {
     std::cout << "OOOP THTensor addmm" << std::endl;
   }
@@ -68,6 +85,32 @@ static void THTensor_(addmmImpl)(THTensor *r_, THTensor *t, THTensor *m1, THTens
   if((r_->size(0) == 0) || (r_->size(1) == 0))
   {
     return;
+  }
+
+  bool useAgpu = at::getUseAgpuConv();
+  if (at::isAgpuVerbose()) {
+    std::cout << "XXX THTensorMath.cpp addmmImpl useAgpu:" << useAgpu << std::endl;
+  }
+
+  if (useAgpu) {
+    auto m1_ = m1->contiguous();
+    auto m2_ = m2->contiguous();
+    auto t_ = t->contiguous();
+
+    agpu::agpu_addmm(
+        m1_->data_ptr<float>(),
+        m1_->dim(),
+        m1_->sizes()->data(),
+        m2_->data_ptr<float>(),
+        m2_->dim(),
+        m2_->sizes()->data(),
+        beta,
+        alpha,
+        t_->dim(),
+        t_->sizes()->data(),
+        t_->data_ptr<float>(),
+        r_->data_ptr<float>());
+        //ATODO: what is going on with transpositions?
   }
 
   // n == 1 || ldc >= max(1, m)
@@ -187,6 +230,7 @@ void THTensor_(addmm)(THTensor *r_, THTensor *t, THTensor *m1, THTensor *m2, sca
 
 static void THTensor_(addmvImpl)(THTensor *r_, THTensor *t, THTensor *mat, THTensor *vec, scalar_t beta, scalar_t alpha)
 {
+  std::cout << "XXX OOOP THTensorMath.cpp:"<<__LINE__<< " addmvImpl" << std::endl;
   if( (mat->dim() != 2) || (THTensor_nDimension(vec) != 1) )
     THError("matrix and vector expected, got %dD, %dD",
       mat->dim(), THTensor_nDimension(vec));
@@ -494,6 +538,7 @@ void THTensor_(cremainder)(THTensor *r_, THTensor *t, THTensor *src)
 
 void THTensor_(addbmm)(THTensor *result, THTensor *t, THTensor *batch1, THTensor *batch2, scalar_t beta, scalar_t alpha)
 {
+  std::cout << "XXX OOOP THTensorMath.cpp:"<<__LINE__<< " addbmm" << std::endl;
   int64_t batch;
 
   THArgCheck(THTensor_(nDimensionLegacyNoScalars)(batch1) == 3, 1, "expected 3D tensor");
