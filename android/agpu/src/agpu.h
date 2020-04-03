@@ -1,7 +1,7 @@
 #pragma once
 
-#define AGPU_VERBOSE false
-#define AGPU_VERBOSE_VIP false
+#define AGPU_VERBOSE true
+#define AGPU_VERBOSE_VIP true
 // TODO:? why does not work GL time #define AGPU_USE_GL_TIME
 //#define AGPU_USE_GL_TIME
 

@@ -17,7 +17,7 @@
 #define ROUND_UP(x, y) (((x) + (y) - (1)) / (y) * (y))
 #define ALIGN_UP4(x) ROUND_UP((x), 4)
 
-#define DEBUG_PRINT_TENSOR false
+#define DEBUG_PRINT_TENSOR true
 
 namespace agpu {
 
@@ -484,27 +484,21 @@ class AGLTexture {
       glGenTextures(1, &id_);
       AGL_CHECK_ERROR;
       glBindTexture(target_, id_);
-      AGL_CHECK_ERROR;
       glTexParameteri(target_, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-      AGL_CHECK_ERROR;
       glTexParameteri(target_, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-      AGL_CHECK_ERROR;
       glTexParameteri(target_, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-      AGL_CHECK_ERROR;
       glTexParameteri(target_, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-      AGL_CHECK_ERROR;
       glTexParameteri(target_, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
       AGL_CHECK_ERROR;
-
       int realW = w;
       int realH = h;
       int realD = d;
       if (HWC4) {
-        realD = UP_DIV(d, 4);
         realH = h;
         realW = w;
+        realD = UP_DIV(d, 4);
       }
-      glTexStorage3D(target_, 1, texFormat_, realW, realH, realD);
+      glTexStorage3D(target_, 1 /* level */, texFormat_, realW, realH, realD);
       AGL_CHECK_ERROR;
     } else if (target == GL_TEXTURE_2D) {
       assert(w > 0 && h > 0);
@@ -514,19 +508,12 @@ class AGLTexture {
       glBindTexture(target_, id_);
       AGL_CHECK_ERROR;
       glTexParameteri(target_, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-      AGL_CHECK_ERROR;
       glTexParameteri(target_, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-      AGL_CHECK_ERROR;
       glTexParameteri(target_, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-      AGL_CHECK_ERROR;
       glTexParameteri(target_, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-      AGL_CHECK_ERROR;
       glTexParameteri(target_, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
       AGL_CHECK_ERROR;
-
-      int realW = w;
-      int realH = h;
-      glTexStorage2D(target_, 1, texFormat_, realW, realH);
+      glTexStorage2D(target_, 1 /* level */, texFormat_, w, h);
       AGL_CHECK_ERROR;
     }
   }
@@ -540,7 +527,7 @@ class AGLTexture {
   }
 
   void read(GLuint unit) {
-    glBindImageTexture(unit, id_, 0, GL_TRUE, 0, GL_READ_ONLY, texFormat_);
+    glBindImageTexture(unit, id_, 0 /* level */, GL_TRUE /* layered */, 0 /* layer */, GL_READ_ONLY, texFormat_);
     AGL_CHECK_ERROR;
   }
 
@@ -557,8 +544,13 @@ class AGLTexture {
   }
 
   void bindInProgram(int programTexId, int binding) {
+    std::cout << "bindInProgram(progTexId:" << programTexId
+        << ", binding:" << binding << ")" << std::endl;
+
     glActiveTexture(GL_TEXTURE0 + programTexId);
+    AGL_CHECK_ERROR;
     glUniform1i(binding, programTexId);
+    AGL_CHECK_ERROR;
     glBindTexture(GL_TEXTURE_3D, id());
     AGL_CHECK_ERROR;
   }
@@ -1005,14 +997,11 @@ double deviceTex2hostCHW(
     float* outputData,
     int d0,
     int d1,
-    int d2,
-    bool outputC4HW) {
+    int d2) {
   auto d2_4 = UP_DIV(d2, 4);
   auto size = d2_4 * 4 * d0 * d1 * sizeof(float);
   auto buffer = std::make_unique<AGLSSBuffer>(size);
-  auto program = outputC4HW
-      ? getShader("tex_to_nc4hw4_buf_glsl", tex_to_nc4hw4_buf_glsl)
-      : getShader("tex_to_nchw_buf_glsl", tex_to_nchw_buf_glsl);
+  auto program = getShader("tex_to_nchw_buf_glsl", tex_to_nchw_buf_glsl);
   program->useProgram();
 
   glBindImageTexture(0, texId, 0, GL_TRUE, 0, GL_READ_ONLY, getTexFormat());
@@ -1032,11 +1021,7 @@ double deviceTex2hostCHW(
 
   auto dOutputData = buffer->map(GL_MAP_READ_BIT);
   if (dOutputData) {
-    if (outputC4HW) {
-      ::memcpy(outputData, dOutputData, size);
-    } else {
-      ::memcpy(outputData, dOutputData, d0 * d1 * d2 * sizeof(float));
-    }
+    ::memcpy(outputData, dOutputData, d0 * d1 * d2 * sizeof(float));
   }
   buffer->unmap();
   return shaderTime;
@@ -1090,6 +1075,10 @@ void hostCHW_to_deviceTex(
     AResult& ares) {
   const int C_4 = UP_DIV(C, 4);
   GLsizeiptr size = ROUND_UP(C, 4) * W * H * sizeof(float);
+  std::cout << "AGPU hostCHW_to_deviceTex(C:"<< C
+      << " H:" << H << " W:" << W << ")" << std::endl;
+
+  std::cout << "AGPU size:" << size << std::endl;
   auto buffer = AGLSSBuffer::from(inputData, size, C * H * W * sizeof(float));
 
   auto shader = getShader("nchw_buf_to_tex_glsl", nchw_buf_to_tex_glsl);
@@ -2801,9 +2790,15 @@ AResult conv_tex_IKnc4hw(
 
   // binding convolution {
   glBindImageTexture(
-      0, outputTex->id(), 0, GL_TRUE, 0, GL_WRITE_ONLY, getTexFormat());
+      0 /* unit */,
+      outputTex->id(),
+      0 /* level */,
+      GL_TRUE /* layered */,
+      0 /* layer */,
+      GL_WRITE_ONLY,
+      getTexFormat());
 
-  inputTex->bindInProgram(0, 1);
+  inputTex->bindInProgram(0 /* unit */, 1 /* binding */);
   kernelTex->bindInProgram(1, 2);
   biasBuf->bindInProgram(3);
   glUniform2i(4, PX, PY);
@@ -2828,8 +2823,7 @@ AResult conv_tex_IKnc4hw(
       compGroupSize[2]);
   AGL_CHECK_ERROR;
 
-  ares.gpu_shader_dtex_to_hchw_time =
-      deviceTex2hostCHW(outputTex->id(), output, OW, OH, OC, false /* C4 */);
+  ares.gpu_shader_dtex_to_hchw_time = deviceTex2hostCHW(outputTex->id(), output, OW, OH, OC);
 
   if (debugPrintTensors) {
     agpu_print4d(shaderKey, output, N, OC, OH, OW);
@@ -2840,26 +2834,135 @@ AResult conv_tex_IKnc4hw(
 // region not_convolution
 
 void agpu_addmm(
-    const float* m1,
+    const float* m1Data,
     uint32_t m1dim,
     uint32_t* m1sizes,
 
-    const float* m2,
+    const float* m2Data,
     uint32_t m2dim,
     uint32_t* m2sizes,
 
     float beta,
     float alpha,
 
-    const float* t,
+    const float* tData,
     uint32_t tdim,
     uint32_t* tsizes,
 
     float* output) {
+  initAGLContextOnce();
+  static const bool debugPrintTensors = DEBUG_PRINT_TENSOR;
+  AResult ares;
 
-  
+  int64_t* m1sizes64 = (int64_t*) m1sizes;
+  uint32_t m1s0 = m1sizes64[0];
+  uint32_t m1s1 = m1sizes64[1];
+  int64_t* m2sizes64 = (int64_t*) m2sizes;
+  uint32_t m2s0 = m2sizes64[0];
+  uint32_t m2s1 = m2sizes64[1];
+  int64_t* tsizes64 = (int64_t*) tsizes;
+  uint32_t ts0 = tsizes64[0];
+  uint32_t ts1 = tsizes64[1];
+
+  if (debugPrintTensors) {
+    std::cout << "AGPU agpu_addmm()" << std::endl;
+    std::cout << "AGPU m1s0:" << m1s0 << " m1s1:" << m1s1 << std::endl;
+    agpu_print2d("m1:", m1Data, m1s0, m1s1);
+    std::cout << "AGPU m2s0:" << m2s0 << " m2s1:" << m2s1 << std::endl;
+    agpu_print2d("m2:", m2Data, m2s0, m2s1);
+    std::cout << "AGPU ts0:" << ts0 << " ts1:" << ts1 << std::endl;
+    agpu_print2d("t:", tData, ts0, ts1);
+    std::cout << "AGPU beta:" << beta << " alpha:" << alpha << std::endl;
+  }
+  uint32_t m1H = m1s0;
+  uint32_t m1W = m1s1;
+  uint32_t m1C = 1;
+  uint32_t m1C_4 = UP_DIV(m1C, 4);
+
+  uint32_t m2H = m2s0;
+  uint32_t m2W = m2s1;
+  uint32_t m2C = 1;
+  uint32_t m2C_4 = UP_DIV(m2C, 4);
+
+  uint32_t OH = m1s0;
+  uint32_t OW = m2s1;
+
+  assert(m1W == m2H);
+  assert(m1C == m2C);
+  uint32_t C = m1C;
+  uint32_t C_4 = UP_DIV(C, 4);
+  uint32_t K = m1W;
+
+  uint32_t TH = ts0;
+  uint32_t TW = ts1;
+  uint32_t TC = 1;
+
+
+  auto m1Tex = std::make_unique<AGLTexture>(
+      m1W, m1H, C_4, getTexFormat(), GL_TEXTURE_3D, false);
+  std::cout << "m1Tex hostCHW_to_deviceTex" << std::endl;
+  hostCHW_to_deviceTex(m1Tex->id(), m1Data, m1C, m1H, m1W, ares);
+
+  auto m2Tex = std::make_unique<AGLTexture>(
+      m2W, m2H, C_4, getTexFormat(), GL_TEXTURE_3D, false);
+  std::cout << "m2Tex hostCHW_to_deviceTex" << std::endl;
+  hostCHW_to_deviceTex(m2Tex->id(), m2Data, m2C, m2H, m2W, ares);
+
+  auto tTex = std::make_unique<AGLTexture>(
+      TW, TH, C_4, getTexFormat(), GL_TEXTURE_3D, false);
+  std::cout << "tTex hostCHW_to_deviceTex" << std::endl;
+  hostCHW_to_deviceTex(tTex->id(), tData, TC, TH, TW, ares);
+
+  std::cout << "outTex " << std::endl;
+  auto outTex = std::make_unique<AGLTexture>(
+      OW, OH, C_4, getTexFormat(), GL_TEXTURE_3D, false);
+
+  int compGroupSize[3];
+  std::vector<std::string> header;
+  addCompGroupSizeDefines(header, compGroupSize, 8, 8, 1);
+  auto shaderKey = "addmm_glsl";
+  auto addmmProgram = getShader(shaderKey, addmm_glsl, header);
+
+  addmmProgram->useProgram();
+  // { binding
+  glBindImageTexture(
+      0 /* unit */,
+      outTex->id(),
+      0 /* level */,
+      GL_TRUE /* layered */,
+      0 /* layer */,
+      GL_WRITE_ONLY,
+      getTexFormat());
+
+  // IK? outTex and m1 binding to the same texUnit ?
+  m1Tex->bindInProgram(0, 1 /* binding */);
+  m2Tex->bindInProgram(1, 2 /* binding */);
+  tTex->bindInProgram(2, 3 /* binding */);
+  glUniform1f(4, beta);
+  glUniform1f(5, alpha);
+  glUniform3i(6, OW, OH, C_4);
+  glUniform1i(7, K);
+  AGL_CHECK_ERROR;
+  // } binding
+
+  gComputeWithTime(
+      UP_DIV(OW, compGroupSize[0]),
+      UP_DIV(OH, compGroupSize[1]),
+      UP_DIV(C_4, compGroupSize[2]),
+      "gemm",
+      compGroupSize[0],
+      compGroupSize[1],
+      compGroupSize[2]);
+  AGL_CHECK_ERROR;
+
+  ares.gpu_shader_dtex_to_hchw_time = deviceTex2hostCHW(outTex->id(), output, OW, OH, C);
+
+  std::cout << "----------------------------------------" << std::endl;
+  if (debugPrintTensors) {
+    agpu_print2d(shaderKey, output, OH, OW);
+  }
+  std::cout << "----------------------------------------" << std::endl;
 }
-
 
 void agpu_add2t(
     const float* input0,
@@ -2906,7 +3009,7 @@ void agpu_add2t(
       UP_DIV(w, compGroupSize[0]),
       UP_DIV(h, compGroupSize[1]),
       UP_DIV(c_4, compGroupSize[2]));
-  deviceTex2hostCHW(outputTex->id(), output, w, h, c, false /* C4 */);
+  deviceTex2hostCHW(outputTex->id(), output, w, h, c);
 
   agpu_print4d("agpu_add2t output:\n", output, n, c, h, w);
 }
@@ -2955,7 +3058,7 @@ void agpu_threshold(
       UP_DIV(h, compGroupSize[1]),
       UP_DIV(c_4, compGroupSize[2]));
 
-  deviceTex2hostCHW(outputTex->id(), output, w, h, c, false /* align */);
+  deviceTex2hostCHW(outputTex->id(), output, w, h, c);
 
   agpu_print4d("agpu_threshold output:\n", input, n, c, h, w);
 }
@@ -3018,7 +3121,7 @@ void agpu_batch_norm(
       UP_DIV(h, compGroupSize[1]),
       UP_DIV(c_4, compGroupSize[2]));
 
-  deviceTex2hostCHW(outputTex->id(), output, w, h, c, false /* align */);
+  deviceTex2hostCHW(outputTex->id(), output, w, h, c);
   agpu_print4d("agpu_batch_norm output:\n", output, n, c, h, w);
 }
 // endregion notconvolution

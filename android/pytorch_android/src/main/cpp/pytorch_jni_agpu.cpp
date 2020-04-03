@@ -152,6 +152,7 @@ static bool almostEqual(
 static void agpuOff() {
   at::setUseAgpuNorm(false);
   at::setUseAgpuAdd(false);
+  at::setUseAgpuAddmm(false);
   at::setUseAgpuRelu(false);
   at::setUseAgpuConv(false);
 }
@@ -332,6 +333,65 @@ TEST(conv, mn2) {
   test_conv_(1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 960, 320);
   test_conv_(1, 7, 7, 1, 1, 0, 0, 1, 1, 1, 320, 1280);
   test_conv_(1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1280, 1000);
+}
+
+TEST(addmm, fixed) {
+  auto M1 = torch::tensor({
+      {1,2},
+      {3,4}
+      }, torch::kFloat);
+  auto M2 = torch::tensor({
+      {-1,-2, -3},
+      {0,-4, -5}
+      }, torch::kFloat);
+  auto B = torch::tensor({
+      {1, 1, 1},
+      {1, 1, 1}
+      }, torch::kFloat);
+  float alpha = 2;
+  float beta = 100;
+
+  agpuOff();
+  auto toutC = at::addmm(B, M1, M2, beta, alpha);
+  print_tensor("addmm res cpu:", toutC);
+  at::setUseAgpuAddmm(true);
+  auto toutT = at::addmm(B, M1, M2, beta, alpha);
+  print_tensor("addmm res agpu:", toutT);
+  agpuOff();
+  assert(almostEqual(toutC, toutT));
+}
+
+void test0_addmm() {
+  std::cout << "AAA test0_addmm" << std::endl;
+  auto M1 = torch::tensor({
+      {1, 2},
+      {3, 4}
+   }, torch::kFloat);
+  auto M2 = torch::tensor({
+      {-1,-2, -3},
+      {0,-4, -5}
+      }, torch::kFloat);
+  auto B = torch::tensor({
+      {2, 2, 2},
+      {2, 2, 2}
+      }, torch::kFloat);
+  float alpha = -1;
+  float beta = 100;
+
+  agpuOff();
+
+  auto toutC = at::addmm(B, M1, M2, beta, alpha);
+  //print_tensor("addmm res cpu:", toutC);
+  //auto toutC = torch::tensor({
+  //    {201, 210, 213},
+  //    {203, 222, 229}
+  //    }, torch::kFloat);
+  at::setUseAgpuAddmm(true);
+  auto toutT = at::addmm(B, M1, M2, beta, alpha);
+  print_tensor("addmm EXPECTED:", toutC);
+  print_tensor("addmm res agpu:", toutT);
+  agpuOff();
+  assert(almostEqual(toutC, toutT));
 }
 
 TEST(add, xxs) {
@@ -1538,6 +1598,7 @@ void gbench_main(const std::string& args, const std::string& labelPrefix) {
 }
 
 void test0_main(const std::string& args) {
+  /*
   auto tin = torch::tensor(
       {{{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}},
         {{101, 102, 103}, {104, 105, 106}, {107, 108, 109}},
@@ -1576,12 +1637,14 @@ void test0_main(const std::string& args) {
       c10::IntArrayRef{1}, // dilation
       g);
   log("tout:", tout);
+  */
+
 
   // test0_conv_agpu_IKnchw_SKnc4hw_KrO4C4HW();
   // test0_conv_agpu_IKnchw_SKnc4hw_KrO4HWC();
 
   // test0_conv_agpu_IKnchw_KrO4C4HW();
-  test0_conv_agpu_IKnchw_KrO4HWC();
+  //test0_conv_agpu_IKnchw_KrO4HWC();
 
   /*
   test0_conv_agpu_Inhwc_Knchw();
@@ -1595,6 +1658,7 @@ void test0_main(const std::string& args) {
   test0_convDW_agpu_IKnchw();
   test0_convDW_agpu_IKnhwc();
   */
+  test0_addmm();
 }
 
 void test_module(torch::jit::script::Module module, const std::string& args) {
