@@ -1,6 +1,8 @@
 #include <ATen/ATen.h>
 #include <ATen/NativeFunctions.h>
 #include <ATen/native/UpSample.h>
+#include <ATen/AgpuUtils.h>
+#include "agpu.h"
 
 namespace at {
 namespace native {
@@ -20,6 +22,29 @@ static void upsample_nearest2d_out_frame(
     c10::optional<double> scales_w) {
   const float height_scale = compute_scales_value<float>(scales_h, input_height, output_height);
   const float width_scale = compute_scales_value<float>(scales_w, input_width, output_width);
+
+  bool useAgpu = at::getUseAgpuUpsampleNearest2d();
+  if (at::isAgpuVerbose()) {
+    std::cout 
+      << "UpSampleNearest2d.cpp:" << __LINE__ 
+      <<  " upsample_nearest2d_out_frame() useAgpu:" << useAgpu 
+      << std::endl;
+  }
+
+  if (useAgpu) {
+    agpu::agpu_upsample_nearest2d(
+        (float*) odata,
+        (float*) idata,
+        (uint32_t) input_height,
+        (uint32_t) input_width,
+        (uint32_t) output_height,
+        (uint32_t) output_width,
+        (uint32_t) nbatch,
+        (uint32_t) channels,
+        height_scale,
+        width_scale);
+    return;
+  }
 
   channels = channels * nbatch;
 
@@ -246,6 +271,7 @@ Tensor& upsample_nearest2d_out_cpu(
 
 Tensor upsample_nearest2d_cpu(const Tensor& input, IntArrayRef output_size, c10::optional<double> scales_h, c10::optional<double> scales_w) {
   auto output = at::empty({0}, input.options());
+  
   upsample_nearest2d_out_cpu_template(output, input, output_size, scales_h, scales_w);
   return output;
 }

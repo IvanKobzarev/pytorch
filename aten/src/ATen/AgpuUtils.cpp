@@ -24,6 +24,10 @@ bool kUseAgpuAddmm = false;
 void setUseAgpuAddmm(bool o) { kUseAgpuAddmm = o; }
 bool getUseAgpuAddmm() { return kUseAgpuAddmm; }
 
+bool kUseAgpuUpSampleNearest2d = false;
+void setUseAgpuUpSampleNearest2d(bool o) { kUseAgpuUpSampleNearest2d = o; }
+bool getUseAgpuUpSampleNearest2d() { return kUseAgpuUpSampleNearest2d; }
+
 bool kAgpuVerbose = false;
 
 

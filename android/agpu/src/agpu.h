@@ -262,6 +262,18 @@ void agpu_addmm(
 
     float* output);
 
+void agpu_upsample_nearest2d(
+    float* output,
+    const float* input,
+    uint32_t ih,
+    uint32_t iw,
+    uint32_t oh,
+    uint32_t ow,
+    uint32_t n,
+    uint32_t c,
+    float height_scale,
+    float width_scale);
+
 void agpu_add2t(
     const float* input0,
     const float* input1,

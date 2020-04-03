@@ -108,6 +108,7 @@ static void THTensor_(addmmImpl)(THTensor *r_, THTensor *t, THTensor *m1, THTens
         (uint32_t*) t->sizes().data(),
         (float*) r_->data<scalar_t>());
         //ATODO: what is going on with transpositions?
+    return;
   }
 
   // n == 1 || ldc >= max(1, m)

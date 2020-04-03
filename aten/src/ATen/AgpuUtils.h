@@ -20,6 +20,9 @@ bool getUseAgpuAdd();
 void setUseAgpuAddmm(bool o);
 bool getUseAgpuAddmm();
 
+void setUseAgpuUpsampleNearest2d(bool o);
+bool getUseAgpuUpsampleNearest2d();
+
 void setAgpuVerbose(bool agpuVerbose);
 bool isAgpuVerbose();
 
