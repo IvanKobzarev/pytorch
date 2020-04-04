@@ -24,12 +24,15 @@ bool kUseAgpuAddmm = false;
 void setUseAgpuAddmm(bool o) { kUseAgpuAddmm = o; }
 bool getUseAgpuAddmm() { return kUseAgpuAddmm; }
 
-bool kUseAgpuUpSampleNearest2d = false;
-void setUseAgpuUpSampleNearest2d(bool o) { kUseAgpuUpSampleNearest2d = o; }
-bool getUseAgpuUpSampleNearest2d() { return kUseAgpuUpSampleNearest2d; }
+bool kUseAgpuUpsampleNearest2d = false;
+void setUseAgpuUpsampleNearest2d(bool o) { kUseAgpuUpsampleNearest2d = o; }
+bool getUseAgpuUpsampleNearest2d() { return kUseAgpuUpsampleNearest2d; }
+
+bool kUseAgpuMaxPool2d = false;
+void setUseAgpuMaxPool2d(bool o) { kUseAgpuMaxPool2d = o; }
+bool getUseAgpuMaxPool2d() { return kUseAgpuMaxPool2d; }
 
 bool kAgpuVerbose = false;
-
 
 void setAgpuVerbose(bool agpuVerbose){
   kAgpuVerbose = agpuVerbose;

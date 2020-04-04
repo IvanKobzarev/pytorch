@@ -3044,6 +3044,31 @@ void agpu_upsample_nearest2d(
   std::cout << "AGPU upsampleN2d ----------------------------------------" << std::endl;
 }
 
+void agpu_max_pool2d(
+    float* output,
+    float* input,
+    int64_t* ind,
+
+    uint32_t N,
+    uint32_t IW,
+    uint32_t IH,
+    uint32_t OW,
+    uint32_t OH,
+
+    uint32_t KW,
+    uint32_t KH,
+
+    uint32_t SW,
+    uint32_t SH,
+   
+    uint32_t PW,
+    uint32_t PH,
+
+    uint32_t DW,
+    uint32_t DH) {
+  std::cout << "AAA agpu_max_pool2d()" << std::endl;
+}
+
 void agpu_add2t(
     const float* input0,
     const float* input1,

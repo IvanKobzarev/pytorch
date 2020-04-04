@@ -5,6 +5,8 @@
 #include <ATen/native/Pool.h>
 #include <tuple>
 
+#include "agpu.h"
+#include "ATen/AgpuUtils.h"
 
 namespace at {
 namespace native {
@@ -31,6 +33,38 @@ static void max_pool2d_with_indices_single_out_frame(
           int dilationH
           )
 {
+  std::cout 
+    << "XXX " << __FILE__ << ":" <<__LINE__ 
+    << " max_pool2d_with_indices_single_out_frame()" 
+    << std::endl;
+  
+  bool useAgpu = at::getUseAgpuMaxPool2d();
+  if (useAgpu) {
+    agpu::agpu_max_pool2d(
+        (float*) output_p,
+        (float*) input_p,
+        (int64_t*) ind_p,
+
+        (uint32_t) nslices,
+        (uint32_t) iwidth,
+        (uint32_t) iheight,
+        (uint32_t) owidth,
+        (uint32_t) oheight,
+
+        (uint32_t) kW,
+        (uint32_t) kH,
+
+        (uint32_t) dW,
+        (uint32_t) dH,
+       
+        (uint32_t) padW,
+        (uint32_t) padH,
+
+        (uint32_t) dilationW,
+        (uint32_t) dilationH);
+    return;
+  }
+
   at::parallel_for(0, nslices, 0, [&](int64_t start, int64_t end) {
     for (auto k = start; k < end; k++)
     {

@@ -23,6 +23,9 @@ bool getUseAgpuAddmm();
 void setUseAgpuUpsampleNearest2d(bool o);
 bool getUseAgpuUpsampleNearest2d();
 
+void setUseAgpuMaxPool2d(bool o);
+bool getUseAgpuMaxPool2d();
+
 void setAgpuVerbose(bool agpuVerbose);
 bool isAgpuVerbose();
 
