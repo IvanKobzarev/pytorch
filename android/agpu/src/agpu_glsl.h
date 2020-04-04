@@ -29,6 +29,7 @@ extern const char* normalization_glsl;
 extern const char* tex_to_nc4hw4_buf_glsl;
 extern const char* tex_to_nchw_buf_glsl;
 extern const char* threshold_glsl;
+extern const char* upsampleNearest2d_glsl;
 
 
 enum class AConv : int32_t {

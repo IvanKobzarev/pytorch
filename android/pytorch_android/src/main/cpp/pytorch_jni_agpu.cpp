@@ -394,6 +394,32 @@ void test0_addmm() {
   assert(almostEqual(toutC, toutT));
 }
 
+void test0_upsampleNearest2d() {
+  std::cout << "AAA test0_upsampleNearest2d" << std::endl;
+  auto tin = torch::tensor(
+   {{
+
+    {{1, 2, 3},
+    {4, 5, 6}},
+
+    {{-1, -2, -3},
+    {-4, -5, -6}}
+
+   }},
+   torch::kFloat);
+
+  agpuOff();
+  auto toutC = torch::upsample_nearest2d(tin, {4, 6});
+  print_tensor("upsN2d EXPECTED:", toutC);
+
+  at::setUseAgpuUpsampleNearest2d(true);
+  auto toutT = torch::upsample_nearest2d(tin, {4, 6});
+  print_tensor("upsN2d res agpu:", toutT);
+  agpuOff();
+
+  assert(almostEqual(toutC, toutT));
+}
+
 TEST(add, xxs) {
   int64_t n = 1;
   int64_t ih = 3;
@@ -1658,7 +1684,8 @@ void test0_main(const std::string& args) {
   test0_convDW_agpu_IKnchw();
   test0_convDW_agpu_IKnhwc();
   */
-  test0_addmm();
+  //test0_addmm();
+  test0_upsampleNearest2d();
 }
 
 void test_module(torch::jit::script::Module module, const std::string& args) {

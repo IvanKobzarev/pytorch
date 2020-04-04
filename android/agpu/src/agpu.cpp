@@ -2949,7 +2949,7 @@ void agpu_addmm(
       UP_DIV(OW, compGroupSize[0]),
       UP_DIV(OH, compGroupSize[1]),
       UP_DIV(C_4, compGroupSize[2]),
-      "gemm",
+      shaderKey,
       compGroupSize[0],
       compGroupSize[1],
       compGroupSize[2]);
@@ -2957,11 +2957,91 @@ void agpu_addmm(
 
   ares.gpu_shader_dtex_to_hchw_time = deviceTex2hostCHW(outTex->id(), output, OW, OH, C);
 
-  std::cout << "----------------------------------------" << std::endl;
+  std::cout << "AGPU addmm----------------------------------------" << std::endl;
   if (debugPrintTensors) {
     agpu_print2d(shaderKey, output, OH, OW);
   }
-  std::cout << "----------------------------------------" << std::endl;
+  std::cout << "AGPU addmm----------------------------------------" << std::endl;
+}
+
+void agpu_upsample_nearest2d(
+    float* output,
+    const float* input,
+    uint32_t IH,
+    uint32_t IW,
+    uint32_t OH,
+    uint32_t OW,
+    uint32_t _N,
+    uint32_t _C,
+    float scaleH,
+    float scaleW) {
+  initAGLContextOnce();
+  AResult ares;
+
+  static const bool debugPrintTensors = DEBUG_PRINT_TENSOR;
+
+  if (debugPrintTensors) {
+    agpu_print4d("agpu_upsample_nearest2d input:\n", input, _N, _C, IH, IW);
+    std::cout
+        << "AGPU scaleH:"<< scaleH
+        << " scaleW:" << scaleW
+        << std::endl;
+  }
+  uint32_t C = _N * _C;
+  uint32_t C_4 = UP_DIV(C, 4);
+  // inTex
+  auto inTex = std::make_unique<AGLTexture>(
+      IW, IH, C_4, getTexFormat(), GL_TEXTURE_3D, false);
+  hostCHW_to_deviceTex(inTex->id(), input, C, IH, IW, ares);
+  // outTex
+  auto outTex = std::make_unique<AGLTexture>(
+      OW, OH, C_4, getTexFormat(), GL_TEXTURE_3D, false);
+
+  int compGroupSize[3];
+  std::vector<std::string> header;
+  addCompGroupSizeDefines(header, compGroupSize, 8, 8, 1);
+  auto shaderKey = "upsampleNearest2d_glsl";
+  auto program = getShader(shaderKey, upsampleNearest2d_glsl, header);
+
+  program->useProgram();
+  // { binding
+  glBindImageTexture(
+      0 /* unit */,
+      outTex->id(),
+      0 /* level */,
+      GL_TRUE /* layered */,
+      0 /* layer */,
+      GL_WRITE_ONLY,
+      getTexFormat());
+
+  inTex->bindInProgram(0, 1 /* binding */);
+
+  glUniform3i(2, IW, IH, C_4);
+  glUniform3i(3, OW, OH, C_4);
+
+  glUniform1f(4, scaleW);
+  glUniform1f(5, scaleH);
+  AGL_CHECK_ERROR;
+  // } binding
+
+  gComputeWithTime(
+      UP_DIV(OW, compGroupSize[0]),
+      UP_DIV(OH, compGroupSize[1]),
+      UP_DIV(C_4, compGroupSize[2]),
+      shaderKey,
+      compGroupSize[0],
+      compGroupSize[1],
+      compGroupSize[2]);
+  AGL_CHECK_ERROR;
+
+  ares.gpu_shader_dtex_to_hchw_time = deviceTex2hostCHW(outTex->id(), output, OW, OH, C);
+
+
+  std::cout << "AGPU upsampleN2d ----------------------------------------" << std::endl;
+  if (debugPrintTensors) {
+    agpu_print4d(shaderKey, output, _N, _C, OH, OW);
+  }
+  std::cout << "AGPU upsampleN2d ----------------------------------------" << std::endl;
 }
 
 void agpu_add2t(

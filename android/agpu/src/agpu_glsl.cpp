@@ -1682,6 +1682,31 @@ const char* threshold_glsl =
 "    }\n"
 "}\n"
 ;
+const char* upsampleNearest2d_glsl = 
+"layout(std430) buffer;\n"
+"layout(FORMAT, binding=0) writeonly uniform PRECISION image3D uOutput;\n"
+"layout(location=1) uniform PRECISION sampler3D uInput;\n"
+"layout(location=2) uniform ivec3 uInputSize;\n"
+"layout(location=3) uniform ivec3 uOutputSize;\n"
+"layout(location=4) uniform float uScaleX;\n"
+"layout(location=5) uniform float uScaleY;\n"
+"layout(local_size_x = WORKGROUP_X, local_size_y = WORKGROUP_Y, local_size_z = WORKGROUP_Z) in;\n"
+"void main()\n"
+"{\n"
+"  ivec3 pos = ivec3(gl_GlobalInvocationID);\n"
+"  if(pos.x < uOutputSize.x && pos.y < uOutputSize.y)\n"
+"  {\n"
+"    float srcX = float(pos.x) * uScaleX;\n"
+"    int x1 = int(floor(srcX));\n"
+"    int x11 = clamp(x1, 0, uInputSize.x - 1);\n"
+"    float srcY = float(pos.y) * uScaleY;\n"
+"    int y1 = int(floor(srcY));\n"
+"    int y11 = clamp(y1, 0, uInputSize.y - 1);\n"
+"    vec4 outValue = texelFetch(uInput, ivec3(x11, y11, pos.z), 0);\n"
+"    imageStore(uOutput, pos, outValue);\n"
+"  }\n"
+"}\n"
+;
 
 fp_agpu_conv_t aConvToFun(AConv aconv){
   switch (aconv){
