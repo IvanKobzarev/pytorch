@@ -20,6 +20,7 @@ extern const char* conv_buf_Inhwc_Knchw_KrO4C4HW_glsl;
 extern const char* conv_tex_IKnc4hw_glsl;
 extern const char* gemm_glsl;
 extern const char* gemm16x16_glsl;
+extern const char* maxpool2d_glsl;
 extern const char* nc4hw4_buf_to_tex_glsl;
 extern const char* nc4hw_buf_to_nchw_buf_glsl;
 extern const char* nchw_buf_to_nc4hw_buf_glsl;

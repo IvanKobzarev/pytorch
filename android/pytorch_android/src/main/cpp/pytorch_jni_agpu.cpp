@@ -424,13 +424,19 @@ void test0_maxPool2d() {
   std::cout << "AAA test0_maxPool2d" << std::endl;
   auto tin = torch::tensor(
    {
-   {
 
+   {
     {1, 2, 3},
     {4, 5, 6},
     {7, 8, 9}
+   },
 
+   {
+    {-1, -2, -3},
+    {-4, -5, -6},
+    {-7, -8, -9}
    }
+
    },
    torch::kFloat);
 

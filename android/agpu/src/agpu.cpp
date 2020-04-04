@@ -99,6 +99,11 @@ void agpu_print2d(const char* m, const float* data, uint32_t d0, uint32_t d1) {
   agpu_print(m, data, 2, dims);
 }
 
+void agpu_print3d(const char* m, const float* data, uint32_t d0, uint32_t d1, uint32_t d2) {
+  uint32_t dims[3] = {d0, d1, d2};
+  agpu_print(m, data, 3, dims);
+}
+
 void agpu_print_NCHW(
     const float* input,
     uint32_t N,
@@ -3067,6 +3072,80 @@ void agpu_max_pool2d(
     uint32_t DW,
     uint32_t DH) {
   std::cout << "AAA agpu_max_pool2d()" << std::endl;
+  initAGLContextOnce();
+  AResult ares;
+  static const bool debugPrintTensors = DEBUG_PRINT_TENSOR;
+
+  if (debugPrintTensors) {
+    agpu_print3d("agpu_max_pool2d input:\n", input, N, IH, IW);
+    std::cout
+        << "AGPU KH:"<< KH
+        << " KW:" << KW
+        << std::endl;
+  }
+  uint32_t C = N;
+  uint32_t C_4 = UP_DIV(C, 4);
+
+  // inTex
+  auto inTex = std::make_unique<AGLTexture>(
+      IW, IH, C_4, getTexFormat(), GL_TEXTURE_3D, false);
+  hostCHW_to_deviceTex(inTex->id(), input, C, IH, IW, ares);
+  // outTex
+  auto outTex = std::make_unique<AGLTexture>(
+      OW, OH, C_4, getTexFormat(), GL_TEXTURE_3D, false);
+
+  int compGroupSize[3];
+  std::vector<std::string> header;
+  addCompGroupSizeDefines(header, compGroupSize, 2, 2, 16);
+  auto shaderKey = "maxpool2d_glsl";
+  auto program = getShader(shaderKey, maxpool2d_glsl, header);
+
+  program->useProgram();
+  // { binding
+  glBindImageTexture(
+      0 /* unit */,
+      outTex->id(),
+      0 /* level */,
+      GL_TRUE /* layered */,
+      0 /* layer */,
+      GL_WRITE_ONLY,
+      getTexFormat());
+
+  glBindImageTexture(
+      1 /* unit */,
+      inTex->id(),
+      0 /* level */,
+      GL_TRUE /* layered */,
+      0 /* layer */,
+      GL_WRITE_ONLY,
+      getTexFormat());
+
+  glUniform2i(2, KW, KH);
+  glUniform2i(3, SW, SH);
+  glUniform2i(4, PW, PH);
+  glUniform2i(5, DW, DH);
+
+  glUniform3i(10, OW, OH, C_4);
+  glUniform3i(11, IW, IH, C_4);
+  AGL_CHECK_ERROR;
+  // } binding
+
+  gComputeWithTime(
+      UP_DIV(OW, compGroupSize[0]),
+      UP_DIV(OH, compGroupSize[1]),
+      UP_DIV(C_4, compGroupSize[2]),
+      shaderKey,
+      compGroupSize[0],
+      compGroupSize[1],
+      compGroupSize[2]);
+  AGL_CHECK_ERROR;
+
+  ares.gpu_shader_dtex_to_hchw_time = deviceTex2hostCHW(outTex->id(), output, OW, OH, C);
+  std::cout << "AGPU maxPool2d ----------------------------------------" << std::endl;
+  if (debugPrintTensors) {
+    agpu_print3d(shaderKey, output, N, OH, OW);
+  }
+  std::cout << "AGPU maxPool2d ----------------------------------------" << std::endl;
 }
 
 void agpu_add2t(
