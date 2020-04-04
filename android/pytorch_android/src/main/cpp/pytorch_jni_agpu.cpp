@@ -420,6 +420,32 @@ void test0_upsampleNearest2d() {
   assert(almostEqual(toutC, toutT));
 }
 
+void test0_maxPool2d() {
+  std::cout << "AAA test0_maxPool2d" << std::endl;
+  auto tin = torch::tensor(
+   {
+   {
+
+    {1, 2, 3},
+    {4, 5, 6},
+    {7, 8, 9}
+
+   }
+   },
+   torch::kFloat);
+
+  agpuOff();
+  auto toutC = at::max_pool2d(tin, {2, 2}, {1, 1}, {0, 0}, {1, 1});
+  print_tensor("max_pool2d EXPECTED:", toutC);
+
+  at::setUseAgpuMaxPool2d(true);
+  auto toutT = at::max_pool2d(tin, {2, 2}, {1, 1}, {0, 0}, {1, 1});
+  print_tensor("max_pool2d res agpu:", toutT);
+  agpuOff();
+
+  assert(almostEqual(toutC, toutT));
+}
+
 TEST(add, xxs) {
   int64_t n = 1;
   int64_t ih = 3;
@@ -1685,7 +1711,8 @@ void test0_main(const std::string& args) {
   test0_convDW_agpu_IKnhwc();
   */
   //test0_addmm();
-  test0_upsampleNearest2d();
+  //test0_upsampleNearest2d();
+  test0_maxPool2d();
 }
 
 void test_module(torch::jit::script::Module module, const std::string& args) {
