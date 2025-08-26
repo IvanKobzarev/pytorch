@@ -399,6 +399,21 @@ sink_waits_iterative_debug_limit_to_sink: Optional[int] = (
     None if (env_str := os.getenv("PYTORCH_SINK_WAITS_LIMIT")) is None else int(env_str)
 )
 
+
+# Comparing estimations vs real benchmarks showed big divergence.
+# Exposing extensive config for easier experimentation.
+reorder_sink_runtime_estimations_comm_mult: float = 1.0
+reorder_sink_runtime_estimations_non_comm_mult: float = 1.0
+# Ratio of comm_time to cover deviations of comm_time from estimations
+reorder_iterative_extra_comm_comp_overlap: float = 0.1
+sink_iterative_extra_comm_comp_overlap: float = 0.2
+
+# Experimental unsafe configuration that allows changing relative collectives order,
+# No guarantees for now that all the rank will do the same order of collectives,
+# which can result in collective hangs.
+reorder_iterative_unsafe_collectives_reorder: bool = False
+sink_waits_iterative_unsafe_collectives_reorder: bool = False
+
 bucket_all_gathers_fx: Literal["none", "all", "only_fsdp"] = "none"
 # By default torch._inductor.fx_passes.bucketing.bucket_size_determinator is used
 bucket_all_gathers_fx_bucket_size_determinator: Optional[Callable[[int], int]] = None

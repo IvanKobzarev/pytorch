@@ -133,42 +133,18 @@ class ReorderInfo:
     Debug info describing how an individual snode was reordered
     """
 
-    initial_exposed: float = -1
-    final_exposed: float = -1
     limiting_factor: str = "None"
     moves: int = 0
     grouped: int = 0
     grouped_info: str = ""
+    comm_time: float = -1
+    comp_time: float = -1
+    initial_exposed: float = -1
+    final_exposed: float = -1
 
     @property
     def improvement(self):
         return self.initial_exposed - self.final_exposed
-
-
-def is_gemm_like(node: Optional[Union[IRNode, Operation]]) -> bool:
-    if node is None:
-        return False
-
-    if is_fallback_op(
-        node,  # type: ignore[arg-type]
-        torch.ops.aten._scaled_dot_product_flash_attention.default,
-    ):
-        return True
-
-    if (
-        python_kernel_name := getattr(node, "python_kernel_name", None)
-    ) and "extern_kernels" in python_kernel_name:
-        return True
-    return False
-
-
-def contains_gemm_like(snode: BaseSchedulerNode) -> bool:
-    from torch._inductor.scheduler import GroupedSchedulerNode
-
-    if isinstance(snode, GroupedSchedulerNode):
-        return any(contains_gemm_like(x) for x in snode.snodes)
-    else:
-        return is_gemm_like(snode.node)
 
 
 def _temp_group_visit_leaves(snode, fn):
@@ -179,6 +155,60 @@ def _temp_group_visit_leaves(snode, fn):
             fn(_snode)
     else:
         fn(snode)
+
+
+def wait_exposed_communication_time(snodes_to_wait, runtimes) -> tuple[float, float]:
+    wait_snode = snodes_to_wait[-1]
+    assert len(snodes_to_wait) > 1
+    idx = len(snodes_to_wait) - 2
+    comm_time = 0.0
+    comp_time = 0.0
+    for i in range(idx, -1, -1):
+        c = snodes_to_wait[i]
+        if contains_collective(c):
+            if is_corresponding_collective_wait(c, wait_snode):
+                comm_time = runtimes[c]
+                break
+            else:
+                continue
+
+        def accumulate_time(_snode: BaseSchedulerNode) -> None:
+            nonlocal comp_time
+            comp_time += runtimes[_snode]
+
+        _temp_group_visit_leaves(c, accumulate_time)
+
+    return comm_time, comp_time
+
+
+def coll_exposed_communication_time(
+    collective_snode: BaseSchedulerNode,
+    remaining_snodes: list[BaseSchedulerNode],
+    runtimes,
+) -> tuple[float, float]:
+    # assumes a linear schedule and computes the overlap of the collective with the remaining nodes
+    comm_time = runtimes[collective_snode]
+    comp_time = 0.0
+    collective_outs = OrderedSet(o.get_name() for o in collective_snode.get_outputs())
+    for snode in remaining_snodes:
+        # We may have some ops without Wait,
+        # e.g. DTensor torch.ops._dtensor.shard_dim_alltoall
+        unmet_deps = OrderedSet(
+            d.name for d in snode.unmet_dependencies if not _is_fake_dep(d)
+        )
+
+        if unmet_deps & collective_outs:
+            break
+
+        if contains_async_collective(snode):
+            continue
+
+        def accumulate_time(_snode: BaseSchedulerNode) -> None:
+            nonlocal comp_time
+            comp_time += runtimes[_snode]
+
+        _temp_group_visit_leaves(snode, accumulate_time)
+    return comm_time, comp_time
 
 
 def _group_name(snode, with_bufs=False) -> str:
@@ -236,6 +266,49 @@ def _initialize_double_linked_list(
     return _prev, _next, _head
 
 
+def is_corresponding_collective_wait(collective_snode, wait_snode):
+    collective_outs = OrderedSet(o.get_name() for o in collective_snode.get_outputs())
+    unmet_deps = OrderedSet(d.name for d in wait_snode.unmet_dependencies)
+    return unmet_deps & collective_outs
+
+
+def is_gemm_like(node: Optional[Union[IRNode, Operation]]) -> bool:
+    if node is None:
+        return False
+
+    if is_fallback_op(
+        node,  # type: ignore[arg-type]
+        torch.ops.aten._scaled_dot_product_flash_attention.default,
+    ):
+        return True
+
+    if python_kernel_name := getattr(node, "python_kernel_name", None):
+        if "extern_kernels" in python_kernel_name and "mm" in python_kernel_name:
+            return True
+    return False
+
+
+def _op_runtime_estimate_mult(snode):
+    # Apply multipliers for faster experimentation.
+    # TODO(ivankobzarev): Remove after confirmation that runtime estimations are correct.
+    if contains_collective(snode):
+        return config.reorder_sink_runtime_estimations_comm_mult
+
+    return config.reorder_sink_runtime_estimations_non_comm_mult
+
+
+def is_async_collective(snode):
+    if python_kernel_name := getattr(snode.node, "python_kernel_name", None):
+        if "torch.ops._dtensor.shard_dim_alltoall.default" in python_kernel_name:
+            return False
+
+    return True
+
+
+def contains_async_collective(snode):
+    return contains_collective(snode, is_async_collective)
+
+
 def _reorder_communication_preserving_peak_memory_internal(
     snodes: list[BaseSchedulerNode],
 ) -> tuple[list[BaseSchedulerNode], dict[BaseSchedulerNode, ReorderInfo]]:
@@ -266,32 +339,13 @@ def _reorder_communication_preserving_peak_memory_internal(
         buf_to_snode_last_use,
         name_to_freeable_input_buf,
     ) = _initialize_memory_tracking(snodes, graph_inputs, graph_outputs)
+
     runtimes: dict[BaseSchedulerNode, float] = {
-        snode: estimate_op_runtime(snode) for snode in snodes
+        snode: estimate_op_runtime(snode) * _op_runtime_estimate_mult(snode)
+        for snode in snodes
     }
     # debug stats
     stats: dict[BaseSchedulerNode, ReorderInfo] = {}
-
-    def exposed_communication_time(
-        collective_snode: BaseSchedulerNode, remaining_snodes: list[BaseSchedulerNode]
-    ) -> float:
-        # assumes a linear schedule and computes the overlap of the collective with the remaining nodes
-        comm_time = estimate_op_runtime(collective_snode)
-        compute_time = 0.0
-        for snode in remaining_snodes:
-            if contains_collective(snode):
-                continue
-            if contains_wait(snode):
-                # TODO - if the wait is for a collective that started before this collective or on another stream,
-                # we can ignore it. Otherwise, it's the end of the road for overlap opportunities
-                break
-
-            def accumulate_time(_snode: BaseSchedulerNode) -> None:
-                nonlocal compute_time
-                compute_time += runtimes[_snode]
-
-            _temp_group_visit_leaves(snode, accumulate_time)
-        return max(0, comm_time - compute_time)
 
     total_moves = 0
 
@@ -436,14 +490,15 @@ def _reorder_communication_preserving_peak_memory_internal(
     )
 
     num_processed_collectives: int = 0
-    curr = _head
+    curr: Optional[BaseSchedulerNode] = _head
     debug_iterative_memory_recompute = config.reorder_iterative_debug_memory_recompute
     iterative_recompute_error = False
 
-    while _next[curr] is not None:
+    while curr is not None and _next[curr] is not None:
+        _next_curr = _next[curr]
         if iterative_recompute_error:
             break
-        if contains_collective(curr):
+        if contains_async_collective(curr):
             if debug_num_collectives_to_reorder is not None and (
                 num_processed_collectives >= debug_num_collectives_to_reorder
             ):
@@ -451,16 +506,32 @@ def _reorder_communication_preserving_peak_memory_internal(
             num_processed_collectives += 1
 
             info = stats[curr] = ReorderInfo()
-            info.initial_exposed = info.final_exposed = exposed_communication_time(
-                curr, _group_nodes(_next[curr], None)
+            comm_time, comp_time = coll_exposed_communication_time(
+                curr, _group_nodes(_next[curr], None), runtimes
             )
+            info.comm_time = comm_time
+            info.comp_time = comp_time
+            info.initial_exposed = info.final_exposed = comm_time - comp_time
 
             candidate = _prev[curr]
             group_head = curr
             group_tail = curr
+            group_waits = {}
+            group_runtime = 0.0
             group_peak_memory = _curr_memory[curr][0]  # post_alloc memory
+
             while candidate is not None:
-                if contains_collective(candidate):
+                if (
+                    info.final_exposed
+                    < -config.reorder_iterative_extra_comm_comp_overlap * info.comm_time
+                ):
+                    info.limiting_factor = "unexposed by runtime estimations"
+                    break
+
+                if (
+                    not config.reorder_iterative_unsafe_collectives_reorder
+                    and contains_collective(candidate)
+                ):
                     info.limiting_factor = "collective ordering"
                     break
 
@@ -490,17 +561,23 @@ def _reorder_communication_preserving_peak_memory_internal(
                     def is_groupable(
                         candidate: BaseSchedulerNode,
                     ) -> tuple[bool, Optional[str]]:
-                        # preserve ordering
+                        # This pass processes collectives left to right,
+                        # Do not group with processed collectives.
                         if contains_collective(candidate):
                             return False, "contains_collective"
-
-                        if contains_gemm_like(candidate):
-                            return False, "contains_gemm_like"
                         return True, None
 
                     is_groupable_result, grouping_reason = is_groupable(candidate)
                     if is_groupable_result:
                         group_head = candidate
+                        if contains_wait(candidate):
+                            comm_time, comp_time = wait_exposed_communication_time(
+                                _group_nodes(_head, candidate), runtimes
+                            )
+                            group_waits[candidate] = comm_time, comp_time
+                        if not contains_async_collective(candidate):
+                            group_runtime += runtimes[candidate]
+
                         group_peak_memory = max(
                             group_peak_memory, _curr_memory[candidate][0]
                         )
@@ -517,6 +594,56 @@ def _reorder_communication_preserving_peak_memory_internal(
                         )
                         info.limiting_factor = msg
                         break
+
+                # Check if candidate has sync runtime
+                if not contains_async_collective(candidate):
+                    c_runtime = runtimes[candidate]
+
+                    if c_runtime > 0 and len(group_waits) > 0:
+                        exposed_before = max(0, info.comm_time - info.comp_time)
+                        exposed_after = max(
+                            0, info.comm_time - info.comp_time - c_runtime
+                        )
+                        exposed_delta = exposed_after - exposed_before
+                        for gw_comm_time, gw_comp_time in group_waits.values():
+                            gw_exposed_before = max(0, gw_comm_time - gw_comp_time)
+                            gw_exposed_after = max(
+                                0, gw_comm_time - gw_comp_time + c_runtime
+                            )
+
+                            exposed_delta += gw_exposed_after - gw_exposed_before
+
+                        if exposed_delta > 0:
+                            info.limiting_factor = (
+                                f"candidate has compute {c_runtime},"
+                                f" group contains waits, total_exposed_delta {exposed_delta}"
+                            )
+                            break
+                        else:
+                            # Update all group_colls comm_time, comp_time
+                            for gw, (gw_comm_time, gw_comp_time) in group_waits.items():
+                                group_waits[gw] = (
+                                    gw_comm_time,
+                                    gw_comp_time - c_runtime,
+                                )
+                else:
+                    # Unsafe collectives reordering
+                    # Cj -> [...group_runtime..., Ci] -> Wj
+                    # Checking that we are not increasing exposed time of Cj
+                    if group_runtime > 0:
+                        comm_time, comp_time = coll_exposed_communication_time(
+                            candidate, _group_nodes(candidate, None), runtimes
+                        )
+                        exposed_before = max(0, comm_time - comp_time)
+                        exposed_after = max(0, comm_time - comp_time + group_runtime)
+                        exposed_delta = exposed_after - exposed_before
+                        if exposed_delta > 0:
+                            info.limiting_factor = (
+                                f"candidate is collective,"
+                                f" group_runtime:{group_runtime},"
+                                f" exposed_delta:{exposed_delta} c_comm_time:{comm_time} c_comp_time:{comp_time}"
+                            )
+                            break
 
                 candidate_allocfree: SNodeMemory = snodes_allocfree[candidate]
                 candidate_delta_mem: int = (
@@ -566,9 +693,12 @@ def _reorder_communication_preserving_peak_memory_internal(
 
                 _perform_double_linked_list_swap(candidate, group_head, group_tail)
 
-                info.final_exposed = exposed_communication_time(
-                    curr, _group_nodes(_next[curr], None)
+                comm_time, comp_time = coll_exposed_communication_time(
+                    curr, _group_nodes(_next[curr], None), runtimes
                 )
+                info.comm_time = comm_time
+                info.comp_time = comp_time
+                info.final_exposed = comm_time - comp_time
 
                 _update_memory_tracking_after_swap(
                     candidate,
@@ -599,7 +729,7 @@ def _reorder_communication_preserving_peak_memory_internal(
                     if iterative_recompute_error:
                         break
                 candidate = _prev[group_head]
-        curr = _next[curr]  # type: ignore[assignment]
+        curr = _next_curr
 
     node_stats = stats
     improvement = {snode: node_stats[snode].improvement for snode in node_stats}
@@ -612,6 +742,8 @@ def _reorder_communication_preserving_peak_memory_internal(
     )
     headers = [
         "Collective node",
+        "comm_time",
+        "comp_time",
         "initial exposed",
         "final exposed",
         "improvement",
@@ -623,6 +755,8 @@ def _reorder_communication_preserving_peak_memory_internal(
     rows = [
         [
             node_summary(snode),
+            node_info.comm_time,
+            node_info.comp_time,
             node_info.initial_exposed,
             node_info.final_exposed,
             node_info.improvement,
@@ -853,6 +987,14 @@ class SinkWaitInfo:
     moves: int = 0
     moves_info: str = ""
     limiting_factor: str = "None"
+    comm_time: float = -1
+    comp_time: float = -1
+    initial_exposed: float = -1
+    final_exposed: float = -1
+
+    @property
+    def improvement(self):
+        return self.initial_exposed - self.final_exposed
 
 
 def _sink_waits_iterative_internal(
@@ -981,13 +1123,18 @@ def _sink_waits_iterative_internal(
 
         for n in [candidate, *gns]:
             post_alloc = _post_alloc_update[n]
-            snodes_allocfree[n].size_free += _size_free_delta_update[n]
+            snodes_allocfree[n].size_free += _size_free_delta_update.get(n, 0)
             _curr_memory[n] = (
                 post_alloc,
                 post_alloc - snodes_allocfree[n].size_free,
             )
 
-    curr = snodes[-1]
+    runtimes: dict[BaseSchedulerNode, float] = {
+        snode: estimate_op_runtime(snode) * _op_runtime_estimate_mult(snode)
+        for snode in snodes
+    }
+
+    curr: Optional[BaseSchedulerNode] = snodes[-1]
 
     processed_waits = OrderedSet()  # type: ignore[var-annotated]
     debug_iterative_memory_recompute = config.reorder_iterative_debug_memory_recompute
@@ -996,8 +1143,8 @@ def _sink_waits_iterative_internal(
     )
 
     iterative_recompute_error = False
-
-    while _prev[curr] is not None:
+    while curr is not None and _prev[curr] is not None:
+        _prev_curr = _prev[curr]
         if iterative_recompute_error:
             break
         if (
@@ -1009,14 +1156,29 @@ def _sink_waits_iterative_internal(
         if contains_wait(curr) and curr not in processed_waits:
             processed_waits.add(curr)
             info = stats[curr] = SinkWaitInfo()
+            comm_time, comp_time = wait_exposed_communication_time(
+                _group_nodes(_head, curr), runtimes
+            )
+            info.initial_exposed = info.final_exposed = comm_time - comp_time
+            info.comm_time = comm_time
+            info.comp_time = comp_time
+
             candidate = _next[curr]
             wait_snode = curr
             group_head = curr
             group_tail = curr
+            group_colls = {}
+            group_runtime = 0.0
             group_peak_memory = _curr_memory[curr][0]
+
             while candidate is not None:
-                if iterative_recompute_error:
+                if (
+                    info.final_exposed
+                    < -config.sink_iterative_extra_comm_comp_overlap * info.comm_time
+                ):
+                    info.limiting_factor = "unexposed by runtime estimations"
                     break
+
                 gns: list[BaseSchedulerNode] = _group_nodes(group_head, group_tail)
                 group = GroupedSchedulerNode(
                     wait_snode.scheduler,
@@ -1048,22 +1210,25 @@ def _sink_waits_iterative_internal(
                 ):
 
                     def is_groupable(snode):
-                        # We do not want to group with collectives to not reorder them forward.
-                        if contains_collective(snode):
-                            return (
-                                False,
-                                f"candidate contains collective {snode.get_name()}",
-                            )
-                        if contains_gemm_like(snode):
-                            return (
-                                False,
-                                f"candidate contains gemm_like {snode.get_name()}",
-                            )
+                        # Sink Waits traverse Waits right to left,
+                        # => we do not group with processed Waits on the right.
+                        if contains_wait(snode):
+                            return False, "candidate contains wait {snode.get_name()}"
+
+                        # We group with Collectives, Compute
                         return True, None
 
-                    is_grp, grp_reason = is_groupable(candidate)
-                    if is_grp:
+                    _is_groupable, groupable_reason = is_groupable(candidate)
+                    if _is_groupable:
                         group_tail = candidate
+                        if contains_collective(candidate):
+                            comm_time, comp_time = coll_exposed_communication_time(
+                                candidate, _group_nodes(candidate, None), runtimes
+                            )
+                            group_colls[candidate] = (comm_time, comp_time)
+                        if not contains_async_collective(candidate):
+                            group_runtime += runtimes[candidate]
+
                         group_peak_memory = max(
                             group_peak_memory, _curr_memory[candidate][0]
                         )
@@ -1071,21 +1236,73 @@ def _sink_waits_iterative_internal(
                         info.grouped_info = _group_names(gns)
                         candidate = _next[candidate]
                         continue
-                    elif (data_dep is None) and both_contain_comms:
-                        info.limiting_factor = (
-                            f"collective ordering {_group_names(gns)}"
-                            f" with candidate:{candidate.get_name()}"
-                        )
-                        break
+                    elif data_dep is None:
+                        if (
+                            not config.sink_waits_iterative_unsafe_collectives_reorder
+                            and both_contain_comms
+                        ):
+                            info.limiting_factor = (
+                                f"collective ordering {_group_names(gns)}"
+                                f"\n with candidate:{candidate.get_name()}"
+                            )
+                            break
                     else:
                         info.limiting_factor = (
                             f"data dependency {data_dep}(dep_names:{list(data_deps.keys())})"
                             f"\n candidate:{candidate.get_name()}(os:{[candidate.get_buffer_names()]})"
-                            f"dep on {gns}"
+                            f"\n dep on {_group_names(gns)}"
                             f"\n outs:{[o.get_name() for o in group_outs]}"
-                            f"\n non_group_reason:{grp_reason}"
+                            f"\n non_group_reason:{groupable_reason}"
                         )
                         break
+
+                if is_wait(candidate.node):
+                    # Corresponding collective is before the group,
+                    # Swap can increase exposed time of corresponding collective
+                    comm_time, comp_time = wait_exposed_communication_time(
+                        _group_nodes(_head, candidate), runtimes
+                    )
+                    exposed_before = max(0, comm_time - comp_time)
+                    exposed_after = max(0, comm_time - comp_time + group_runtime)
+                    # We do not know how much we can sink more after this swap,
+                    # Just comparing advantage at the moment for now.
+                    if exposed_after > exposed_before:
+                        info.limiting_factor = (
+                            "candidate is wait,"
+                            f" exposed_before:{exposed_before} vs exposed_after:{exposed_after}"
+                        )
+                        break
+
+                # Check if candidate has sync runtime
+                if not contains_async_collective(candidate):
+                    # If candidate has sync runtime,
+                    # Waits of gorup_colls are on the right from group.
+                    # Swap can increase their exposed time.
+                    c_runtime = runtimes[candidate]
+
+                    if c_runtime > 0 and len(group_colls) > 0:
+                        # Advantage for current Wait to do the Swap
+                        exposed_delta = max(0, info.comm_time - info.comp_time) - max(
+                            0, info.comm_time - info.comp_time - c_runtime
+                        )
+                        for gc, (gc_comm_time, gc_comp_time) in group_colls.items():
+                            exposed_delta += max(0, gc_comm_time - gc_comp_time) - max(
+                                0, gc_comm_time - gc_comp_time + c_runtime
+                            )
+                        if exposed_delta > 0:
+                            info.limiting_factor = (
+                                f"candidate has compute {c_runtime}, group contains collectives,"
+                                f" total_exposed_delta {exposed_delta}"
+                            )
+                            break
+                        else:
+                            # Update all group_colls comm_time, comp_time
+                            for gc, (gc_comm_time, gc_comp_time) in group_colls.items():
+                                group_colls[gc] = (
+                                    gc_comm_time,
+                                    gc_comp_time - c_runtime,
+                                )
+
                 candidate_allocfree: SNodeMemory = snodes_allocfree[candidate]
                 candidate_delta_mem = (
                     candidate_allocfree.size_alloc - candidate_allocfree.size_free
@@ -1138,6 +1355,13 @@ def _sink_waits_iterative_internal(
 
                 _perform_double_linked_list_swap(candidate, group_head, group_tail)
 
+                comm_time, comp_time = wait_exposed_communication_time(
+                    _group_nodes(_head, curr), runtimes
+                )
+                info.comm_time = comm_time
+                info.comp_time = comp_time
+                info.final_exposed = comm_time - comp_time
+
                 _update_memory_tracking_after_swap(
                     candidate,
                     gns,
@@ -1166,24 +1390,33 @@ def _sink_waits_iterative_internal(
                         break
 
                 candidate = _next[group_tail]
-        curr = _prev[curr]  # type: ignore[assignment]
+        curr = _prev_curr
 
     headers = [
         "Wait node",
+        "comm_time",
+        "comp_time",
+        "initial exposed",
+        "final exposed",
+        "improvement",
+        "limiting factor",
         "grouped",
         "grouped_info",
         "moves",
         "moves_info",
-        "limiting factor",
     ]
     rows = [
         [
             node_summary(snode),
+            info.comp_time,
+            info.initial_exposed,
+            info.final_exposed,
+            info.improvement,
+            info.limiting_factor,
             info.grouped,
             info.grouped_info,
             info.moves,
             info.moves_info,
-            info.limiting_factor,
         ]
         for snode, info in stats.items()
     ]
@@ -1218,9 +1451,7 @@ def _sink_waits_iterative_internal(
     return new_snodes, stats
 
 
-def sink_waits_iterative(
-    snodes: list[BaseSchedulerNode],
-) -> list[BaseSchedulerNode]:
+def sink_waits_iterative(snodes: list[BaseSchedulerNode]) -> list[BaseSchedulerNode]:
     return _sink_waits_iterative_internal(snodes)[0]
 
 
