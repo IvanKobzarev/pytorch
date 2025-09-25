@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# NOTE no final slash on SRC but yes on DEST. Copies "bv2" into dest.
+SRC="$HOME/fbsource/fbcode/scratch/axl/bv2"
+DST="$HOME/mnt_rsc/"
+
+# The --del tells rsync to remove files at destination which don't exist at source.
+# As we intend to sync code, we exlude hidden folders and __pycache__.
+do_sync() {
+    if [[ ! -d "$DST/bv2" ]]; then
+      echo "You need to mount ~/mnt_rsc by running a background process, run:"
+      echo "mkdir -p ~/mnt_rsc; yarc rsc sshfs mount ~/mnt_rsc"
+      exit 1
+    fi
+
+    echo "Sync start:" `date`
+    rsync -az --del --exclude "*__pycache__" --exclude ".*"  "$SRC" "$DST"
+    echo "Sync end:" `date`
+}
+
+do_sync  # Initial sync
+
+if [[ $# -eq 1 && $1 == "once" ]]; then
+  exit 0
+fi
+
+# Watching only a subset of events, because otherwise we even watch read/opens.
+while inotifywait -e modify,close_write,move,create,delete -r "$SRC"; do
+    do_sync
+done

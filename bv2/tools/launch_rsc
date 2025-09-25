@@ -1,0 +1,22 @@
+#!/bin/bash
+# Example usage:
+# $ ~/fbsource/fbcode/scratch/axl/bv2/tools/launch_rsc --gpus=2 --nodes=1 --cpus-per-gpu=32 --time=24:00:00 --qos lowest -- -m bv2.train --config bv2/config/detect_ocr.py
+
+# Initial sync of files to RSC
+echo "Synchronizing files.............................."
+SRC="$HOME/fbsource/fbcode/scratch/axl/bv2"
+DST="$HOME/rsc/"
+rsync -a --del "$SRC" "$DST"
+RSC_RSYNC_OPTS=--delete rsc sync
+echo "Files synchronized."
+
+echo ""
+echo "Launching.............................."
+# Split launcher args and command args by "--"
+rsc_args=() job_args=() split=0
+for a in "$@"; do
+  [[ $a == --  && split -eq 0 ]] && { split=1; continue; }
+  ((split)) && job_args+=("$a") || rsc_args+=("$a")
+done
+
+yarc rsc remote srun --ntasks-per-node=1 "${rsc_args[@]}" ./rsc/bv2/tools/launch_srun "${job_args[@]}"

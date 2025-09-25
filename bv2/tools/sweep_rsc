@@ -1,0 +1,37 @@
+#!/usr/bin/env fish
+# Intended usage: Edit the two places marked HERE in this file in-place. Then launch:
+# $ ./fbsource/fbcode/scratch/axl/bv2/tools/sweep_rsc --gpus=2 --nodes=1 --cpus-per-gpu=32 --time=24:00:00 --qos lowest
+
+# Initial sync of files to RSC
+echo "Synchronizing files.............................."
+rsync -a --del "$HOME/fbsource/fbcode/scratch/axl/bv2" "$HOME/rsc/"
+rsc sync
+echo "Files synchronized."
+
+# HERE: Specify which script+config to run:
+set -g CONFIG -m bv2.train --config bv2/config/infovqa.py
+set -g SCRIPT_ARGS $argv
+
+echo ""
+echo "Launching $CONFIG .............................."
+
+set wid 0  # "work-unit ID"
+function runit
+  echo "    ↪ with $argv"
+  yarc rsc remote sbatch --ntasks-per-node=1 $SCRIPT_ARGS ./rsc/bv2/tools/launch_srun $CONFIG $argv
+  set -g wid (math $wid + 1)  # Increment WID for the next call
+end
+
+# HERE: Change name if desired, and call `runit` for each sweep entry.
+set xid (whoami)-(date +"%Y%m%d-%H%M%S")
+
+for lr in 3e-5 1e-5 3e-6
+  for wd in 1.0 0.1 0.0
+    runit name:=$xid-$wid-$lr-$wd-4k reg.nreg=0 lr=$lr "wd=$wd*c.lr" max_patches=4096
+    runit name:=$xid-$wid-$lr-$wd-4k-r10 reg.nreg=10 lr=$lr "wd=$wd*c.lr" max_patches=4096
+    runit name:=$xid-$wid-$lr-$wd-1k reg.nreg=0 lr=$lr "wd=$wd*c.lr" max_patches=1024
+    runit name:=$xid-$wid-$lr-$wd-1k-r10 reg.nreg=10 lr=$lr "wd=$wd*c.lr" max_patches=1024
+    runit name:=$xid-$wid-$lr-$wd-256 reg.nreg=0 lr=$lr "wd=$wd*c.lr" max_patches=256
+    runit name:=$xid-$wid-$lr-$wd-256-r10 reg.nreg=10 lr=$lr "wd=$wd*c.lr" max_patches=256
+  end
+end
