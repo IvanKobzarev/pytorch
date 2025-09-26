@@ -17,7 +17,7 @@ class Tiktoken:
         )
 
         # load actual tokens
-        model_path = "/checkpoint/vision_encoder/bv2/l4_200k_base.model"
+        model_path = "/checkpoint/rigi/bv2/l4_200k_base.model"
         tokens = load_tiktoken_bpe(model_path)
 
         if first_N is not None:

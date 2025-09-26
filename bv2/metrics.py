@@ -19,7 +19,7 @@ def only_on_rank0(func):
 
 
 class WandbLogger:
-    def __init__(self, config, rank, name, dir, entity="qkv", project="bv2"):
+    def __init__(self, config, rank, name, dir, entity="rigi", project="bv2"):
         self.step = 0
         self.rank = rank
         if self.rank != 0:
@@ -29,7 +29,7 @@ class WandbLogger:
         if user_login_key is None:
             raise ValueError("Please set WANDB_API_KEY env var.")
         # wandb.login(host="https://meta.wandb.io/", key=user_login_key)
-        wandb.login(host="https://wandb-rsc.edge.x2p.facebook.net", key=user_login_key)
+        # wandb.login(host="https://fairwandb.org", key=user_login_key)
 
         config["env"] = {k: v for k, v in os.environ.items() if "key" not in k.lower()}
         config["PID"] = os.getpid()

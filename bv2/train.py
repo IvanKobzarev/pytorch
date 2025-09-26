@@ -72,7 +72,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     )
 
     # Get workdir from rank0 to make sure it's consistent across hosts (timestamp)
-    workdir = f"/checkpoint/vision_encoder/bv2/workdirs/{name}"
+    workdir = f"/checkpoint/rigi/bv2/workdirs/{name}"
     workdir = u.broadcast_object_from(rank=0, obj=workdir)
     prints0(f"Workdir: {workdir}")
 
