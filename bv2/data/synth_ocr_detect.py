@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw
 
 import bv2.data.dpack as d  # isort: skip
 from bv2.data.pp import patchify, sanity_check  # isort: skip
-from bv2.data.synth_ocr import font, render, unpack  # isort: skip
+from bv2.data.synth_ocr import font, render  # isort: skip
 from bv2.data.common import infinite_random_exids, vis_image_text_unpack  # isort: skip
 
 class Dataset:
@@ -168,7 +168,7 @@ class Dataset:
         for i in range(min(max_examples, iseq.max() + 1)):
             seq_mask = iseq == i
 
-            txt, img = vis_image_text_unpack(tokens[seq_mask], self.ps, self.ps)
+            txt, img = vis_image_text_unpack(tokens[seq_mask], ph=self.ps, pw=self.ps)
             txt = t.decode(txt)
             prefix, _, suffix = txt.split("<|sep|>")
             prefix = prefix.removeprefix("<|bos|>")
