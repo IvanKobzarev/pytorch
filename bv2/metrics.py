@@ -25,11 +25,7 @@ class WandbLogger:
         if self.rank != 0:
             return
 
-        user_login_key = os.environ.get("WANDB_API_KEY")
-        if user_login_key is None:
-            raise ValueError("Please set WANDB_API_KEY env var.")
-        # wandb.login(host="https://meta.wandb.io/", key=user_login_key)
-        wandb.login(host="https://fairwandb.org", key=user_login_key)
+        wandb.login()
 
         config["env"] = {k: v for k, v in os.environ.items() if "key" not in k.lower()}
         config["PID"] = os.getpid()
