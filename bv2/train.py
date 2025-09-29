@@ -164,6 +164,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     peak_mems = []
     step_times = []
+    t_prev_step_end = perf_counter()
     prof = c.nsteps > 50 and profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         record_shapes=True,
@@ -207,6 +208,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         wlogger.log({"chrono/examples_seen": examples_seen})
         wlogger.log({"chrono/num_examples": num_examples})
         wlogger.log({"chrono/percent": (step + 1) / c.nsteps})
+        all_max_epoch = u.all_gather_object(max(s["ep"] for s in data["state_after"]))
+        wlogger.log({"chrono/epoch": max(all_max_epoch)})
 
         loss, extras = _fwd_and_bwd_step(
             c.wd * sched,
@@ -233,6 +236,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         peak_mems.append(torch.cuda.max_memory_allocated() / 1024**2)  # MiB
         wlogger.log({"chrono/steptime": step_times[-1]})
         wlogger.log({"chrono/peakmem": peak_mems[-1]})
+        wlogger.log({"chrono/datawait": t0 - t_prev_step_end})
 
         # Checkpoint, but note this is *after* `step`'s update, so +1.
         ckpt_future = maybe_save_ckpt(
@@ -288,6 +292,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
         log_pg(model, wlogger)
         wlogger.end_step()
+        t_prev_step_end = perf_counter()
 
     prints(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
     prints(f"Step times (med: {np.median(step_times):.1f}ms): {' '.join(f'{t:.0f}' for t in step_times)}")  # fmt: skip

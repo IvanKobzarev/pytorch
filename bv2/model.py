@@ -218,6 +218,7 @@ class TxtUnembedding(nn.Module):
         extras = {
             "lsum": total_lsum,
             "pplx": total_pplx,
+            "tokacc/correct": total_correct,
             "tokacc/micro/acc": micro_acc,
             "predictions": predictions,
             "tok_losses": tok_losses,

@@ -5,7 +5,9 @@ import bv2.utils as u  # isort: skip
 def run(predict_fn, data_iter):
     # These are all things we collect PER PROCESS/GPU in the loop.
     # We'll summarize across processes once at the end.
-    tokens_seen, examples_seen, total_pplx, total_lsum, total_loss_w = 0, 0, 0, 0, 0
+    tokens_seen, examples_seen = 0, 0
+    total_pplx, total_lsum, total_correct = 0, 0, 0
+    total_loss_w, total_loss_toks = 0, 0
 
     for step, data in enumerate(data_iter(max_ep=1)):
         # Before making any step, figure out if all ranks are done.
@@ -24,28 +26,28 @@ def run(predict_fn, data_iter):
         examples_seen += num_examples
 
         total_loss_w += data["loss_weights"].sum().item()
+        total_loss_toks += (data["loss_weights"] > 0).sum().item()
         total_pplx += extras["pplx"].item()
         total_lsum += extras["lsum"].item()
+        total_correct += extras["tokacc/correct"].item()
 
-    # Get all sum/info to rank0
-    if all_info := u.gather_object_to(rank=0, obj=dict(
+    # Get all sum/info to rank0. `g` stands for `globally`.
+    if g := u.sum_to(
+        rank=0,
         tokens_seen=tokens_seen,
         examples_seen=examples_seen,
         total_loss_w=total_loss_w,
+        total_loss_toks=total_loss_toks,
         total_lsum=total_lsum,
-        total_pplx=total_pplx
-    )):
-        tokens_seen = sum(i["tokens_seen"] for i in all_info)
-        examples_seen = sum(i["examples_seen"] for i in all_info)
-        total_loss_w = sum(i["total_loss_w"] for i in all_info)
-        total_lsum = sum(i["total_lsum"] for i in all_info)
-        total_pplx = sum(i["total_pplx"] for i in all_info)
+        total_pplx=total_pplx,
+        total_correct=total_correct,
+    ):
         return {
-            "loss": total_lsum / total_loss_w,
-            "pplx": total_pplx / examples_seen,
-            "bits": total_pplx / examples_seen / 0.6931471805599453,
+            "loss": g["total_lsum"] / g["total_loss_w"],
+            "pplx": g["total_pplx"] / g["examples_seen"],
+            "bits": g["total_pplx"] / g["examples_seen"] / 0.6931471805599453,
+            "tacc": g["total_correct"] / g["total_loss_toks"],
         }
-    return {}
 
 
 # Everything below is to run a test that verifies the pipeline on multi-process when

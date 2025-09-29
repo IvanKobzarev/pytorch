@@ -24,6 +24,11 @@ def gather_object_to(rank, obj, world_size=None, my_rank=None):
     return all_objs if my_rank == rank else None
 
 
+def sum_to(rank, *, world_size=None, my_rank=None, **objs):
+    if all_objs := gather_object_to(rank, objs, world_size=world_size, my_rank=my_rank):
+        return {k: sum(o[k] for o in all_objs) for k in objs}
+
+
 def broadcast_object_from(rank, obj, world_size=None, my_rank=None):
     world_size = world_size or distr.get_world_size()
     my_rank = my_rank if my_rank is not None else distr.get_rank()
