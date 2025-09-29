@@ -186,13 +186,12 @@ class OverlapScheduler:
 
     def __init__(
         self,
-        gm: torch.fx.GraphModule,
+        graph: torch.fx.Graph,
         max_in_flight_gb: float = 2.0,
         compute_overlap_multipler: float = 2.0,
         max_coll_distance: int = 1000,
     ):
-        self.gm = gm
-        self.graph = gm.graph
+        self.graph = graph
         self.compute_overlap_multipler = compute_overlap_multipler
         self.max_node_distance = max_coll_distance
         self.max_in_flight_bytes: int = int(max_in_flight_gb * 1024 * 1024 * 1024)
@@ -305,7 +304,7 @@ class OverlapScheduler:
 
         return compute_depth_dominance
 
-    def run(self) -> torch.fx.GraphModule:
+    def run(self) -> torch.fx.Graph:
         """Run the scheduling algorithm."""
 
         while self.ready:
@@ -331,7 +330,7 @@ class OverlapScheduler:
         self._reorder_graph()
         if torch._inductor.config.test_configs.aten_fx_overlap_preserving_bucketing:
             self._bucket_collectives()
-        return self.gm
+        return self.graph
 
     def _handle_other(self, node: fx.Node) -> None:
         self._schedule(node)
@@ -654,7 +653,7 @@ class OverlapScheduler:
 
 
 def schedule_overlap_bucketing(
-    gm: torch.fx.GraphModule,
+    graph: torch.fx.Graph,
     max_in_flight_gb: float = 2.0,
     compute_overlap_multipler: float = 1.0,
     max_coll_distance: int = 1000,
@@ -668,7 +667,7 @@ def schedule_overlap_bucketing(
         max_coll_distance: Maximum node distance for overlap consideration.
     """
     return OverlapScheduler(
-        gm,
+        graph,
         compute_overlap_multipler=compute_overlap_multipler,
         max_in_flight_gb=max_in_flight_gb,
         max_coll_distance=max_coll_distance,
