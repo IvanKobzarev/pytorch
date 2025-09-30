@@ -1,0 +1,13 @@
+#!/bin/bash
+
+MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+MASTER_PORT=$((10000 + SLURM_JOB_ID % 50000))
+
+set -x
+# TODO: Seems like this is not needed - and in fact doesn't work,
+#       when launched while the env is already active?
+conda activate cenv
+pwd
+cd `dirname ${BASH_SOURCE[0]}`/../..
+pwd
+torchrun --nnodes="$SLURM_NNODES" --nproc_per_node=gpu --rdzv_backend=c10d --rdzv_endpoint="${MASTER_ADDR}:${MASTER_PORT}" --rdzv_id="$SLURM_JOB_ID" "$@"

@@ -1,0 +1,20 @@
+#!/bin/bash
+# NOTE: this needs to run from
+#SBATCH --job-name=bv2-nightly
+#SBATCH --account rigi
+#SBATCH --qos h200_dev
+#SBATCH --exclusive
+#SBATCH --mem=0
+#SBATCH --gpus-per-node=2
+#SBATCH --time=00:10:00
+#SBATCH --output=/checkpoint/rigi/bv2/nightlies/run_%j.txt
+
+echo "Running job at $(date)"
+~/rigi/bv2/tools/launch_fair_srun -m bv2.train
+
+# Re-submit the job
+echo "Rescheduling for later $0"
+sbatch --begin=now+1day "$0"
+
+sleep 10
+echo "Bye!"
