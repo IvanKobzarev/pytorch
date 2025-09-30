@@ -19,4 +19,4 @@ for a in "$@"; do
   ((split)) && job_args+=("$a") || rsc_args+=("$a")
 done
 
-yarc rsc remote srun --ntasks-per-node=1 "${rsc_args[@]}" ./rsc/bv2/tools/launch_srun "${job_args[@]}"
+yarc rsc remote srun --ntasks-per-node=1 "${rsc_args[@]}" ./rsc/bv2/tools/launch_rsc_srun "${job_args[@]}"
