@@ -9,11 +9,18 @@
 #SBATCH --time=00:10:00
 #SBATCH --output=/checkpoint/rigi/bv2/nightlies/run_%j.txt
 
-echo "Running job at $(date)"
+echo "Start nightly at $(date)"
+cd ~/rigi-nightly
+
+echo "Updating git..."
+GIT_SSH_COMMAND='ssh -i ~/.ssh/github_readonly' git fetch origin
+git reset --hard origin/main
+
+echo "Running job..."
 ~/rigi/bv2/tools/launch_fair_srun -m bv2.train
 
 # Re-submit the job
-echo "Rescheduling for later $0"
+echo "Rescheduling for in a day: $0"
 sbatch --begin=now+1day "$0"
 
 sleep 10
