@@ -163,8 +163,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     ckpt_future = None
 
     peak_mems = []
-    step_times = []
-    t_prev_step_end = perf_counter()
+    train_times = []
+    t0 = t_prev_step_end = perf_counter()
     prof = c.nsteps > 50 and profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         record_shapes=True,
@@ -181,7 +181,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             c.maxtok, device, rank, world_size, data_seed, resumed_epoch, resumed_i
         ),
     ):
-        t0 = perf_counter()
+        tprev, t0 = t0, perf_counter()
         torch.cuda.reset_peak_memory_stats()
         torch.cuda.synchronize()
         if prof and step == 3:
@@ -232,10 +232,11 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         )
 
         torch.cuda.synchronize()
-        step_times.append((perf_counter() - t0) * 1000)  # ms
+        train_times.append((perf_counter() - t0) * 1000)  # ms
         peak_mems.append(torch.cuda.max_memory_allocated() / 1024**2)  # MiB
-        wlogger.log({"chrono/steptime": step_times[-1]})
         wlogger.log({"chrono/peakmem": peak_mems[-1]})
+        wlogger.log({"chrono/traintime": train_times[-1]})
+        wlogger.log({"chrono/steptime": tprev - t0})
         wlogger.log({"chrono/datawait": t0 - t_prev_step_end})
 
         # Checkpoint, but note this is *after* `step`'s update, so +1.
@@ -295,7 +296,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         t_prev_step_end = perf_counter()
 
     prints(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
-    prints(f"Step times (med: {np.median(step_times):.1f}ms): {' '.join(f'{t:.0f}' for t in step_times)}")  # fmt: skip
+    prints(f"Step times (med: {np.median(train_times):.1f}ms): {' '.join(f'{t:.0f}' for t in train_times)}")  # fmt: skip
     torch._dynamo.reset()  # Avoid hang: https://x.com/main_horse/status/1937900381574717940
     if ckpt_future:
         ckpt_future.result()
