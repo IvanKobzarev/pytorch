@@ -3,6 +3,7 @@
 #SBATCH --account rigi
 #SBATCH --exclusive
 #SBATCH --mem=0
+#SBATCH --time=7-0:0:0
 #SBATCH --output=/checkpoint/rigi/bv2/slurm_out/%u/%j.txt
 
 MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
