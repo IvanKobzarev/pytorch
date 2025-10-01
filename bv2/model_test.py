@@ -1,6 +1,7 @@
 import functools
 
 import numpy as np
+import pytest
 import torch
 
 from torch.nn.attention.flex_attention import create_block_mask
@@ -10,6 +11,7 @@ import bv2.data.pp as pp  # usort: skip
 import bv2.model as model  # usort: skip
 
 
+@pytest.mark.gpu
 def test_model_simple():
     """Simple model test.
 
@@ -63,6 +65,7 @@ def test_model_simple():
     x, extra = m(data, mask, loss_weights, seqids, mode="loss")
 
 
+@pytest.mark.gpu
 def test_model_batching():
     device = torch.device("cuda")
     patch_size = 4
