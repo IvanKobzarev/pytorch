@@ -17,7 +17,7 @@ GIT_SSH_COMMAND='ssh -i ~/.ssh/github_readonly' git fetch origin
 git reset --hard origin/main
 
 echo "Running job..."
-~/rigi/bv2/tools/launch_fair_srun -m bv2.train
+~/rigi/bv2/tools/launch_fair_srun -m bv2.train name:=nightly_random_nouns_`date +'%y-%m-%d-%a'`
 
 # Re-submit the job
 echo "Rescheduling for in a day: $0"
