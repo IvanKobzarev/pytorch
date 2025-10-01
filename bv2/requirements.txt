@@ -1,10 +1,11 @@
+bagz
 blobfile
 einops
-numpy
 ipdb
+numpy
+pillow
+pytest
 rich
+sws-config
 tiktoken
 wandb
-sws-config
-bagz
-pytest
