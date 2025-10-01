@@ -236,7 +236,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         peak_mems.append(torch.cuda.max_memory_allocated() / 1024**2)  # MiB
         wlogger.log({"chrono/peakmem": peak_mems[-1]})
         wlogger.log({"chrono/traintime": train_times[-1]})
-        wlogger.log({"chrono/steptime": tprev - t0})
+        wlogger.log({"chrono/steptime": t0 - tprev})
         wlogger.log({"chrono/datawait": t0 - t_prev_step_end})
 
         # Checkpoint, but note this is *after* `step`'s update, so +1.
