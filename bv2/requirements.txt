@@ -1,8 +1,6 @@
--r requirements-torch-nightly.txt
 blobfile
 einops
 numpy
-matplotlib
 ipdb
 rich
 tiktoken

@@ -1,0 +1,4 @@
+# Separate file because --pre is a global flag, but I only want it for torch stuff:
+--extra-index-url https://download.pytorch.org/whl/nightly/cpu
+--pre
+torch
