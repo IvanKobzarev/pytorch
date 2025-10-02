@@ -1,0 +1,20 @@
+#!/bin/bash
+
+# NOTE both do not end with a slash.
+SRC="${1:-$HOME/rigi}"
+DST="${2:-fair-sc-3:~/rigi}"
+
+# ENSURE that both do not end with a slash.
+SRC="${SRC%/}"
+DST="${DST%/}"
+# However, below we'll always USE SRC with a slash and DST without.
+
+# Initial sync
+rsync -az --delete "$SRC/" "$DST"
+echo "Files synchronized at" `date`
+
+# Watch for modify/create/delete events recursively and rsync again on any event
+while inotifywait -r -e modify,create,delete,move "$SRC/"; do
+    rsync -az --delete "$SRC/" "$DST"
+    echo "Files synchronized at" `date`
+done
