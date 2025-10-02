@@ -3,7 +3,6 @@
 """
 
 import numpy as np
-import wandb
 from PIL import Image, ImageDraw
 
 import bv2.data.dpack as d  # isort: skip
@@ -152,6 +151,7 @@ class Dataset:
         return image
 
     def vis_output_wandb(self, data, preds, max_examples=20):
+        import wandb  # Local import to not pollute tests with silly warnings.
         t = _get_tiktoken()
         table = wandb.Table([
             "input_text",

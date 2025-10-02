@@ -8,7 +8,6 @@ Bento: https://fburl.com/anp/9dej90z4
 from functools import cache
 
 import numpy as np
-import wandb
 from PIL import Image, ImageDraw, ImageFont
 
 import bv2.data.dpack as d  # isort: skip

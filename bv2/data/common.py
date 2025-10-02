@@ -2,7 +2,6 @@ from functools import cache
 
 import bagz
 import numpy as np
-import wandb
 
 import bv2.data.dpack as d  # isort: skip
 from bv2.data.pp import unpatchify  # isort: skip
@@ -59,6 +58,7 @@ def vis_image_text_unpack(tokens, *, ph, pw):
 
 
 def vis_image_text_wandb(data, tiktoken, *, ph, pw):
+    import wandb  # Local import to not pollute tests with silly warnings.
     table = wandb.Table(["id", "text", "image"])
 
     tokens = data["tokens"].cpu()

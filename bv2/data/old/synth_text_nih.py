@@ -7,7 +7,6 @@ Needle in a haystack task:
 
 import numpy as np
 
-import wandb
 from data import dpack
 
 from data.dpack import pack_text
@@ -67,6 +66,7 @@ def vis_example(tokens, loss_weights):
 
 
 def vis_data_wandb(data):
+    import wandb  # Local import to not pollute tests with silly warnings.
     table = wandb.Table(["id", "prompt", "target", "prompt tokens", "target tokens"])
 
     tokens = data["tokens"].cpu()
