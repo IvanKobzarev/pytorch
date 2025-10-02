@@ -5,6 +5,7 @@ ipdb
 numpy
 pillow
 pytest
+pytest-json-report
 rich
 sws-config
 tiktoken
