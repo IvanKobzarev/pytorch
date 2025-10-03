@@ -37,9 +37,10 @@ OUTDIR = "/checkpoint/rigi/data/deduped_code/"
 def zip_datum(txt, meta):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
-        # For this data, lzma and deflated don't have much compression difference.
-        # However, lzma is about 10x slower to compress (and likely decompress).
-        # Both are about 3.8x smaller than plain ZIP_STORED though, so they are worth!
+        # For this data, the compression tradeoffs are as follows. For 500k rows:
+        # lzma-9:    93MB in 1076s
+        # deflate-9: 92MB in  142s
+        # store:    322MB in   53s
         z.writestr("txt.json", json.dumps(txt), zipfile.ZIP_DEFLATED, 9)
         z.writestr("meta.json", json.dumps(meta), zipfile.ZIP_DEFLATED, 9)
     return buf.getvalue()
