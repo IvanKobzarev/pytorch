@@ -515,7 +515,10 @@ def maybe_load_ckpt(path, model, optim, extras):
     )
 
     with open(pjoin(path, "extras.json"), "r") as f:
-        return json.load(f)[distr.get_rank()]
+        extras = json.load(f)
+        if len(extras) == (w := distr.get_world_size()):
+            raise RuntimeError(f"World size changed: {len(extras)} != {w}")
+        return extras[distr.get_rank()]
 
 
 # ---- END CHECKPOINTING ----
