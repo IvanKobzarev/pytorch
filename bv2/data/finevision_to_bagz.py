@@ -2,7 +2,7 @@
 Convert FineVision datasets from parquet format to sharded bagz format.
 
 Usage:
-python finevision_to_bagz.py --data_path /home/zhai/tmp/data/FineVision --output_base /home/zhai/tmp/data/t1
+python bv2/data/finevision_to_bagz.py --data_path /checkpoint/rigi/zhai/tmp/data/FineVision --output_base /checkpoint/rigi/zhai/tmp/data/t1
 """
 
 import argparse
@@ -158,15 +158,19 @@ def main():
     args = parser.parse_args()
     # fmt:on
 
+    data_path = Path(args.data_path)
     processed_shards = 0
-    # Only train splits available for FineVision.
-    total_shards = len(list(Path(args.data_path).glob("*/train/*.parquet")))
-    for dataset_dir in Path(args.data_path).iterdir():
-        parquet_files = sorted(dataset_dir.glob("train/*.parquet"))
+
+    # 178 datasets in "*/train/", 3 datasets in "*/partial-train/", 4 datasets in "*/"
+    total_parquets = len(list(data_path.glob("*/*train/*.parquet"))) + len(list(data_path.glob("*/*.parquet")))
+
+    for dataset_dir in data_path.iterdir():
+        parquet_files = (sorted(dataset_dir.glob("*train/*.parquet")) or
+                        sorted(dataset_dir.glob("*.parquet")))
         if not parquet_files:
             continue
 
-        print(f"[{processed_shards}/{total_shards}] {time.time() - start_time:.2f}s")
+        print(f"[{processed_shards}/{total_parquets}] {time.time() - start_time:.2f}s")
         output_dir = Path(args.output_base) / dataset_dir.name
         output_dir.mkdir(parents=True, exist_ok=True)
 
