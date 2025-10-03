@@ -271,7 +271,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             # TODO: put all of this into a util in evals, maybe?
             em = import_module(f"bv2.eval.{c.evals[eval].type}")
             _, ev_data_iter = bv2.simple_data.from_config(c.evals[eval])
-            ev_data_iter = partial(ev_data_iter, maxtok=c.maxtok, device=device)
+            ev_data_iter = partial(ev_data_iter, c.maxtok, device, rank, world_size)
             with torch.no_grad():
                 if results := em.run(_fwd, ev_data_iter):
                     wlogger.log({f"{eval}/{k}": v for k, v in results.items()})
