@@ -1,0 +1,65 @@
+import json
+from io import BytesIO
+from zipfile import ZipFile
+
+import numpy as np
+
+import bv2.data.dpack as d  # usort: skip
+from bv2.data.common import get_bagz_reader, sharded_iota_exids  # usort: skip  # fmt: skip
+from bv2.data.pp import sanity_check
+
+
+PATH = {
+    "train": "/checkpoint/rigi/data/deduped_code/train@256.bag",
+    "val": "/checkpoint/rigi/data/deduped_code/val@32.bag",
+}
+
+
+class Dataset:
+    def __init__(self, split):
+        # Idea: here or in pp: randomize sub-seqlen, because many are >32k!
+        self.fspec = PATH[split]
+
+    @property
+    def reader(self):  # BagzReader is not picklable. Create and cache per-process.
+        return get_bagz_reader(self.fspec)  # This is functools.cache'd
+
+    def make_example(self, exid, epoch):
+        with ZipFile(BytesIO(self.reader[exid])) as zf:
+            data = json.load(zf.open("txt.json"))
+            # NOTE: Not using "meta.json" here yet.
+
+        t = _get_tiktoken()
+        toks = t.encode(data)
+
+        return sanity_check({
+            "tokens": d.pack_text(np.r_[t.bos, toks, t.eos], positions="auto"),
+            "loss_weights": np.r_[0, [1] * len(toks), 1],
+            "attn_regions": np.zeros(2 + len(toks), int),  # 0 = AR
+            "id": exid,
+        })  # fmt: skip
+
+    def make_exids(self, *a, **kw):
+        return sharded_iota_exids(len(self.reader), *a, **kw)
+
+    def vocab_size(self):
+        return _get_tiktoken().n_vocab
+
+    def vis_data_wandb(self, data):
+        import wandb  # Local import to not pollute tests with silly warnings.
+        table = wandb.Table(["id", "text"])
+
+        tokens = data["tokens"].cpu()
+        iseq = data["iseq"].cpu()
+
+        for _id in range(iseq.max() + 1):
+            txt, _, mask = d.unpack_as_text(tokens[iseq == _id])
+            txt = txt.numpy()[mask.numpy()]
+            table.add_data(_id, _get_tiktoken().decode(txt))
+
+        return table
+
+
+def _get_tiktoken():
+    import bv2.data.tokenizer
+    return bv2.data.tokenizer.get_tiktoken()
