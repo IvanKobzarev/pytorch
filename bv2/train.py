@@ -174,6 +174,25 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         with_modules=True,
     )
 
+    # Eval loop is reused, so we wrap it as a function
+    def run_evals(step):
+        """Run evaluations for a given step if conditions are met."""
+        for ev in c.get("evals", {}):
+            is_every_n_steps = step % c.evals[ev].steps == 0
+            is_final = step == c.nsteps
+            if not(is_every_n_steps) and not(is_final):
+                continue
+            em = import_module(f"bv2.eval.{c.evals[ev].type}")
+            _, ev_data_iter = bv2.simple_data.from_config(c.evals[ev])
+            ev_data_iter = partial(ev_data_iter, c.maxtok, device, rank, world_size)
+            with torch.no_grad():
+                if results := em.run(_fwd, ev_data_iter):
+                    wlogger.log({f"{ev}/{k}": v for k, v in results.items()})
+            # TODO: Check how switching train/eval mode (dropout) interacts with compile
+
+    if not c.get("skip_initial_eval", False):
+        run_evals(first_step)
+
     # NOTE: this way of timing misses waits for data.
     for step, data in zip(
         range(first_step, c.nsteps),
@@ -231,7 +250,12 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             {f"loss/{k}": v.item() for k, v in extras.items() if v.numel() == 1}
         )
 
+
+        # After the update is done, we are at the step+1
         torch.cuda.synchronize()
+        wlogger.end_step()
+        step += 1
+
         train_times.append((perf_counter() - t0) * 1000)  # ms
         peak_mems.append(torch.cuda.max_memory_allocated() / 1024**2)  # MiB
         wlogger.log({"chrono/peakmem": peak_mems[-1]})
@@ -241,7 +265,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
         # Checkpoint, but note this is *after* `step`'s update, so +1.
         ckpt_future = maybe_save_ckpt(
-            step + 1, model, optim, workdir, last_future=ckpt_future, extras={
+            step, model, optim, workdir, last_future=ckpt_future, extras={
                 "data": {"seed": data_seed, **data["state_after"][-1]},
                 "tokens_seen": tokens_seen,
                 "examples_seen": examples_seen,
@@ -261,21 +285,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             wlogger.log_file(pjoin(workdir, f"prof_trace_r{rank}.json.gz"))
             wlogger.log_file(pjoin(workdir, f"prof_stacks_cpu_r{rank}.txt"))
 
-        # We always run evals after checkpointing is over, because especially a large
-        # set of final evals may take a long time (hours+) and we don't want to lose
-        # the final checkpoint if we get pre-empted during evals!
-        for eval in c.get("evals", {}):
-            # Step + 1 because this is *after* the update, think of "eval at step 0".
-            if (step + 1) % c.evals[eval].steps != 0:
-                continue
-            # TODO: put all of this into a util in evals, maybe?
-            em = import_module(f"bv2.eval.{c.evals[eval].type}")
-            _, ev_data_iter = bv2.simple_data.from_config(c.evals[eval])
-            ev_data_iter = partial(ev_data_iter, c.maxtok, device, rank, world_size)
-            with torch.no_grad():
-                if results := em.run(_fwd, ev_data_iter):
-                    wlogger.log({f"{eval}/{k}": v for k, v in results.items()})
-            # TODO: Check how switching train/eval mode (dropout) interacts with compile
+        run_evals(step)
 
         # visualize input tokens
         if c.nsteps >= 50 and step == 8:
@@ -292,7 +302,6 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         distr.barrier()  # Just for simplicity for now.
 
         log_pg(model, wlogger)
-        wlogger.end_step()
         t_prev_step_end = perf_counter()
 
     prints(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
