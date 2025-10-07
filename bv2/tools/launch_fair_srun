@@ -1,8 +1,16 @@
-#!/bin/bash
+#!/usr/bin/bash
 
-#SBATCH --account rigi
-#SBATCH --exclusive
-#SBATCH --mem=0
+# NOTES for scheduling: an 8 H200 machine has 192 CPUs and 2047959MB RAM
+# The defaults set below are such that when requesting 8 GPUs, all CPUs and
+# nearly all RAM is requested, so it's ~equivalent to asking for --exclusive
+# but also allows easier scheduling when asking for less than 8 GPUs.
+#
+# Command to find out the node configurations and their counts:
+# echo "COUNT  CPUs RAM (MB) GRES"; sinfo -N -o "%c %m %G" -p h200 | tail -n +2 | sort | uniq -c
+
+#SBATCH --account=rigi
+#SBATCH --cpus-per-gpu=24
+#SBATCH --mem-per-gpu=255000
 #SBATCH --time=7-0:0:0
 #SBATCH --output=/checkpoint/rigi/bv2/slurm_out/%u/%j.txt
 set -x
