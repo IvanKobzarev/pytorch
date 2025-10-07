@@ -56,7 +56,7 @@ if __name__ == "__main__":
     # distinguish them by the combination of "--" and "=".
     if "--" in sys.argv:
         slurm_args = sys.argv[2:sys.argv.index("--")]
-        sws_args = sys.argv[sys.argv.index("--"):]
+        sws_args = sys.argv[sys.argv.index("--") + 1:]
     else:
         _is_sws = lambda a: "=" in a and not "--" in a
         slurm_args = [a for a in sys.argv[2:] if not _is_sws(a)]
