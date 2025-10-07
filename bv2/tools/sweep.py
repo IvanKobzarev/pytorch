@@ -2,7 +2,7 @@
 """
 Example call flexing all features (while being realistic):
 
-python bv2/tools/launch.py bv2/config/code.py --qos h200_lowest --gpus-per-node 2 nsteps=100 "name:=lambda c: f'code-test-{c.xid}-{c.wid}'"
+python bv2/tools/sweep.py bv2/config/code.py --qos h200_lowest --gpus-per-node 2 nsteps=100 "name:=lambda c: f'code-test-{c.xid}-{c.wid}'"
 
 Here's an example of defining a sweep in a config file.
 The important part is to return a collection of argument sequences.
