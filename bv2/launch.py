@@ -2,7 +2,7 @@
 """
 Example call flexing all features (while being realistic):
 
-python bv2/tools/sweep.py bv2/config/code.py --qos h200_lowest --gpus-per-node 2 nsteps=100 "name:=lambda c: f'code-test-{c.xid}-{c.wid}'"
+python bv2/launch.py bv2/config/code.py --qos h200_lowest --gpus-per-node 2 nsteps=100 "name:=lambda c: f'code-test-{c.xid}-{c.wid}'"
 
 Here's an example of defining a sweep in a config file.
 The important part is to return a collection of argument sequences.
@@ -24,6 +24,8 @@ sweep = lambda: [
     for wd in [1.0, 0.1, 0.0]
     for nsteps in [10_000, 30_000, 100_000]
 ]
+
+If there is no sweep function in the config, it just launches the single job.
 """
 
 import re
@@ -47,7 +49,9 @@ if __name__ == "__main__":
     # First, get the sweep function out of the config file.
     conf_file = sys.argv[1]
     assert conf_file.endswith(".py"), "First argument of sweep needs to be config file."
-    sweep_fn = run_path(conf_file).get("sweep", lambda: ())
+
+    # The default sweep function returns a single run, with empty arg overrides:
+    sweep_fn = run_path(conf_file).get("sweep", lambda: [[]])
 
     # Second, separate the slurm arguments from the (optional) sws override args.
     # If a lone "--" is provided, slurm args are to its left, and sws to its right.
