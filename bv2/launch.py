@@ -66,7 +66,7 @@ if __name__ == "__main__":
         slurm_args = [a for a in sys.argv[2:] if not _is_sws(a)]
         sws_args = [a for a in sys.argv[2:] if _is_sws(a)]
 
-    xid = datetime.now().strftime('%Y%m%d-%H%M%S')
+    xid = datetime.now().strftime('%m%d_%H%M%S')
 
     # Construct the common part of the launch command:
     slurm = ["sbatch", *slurm_args, "--job-name", xid, "bv2/tools/launch_fair_srun"]
@@ -86,7 +86,7 @@ if __name__ == "__main__":
             print(f"{log_xwid} | {log_args}", end="", flush=True)
 
             ret = subprocess.run(
-                [*slurm, *torch, *work_unit_args, f"xid:={xid}", f"wid:={wid}", *sws_args],
+                [*slurm, *torch, *work_unit_args, f"xid:=\"{xid}\"", f"wid:={wid}", *sws_args],
                 capture_output=True, text=True, shell=False)
 
             if ret.returncode == 0:
