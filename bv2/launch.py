@@ -2,7 +2,7 @@
 """
 Example call flexing all features (while being realistic):
 
-python bv2/launch.py bv2/config/code.py --qos h200_lowest --gpus-per-node 2 nsteps=100 "name:=lambda c: f'code-test-{c.xid}-{c.wid}'"
+python bv2/launch.py bv2/config/code.py --qos h200_lowest --gpus-per-node 2 nsteps=100 'name:=f"code-test-{c.xid}-{c.wid}"'
 
 Here's an example of defining a sweep in a config file.
 The important part is to return a collection of argument sequences.
@@ -67,7 +67,6 @@ if __name__ == "__main__":
         sws_args = [a for a in sys.argv[2:] if _is_sws(a)]
 
     xid = datetime.now().strftime('%Y%m%d-%H%M%S')
-    sws_args.append(f"xid:={xid}")
 
     # Construct the common part of the launch command:
     slurm = ["sbatch", *slurm_args, "--job-name", xid, "bv2/tools/launch_fair_srun"]
@@ -87,7 +86,7 @@ if __name__ == "__main__":
             print(f"{log_xwid} | {log_args}", end="", flush=True)
 
             ret = subprocess.run(
-                [*slurm, *torch, *work_unit_args, *sws_args, f"wid:={wid}"],
+                [*slurm, *torch, *work_unit_args, f"xid:={xid}", f"wid:={wid}", *sws_args],
                 capture_output=True, text=True, shell=False)
 
             if ret.returncode == 0:

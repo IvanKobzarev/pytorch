@@ -476,7 +476,6 @@ def maybe_save_ckpt(step, model, optim, workdir, extras=None, last_future=None):
     if last_future is not None:  # Wait for last one to finish.
         last_future.result()
 
-    # TODO: Add workdir to the name.
     path = pjoin(workdir, "latest")
     print(f"Checkpointing to {path}")
 
