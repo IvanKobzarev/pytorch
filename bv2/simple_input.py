@@ -36,7 +36,7 @@ def iter_packed_examples(
     *,
     leader="tokens",
     debugid="id",
-    dont_repeat=("id", "rng_state_before"),
+    dont_repeat=("id", "state_after"),
 ):
     """Numpy arrays get packed, anything else gets repeated. Add `iseq` counter."""
 
