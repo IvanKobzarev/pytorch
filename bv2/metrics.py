@@ -38,12 +38,11 @@ class WandbLogger:
             config=config,
             settings=wandb.Settings(quiet=True),
             tags=[config.get("data_name", "N/A")],
-            # Interestingly, the two below ({resume,fork}_from) aren't supported yet, but
-            # this simple approach reusing ID and our manual steps, seems to work already.
+            # I tried using both {resume,fork}_from arguments for resuming, but they
+            # aren't supported in FAIR's current WandB instance, only in wandb.io ones.
+            # However, this simple approach reusing ID and our manual steps, seems to work:
             id=resume,
             resume="allow",
-            # resume_from=f"{resume}?_step={self.step}" if resume else None,
-            # fork_from=f"{resume}?_step={self.step}" if resume else None,
         )
 
         self.step_metrics = {}
