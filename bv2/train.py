@@ -155,6 +155,10 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         c.to_dict(), rank, name, workdir, project="bv2" if c.nsteps > 50 else "bv2-dev",
         resume=(extras or {}).get("metrics"), first_step=first_step,
     )
+    # Log once more here for two reasons: (1) track in wandb and (2) after ckpt resume.
+    if rank == 0:
+        summary_table(model, stats=c.get("param_stats", False))
+    prints0(model)
     log_pg(model, wlogger)
 
     ckpt_future = None
