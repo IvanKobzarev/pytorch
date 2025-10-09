@@ -276,14 +276,11 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             # Otherwise the .pkl becomes too big and freezes chrome.
             # Drag .pkl file to https://docs.pytorch.org/memory_viz
             torch.cuda.memory._dump_snapshot(pjoin(workdir, f"prof_memsnap_r{rank}.pkl"))  # fmt: skip
-            wlogger.log_file(pjoin(workdir, f"prof_memsnap_r{rank}.pkl"))
         if prof and step == 6:  # Open in about://tracing or ui.perfetto.dev
             torch.cuda.cudart().cudaProfilerStop()
             prof.stop()  # TODO: speedup gz
             prof.export_chrome_trace(pjoin(workdir, f"prof_trace_r{rank}.json.gz"))
             prof.export_stacks(pjoin(workdir, f"prof_stacks_cpu_r{rank}.txt"))
-            wlogger.log_file(pjoin(workdir, f"prof_trace_r{rank}.json.gz"))
-            wlogger.log_file(pjoin(workdir, f"prof_stacks_cpu_r{rank}.txt"))
 
         run_evals(step)
 
@@ -291,7 +288,6 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         if c.nsteps >= 50 and step == 8:
             with open(pjoin(workdir, "data.pt"), "wb") as f:
                 torch.save({k: v for k, v in data.items() if k != "flex_masks"}, f)
-                wlogger.log_file(pjoin(workdir, "data.pt"))
             if hasattr(ds, "vis_data_wandb"):
                 wlogger.log({f"vis/data{step}": ds.vis_data_wandb(data)})
 
