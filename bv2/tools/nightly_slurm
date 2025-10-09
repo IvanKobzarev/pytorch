@@ -9,23 +9,25 @@
 #SBATCH --time=00:15:00
 #SBATCH --output=/checkpoint/rigi/bv2/nightlies/z_run_%j.txt
 
-DATE=$(date +%y-%m-%d-%a_%H%M%S)
+WHICH_ONE=$(date +%y-%m-%d-%a_%H%M%S)
 
 # SBATCH doesn't have something with date for filename, so we redirect.
-exec > /checkpoint/rigi/bv2/nightlies/run_${DATE}.txt 2>&1
+exec > "/checkpoint/rigi/bv2/nightlies/run_${WHICH_ONE}.txt" 2>&1
 
-echo "Start nightly at ${DATE}"
+echo "Start nightly at ${WHICH_ONE}"
 cd ~/rigi-nightly
 
 echo "Updating git..."
 GIT_SSH_COMMAND='ssh -i ~/.ssh/github_readonly' git fetch origin
-git reset --hard origin/main
+git clean -fd  # Remove any local untracked files which may inhibit branch switch.
+git reset --hard  # Drop any changes on tracked files
+git checkout -B main origin/main  # Go to main, whether it exists or not yet.
 
 echo "Running GPU-based unit tests..."
 python -m pytest -s bv2 -m gpu --json-report --json-report-file=report.json
 
 echo "Running job..."
-~/rigi/bv2/tools/launch_fair_srun -m bv2.train name:=nightly_random_nouns_${DATE}
+~/rigi/bv2/tools/launch_fair_srun -m bv2.train "name:=nightly_random_nouns_${WHICH_ONE}"
 
 # Re-submit the job
 echo "Rescheduling for in a day: $0"
