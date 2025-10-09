@@ -19,8 +19,8 @@ def only_on_rank0(func):
 
 
 class WandbLogger:
-    def __init__(self, config, rank, name, dir, entity="rigi", project="bv2"):
-        self.step = 0
+    def __init__(self, config, rank, name, dir, entity="rigi", project="bv2", first_step=0, resume=None):
+        self.step = first_step
         self.rank = rank
         if self.rank != 0:
             return
@@ -38,6 +38,12 @@ class WandbLogger:
             config=config,
             settings=wandb.Settings(quiet=True),
             tags=[config.get("data_name", "N/A")],
+            # Interestingly, the two below ({resume,fork}_from) aren't supported yet, but
+            # this simple approach reusing ID and our manual steps, seems to work already.
+            id=resume,
+            resume="allow",
+            # resume_from=f"{resume}?_step={self.step}" if resume else None,
+            # fork_from=f"{resume}?_step={self.step}" if resume else None,
         )
 
         self.step_metrics = {}
@@ -70,6 +76,10 @@ class WandbLogger:
         with open(self.fname, "a+") as f:
             f.write(js + "\n")
         self.step_metrics = {}
+
+    @only_on_rank0
+    def save_ckpt(self):
+        return self.wandb_run.id
 
 
 def remove_invalid_json_(measurements):

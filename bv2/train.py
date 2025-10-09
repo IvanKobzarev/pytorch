@@ -81,9 +81,6 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         os.makedirs(workdir, exist_ok=True)
         with open(pjoin(workdir, "config.json"), "w+") as f:
             f.write(c.to_flat_json(indent=0))
-    wlogger = WandbLogger(
-        c.to_dict(), rank, name, workdir, project="bv2" if c.nsteps > 50 else "bv2-dev"
-    )
 
     # Import and get data source. We need it early on to know vocab size.
     ds, data_iter = bv2.simple_data.from_config(c)
@@ -120,7 +117,6 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                 int(rng_param.integers(0, 2**32, world_size)[rank])
             )
             model.init_weights(rng_param)
-    log_pg(model, wlogger)
     if rank == 0:
         summary_table(model, stats=c.get("param_stats", False))
 
@@ -149,19 +145,19 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     # Potentially resume from a checkpoint, if not, init stuff.
     first_step, tokens_seen, examples_seen = 0, 0, 0
     resumed_epoch, resumed_i = 0, 0
-    if extras := maybe_load_ckpt(c.get("resume") or pjoin(workdir, "latest"), model, optim, extras={
-        "step": first_step,
-        "tokens_seen": tokens_seen,
-        "examples_seen": examples_seen,
-        "data": {"seed": data_seed, "ep": 0, "i": 0},
-    }):  # fmt: skip
+    if extras := maybe_load_ckpt(c.get("resume") or pjoin(workdir, "latest"), model, optim):  # fmt: skip
         data_seed, resumed_epoch, resumed_i = (
             extras["data"]["seed"], extras["data"]["ep"], extras["data"]["i"])  # fmt: skip
         first_step, tokens_seen, examples_seen = (
             extras["step"], extras["tokens_seen"], extras["examples_seen"])  # fmt: skip
-        wlogger.step = first_step
-    ckpt_future = None
 
+    wlogger = WandbLogger(
+        c.to_dict(), rank, name, workdir, project="bv2" if c.nsteps > 50 else "bv2-dev",
+        resume=(extras or {}).get("metrics"), first_step=first_step,
+    )
+    log_pg(model, wlogger)
+
+    ckpt_future = None
     peak_mems = []
     train_times = []
     t0 = t_prev_step_end = perf_counter()
@@ -269,6 +265,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                 "data": {"seed": data_seed, **data["state_after"][-1]},
                 "tokens_seen": tokens_seen,
                 "examples_seen": examples_seen,
+                "metrics": wlogger.save_ckpt(),
             })  # fmt: skip
 
         if prof and step == 2:
@@ -505,7 +502,7 @@ def maybe_save_ckpt(step, model, optim, workdir, extras=None, last_future=None):
     return last_future
 
 
-def maybe_load_ckpt(path, model, optim, extras):
+def maybe_load_ckpt(path, model, optim):
     if not os.path.exists(path or ""):
         return
 
