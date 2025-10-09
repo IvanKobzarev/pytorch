@@ -15,7 +15,7 @@ from bv2.data.common import get_bagz_reader, sharded_iota_exids, vis_image_text_
 from bv2.data.pp import patchify, resize_max_patches, sanity_check  # usort: skip
 
 
-PATH = "/checkpoint/vision_encoder/bv2/data/infovqa/{split}.bag"
+PATH = "/checkpoint/rigi/data/infovqa/{split}.bag"
 
 
 class Dataset:

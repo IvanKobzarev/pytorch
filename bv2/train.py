@@ -83,7 +83,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             f.write(c.to_flat_json(indent=0))
 
     # Import and get data source. We need it early on to know vocab size.
-    ds, data_iter = bv2.simple_data.from_config(c)
+    ds = bv2.simple_data.from_config(c.data.to_dict())
 
     # Create the model on "meta" device, this avoids materializing param buffers.
     with torch.device("meta"):
@@ -144,9 +144,9 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     # Potentially resume from a checkpoint, if not, init stuff.
     first_step, tokens_seen, examples_seen = 0, 0, 0
-    resumed_epoch, resumed_i = 0, 0
+    resumed_ep, resumed_i = 0, 0
     if extras := maybe_load_ckpt(c.get("resume") or pjoin(workdir, "latest"), model, optim):  # fmt: skip
-        data_seed, resumed_epoch, resumed_i = (
+        data_seed, resumed_ep, resumed_i = (
             extras["data"]["seed"], extras["data"]["ep"], extras["data"]["i"])  # fmt: skip
         first_step, tokens_seen, examples_seen = (
             extras["step"], extras["tokens_seen"], extras["examples_seen"])  # fmt: skip
@@ -177,17 +177,20 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     # Eval loop is reused, so we wrap it as a function
     def run_evals(step):
         """Run evaluations for a given step if conditions are met."""
-        for ev in c.get("evals", {}):
-            is_every_n_steps = step % c.evals[ev].steps == 0
+        for ev_name in c.get("evals", {}):
+            ev = c.evals[ev_name]
+            is_every_n_steps = step % ev.steps == 0
             is_final = step == c.nsteps
             if not(is_every_n_steps) and not(is_final):
                 continue
-            em = import_module(f"bv2.eval.{c.evals[ev].type}")
-            _, ev_data_iter = bv2.simple_data.from_config(c.evals[ev])
-            ev_data_iter = partial(ev_data_iter, c.maxtok, device, rank, world_size)
+            em = import_module(f"bv2.eval.{ev.type}")
+            ds_ev = bv2.simple_data.from_config(ev.data.to_dict())
+            iter_args = dict(rank=rank, world_size=world_size,
+                             device=device, **ev.iter.to_dict())
+            run_args = ev.get("args", sws.Config()).to_dict()
             with torch.no_grad():
-                if results := em.run(_fwd, ev_data_iter):
-                    wlogger.log({f"{ev}/{k}": v for k, v in results.items()})
+                if results := em.run(_fwd, ds_ev, iter_args=iter_args, **run_args):
+                    wlogger.log({f"{ev_name}/{k}": v for k, v in results.items()})
             # TODO: Check how switching train/eval mode (dropout) interacts with compile
 
     if not c.get("skip_initial_eval", False):
@@ -196,8 +199,11 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     # NOTE: this way of timing misses waits for data.
     for step, data in zip(
         range(first_step, c.nsteps),
-        data_iter(
-            c.maxtok, device, rank, world_size, data_seed, resumed_epoch, resumed_i
+        bv2.simple_data.data_iter(
+            ds, seed=data_seed,
+            device=device, rank=rank, world_size=world_size,
+            resumed_ep=resumed_ep, resumed_i=resumed_i,
+            **c.iter.to_dict(),
         ),
     ):
         tprev, t0 = t0, perf_counter()
@@ -533,9 +539,14 @@ def get_config():
     c = sws.Config()
     c.seed = 0
 
-    c.data_name = "random_nouns"
-
     c.maxtok = 8 * 4096
+
+    c.data.name = "random_nouns"
+    c.data.min_nouns = 128
+    c.data.max_nouns = 256
+
+    c.iter.eagerness = 16
+    c.iter.maxtok = lambda: c.maxtok
 
     c.nsteps = 16
     c.warmup_nsteps = 3
@@ -550,9 +561,10 @@ def get_config():
 
     c.evals.pplx_val.type = "pplx"
     c.evals.pplx_val.steps = 10
-    c.evals.pplx_val.data_name = lambda: c.data_name
-    c.evals.pplx_val.data.seed = 31337  # "val split"
-    c.evals.pplx_val.data.eagerness = 2
+    c.evals.pplx_val.data.name = lambda: c.data.name
+    c.evals.pplx_val.iter.maxtok = lambda: c.maxtok
+    c.evals.pplx_val.iter.seed = 31337  # "val split"
+    c.evals.pplx_val.iter.eagerness = 1
 
     return c
 

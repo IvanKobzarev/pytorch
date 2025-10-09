@@ -1,15 +1,16 @@
 import torch
 import bv2.utils as u  # isort: skip
+import bv2.simple_data as simple_data
 
 
-def run(predict_fn, data_iter):
+def run(predict_fn, ds, iter_args):
     # These are all things we collect PER PROCESS/GPU in the loop.
     # We'll summarize across processes once at the end.
     tokens_seen, examples_seen = 0, 0
     total_pplx, total_lsum, total_correct = 0, 0, 0
     total_loss_w, total_loss_toks = 0, 0
 
-    for step, data in enumerate(data_iter(max_ep=1)):
+    for step, data in enumerate(simple_data.data_iter(ds, max_ep=1, **iter_args)):
         # Before making any step, figure out if all ranks are done.
         # Due to example packing, there simply is no way without global comms.
         im_done = (data["iseq"] == -1).all()

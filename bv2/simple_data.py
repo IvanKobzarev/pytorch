@@ -33,57 +33,55 @@ from bv2.simple_input import iter_packed_examples, pad_seq, parallel_prefetch  #
 #    Ideally we prefetch this one step too, but that didn't work so far.
 
 
-def get_iter(ds, eagerness=16, seed=0, **config):
+def data_iter(ds, *, maxtok, device, seed=0, eagerness=16,
+              rank=0, world_size=1, resumed_ep=0,
+              resumed_i=0, max_ep=None):
+    make_exids = partial(ds.make_exids, seed=seed, rank=rank, world_size=world_size)
 
-    def data_iter(maxtok, device, rank=0, world_size=1, seed=seed, resumed_ep=0, resumed_i=0, max_ep=None):
-        make_exids = partial(ds.make_exids, seed=seed, rank=rank, world_size=world_size)
+    # Generator that yields a tuple of (save states, example IDs)
+    def ex_id_gen(resumed_i=resumed_i):  # arg instead of capture because =0 below.
+        for epoch in count(start=resumed_ep, end=max_ep):
+            ex_id_iter = enumerate(make_exids(epoch=epoch))
+            ex_id_iter = islice(ex_id_iter, resumed_i, None)
+            for i, ex_id in ex_id_iter:
+                yield ({"ep": epoch, "i": i + 1}, ex_id, epoch)  # Yes, correct.
+            resumed_i = 0
 
-        # Generator that yields a tuple of (save states, example IDs)
-        def ex_id_gen(resumed_i=resumed_i):  # arg instead of capture because =0 below.
-            for epoch in count(start=resumed_ep, end=max_ep):
-                ex_id_iter = enumerate(make_exids(epoch=epoch))
-                ex_id_iter = islice(ex_id_iter, resumed_i, None)
-                for i, ex_id in ex_id_iter:
-                    yield ({"ep": epoch, "i": i + 1}, ex_id, epoch)  # Yes, correct.
-                resumed_i = 0
+    def cpu_data_gen():
+        make_example = partial(_with_state, make_example=ds.make_example)
+        ex_gen = parallel_prefetch(ex_id_gen(), make_example, eagerness)
 
-        def cpu_data_gen():
-            make_example = partial(_with_state, make_example=ds.make_example)
-            ex_gen = parallel_prefetch(ex_id_gen(), make_example, eagerness)
+        seq_padder = lambda seq: pad_seq(seq, to_length=maxtok, pad_values={
+            # Only pad these fields, keep unmentioned fields unpadded.
+            "tokens": 0,
+            "loss_weights": 0.0,  # Also makes sure it's float.
+            "iseq": -1,
+            # attn_region -1 is ignored by our flex call.
+        } | {k: -1 for k in seq if k.startswith("attn_regions")})  # fmt: skip
 
-            seq_padder = lambda seq: pad_seq(seq, to_length=maxtok, pad_values={
-                # Only pad these fields, keep unmentioned fields unpadded.
-                "tokens": 0,
-                "loss_weights": 0.0,  # Also makes sure it's float.
-                "iseq": -1,
-                # attn_region -1 is ignored by our flex call.
-            } | {k: -1 for k in seq if k.startswith("attn_regions")})  # fmt: skip
+        yield from map(seq_padder, iter_packed_examples(ex_gen, max_seqlen=maxtok))
 
-            yield from map(seq_padder, iter_packed_examples(ex_gen, max_seqlen=maxtok))
+        # After epochs are exhausted, we generate pad-only seqs forever.
+        if max_ep:
+            # But we need to know the content/shape/dtype of sequence entries!
+            # So we make one example, that we then truncate, pad, and reuse forever.
+            dummy_id = next(iter(ds.make_exids(seed=0, epoch=0)))
+            dummy_ex = ds.make_example(dummy_id, epoch=0)
+            dummy_ex["loss_weights"] = dummy_ex["loss_weights"][:0]
+            dummy_ex["tokens"] = dummy_ex["tokens"][:0]
+            # Usually added by the packer, so we need to manually add it here:
+            dummy_ex["iseq"] = np.empty(0, np.int64)
+            dummy_ex["lens"] = []
+            dummy_ex = seq_padder(dummy_ex)
+            while True:
+                yield dummy_ex
 
-            # After epochs are exhausted, we generate pad-only seqs forever.
-            if max_ep:
-                # But we need to know the content/shape/dtype of sequence entries!
-                # So we make one example, that we then truncate, pad, and reuse forever.
-                dummy_id = next(iter(ds.make_exids(seed=0, epoch=0)))
-                dummy_ex = ds.make_example(dummy_id, epoch=0)
-                dummy_ex["loss_weights"] = dummy_ex["loss_weights"][:0]
-                dummy_ex["tokens"] = dummy_ex["tokens"][:0]
-                # Usually added by the packer, so we need to manually add it here:
-                dummy_ex["iseq"] = np.empty(0, np.int64)
-                dummy_ex["lens"] = []
-                dummy_ex = seq_padder(dummy_ex)
-                while True:
-                    yield dummy_ex
-
-        # NOTE: can't define it here inline because needs to be picklable.
-        fn = partial(to_gpu_and_mask, device=device, maxtok=maxtok)
-        # WARNING: Think twice before enabling this prefetch and increasing n_parallel,
-        #          because it will copy the RNG to processes, introducing repeats!
-        # yield from parallel_prefetch(cpu_data_gen(), fn, n_parallel=1)
-        yield from map(fn, cpu_data_gen())
-
-    return data_iter
+    # NOTE: can't define it here inline because needs to be picklable.
+    fn = partial(to_gpu_and_mask, device=device, maxtok=maxtok)
+    # WARNING: Think twice before enabling this prefetch and increasing n_parallel,
+    #          because it will copy the RNG to processes, introducing repeats!
+    # yield from parallel_prefetch(cpu_data_gen(), fn, n_parallel=1)
+    yield from map(fn, cpu_data_gen())
 
 
 # This needs to be global for pickle-ability.
@@ -137,16 +135,10 @@ def to_gpu_and_mask(seq, device, maxtok):
     return seq
 
 
-def from_config(c):
-    data_config = c.get("data", sws.Config()).to_dict()
+def from_config(data_config):
+    ds = import_module(f"bv2.data.{data_config['name']}")
+    return ds.Dataset(**{k: v for k, v in data_config.items() if k != "name"})
 
-    # Split the config into that for the Dataset class vs that for the iterator
-    iter_config = {}
-    for k in {"eagerness", "seed"} & set(data_config):
-        iter_config[k] = data_config.pop(k)
-
-    ds = import_module(f"bv2.data.{c.data_name}").Dataset(**data_config)
-    return ds, get_iter(ds, **iter_config)
 
 
 def count(start, *, end=None, step=1):
