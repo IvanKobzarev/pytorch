@@ -6,6 +6,7 @@ torchrun --nproc_per_node=gpu -m bv2.train
 import json
 import os
 import re
+from collections import defaultdict
 from datetime import datetime
 from functools import partial
 from getpass import getuser
@@ -196,6 +197,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     if not c.get("skip_initial_eval", False):
         run_evals(first_step)
 
+    dataset_counts = defaultdict(int)
     # NOTE: this way of timing misses waits for data.
     for step, data in zip(
         range(first_step, c.nsteps),
@@ -256,6 +258,19 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             {f"loss/{k}": v.item() for k, v in extras.items() if v.numel() == 1}
         )
 
+        # Log accumulated dataset usage to wandb with all_gather across GPUs
+        if hasattr(ds, "get_dataset_for_exid") and "id" in data:
+            local_counts = defaultdict(int)
+            for exid in data["id"]:
+                dataset_name = ds.get_dataset_for_exid(exid)
+                local_counts[dataset_name] += 1
+
+            all_counts = u.all_gather_object(dict(local_counts))
+            for gpu_counts in all_counts:
+                for name, count in gpu_counts.items():
+                    dataset_counts[name] += count
+
+            wlogger.log({f"data/count/{n}": c for n, c in dataset_counts.items()})
 
         # After the update is done, we are at the step+1
         torch.cuda.synchronize()

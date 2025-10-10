@@ -27,7 +27,7 @@ def patchify(img, *, ph, pw):
     h, w, c = img.shape
 
     # Assume the image is already properly sizes as multiple from a previous step.
-    assert w % pw == 0 and h % ph == 0 and c == 3, "Need proper shape; forgot pp?"
+    assert w % pw == 0 and h % ph == 0 and c == 3, f"Need proper shape {w=} {h=} {c=} {pw=} {ph=}; forgot pp?"
 
     patches = rearrange(img, "(ny ph) (nx pw) c -> ny nx ph pw c", ph=ph, pw=pw)
 

@@ -1,0 +1,368 @@
+import json
+import os
+import re
+from io import BytesIO
+from zipfile import ZipFile
+
+import bv2.data.dpack as d
+
+import numpy as np
+from bv2.data.common import get_bagz_reader, sharded_iota_exids
+from bv2.data.pp import patchify, unpatchify, resize_max_patches, sanity_check
+from PIL import Image
+
+
+def _is_included(dataset_name, include_patterns):
+    for pattern in include_patterns:
+        if re.match(pattern, dataset_name):
+            return True
+    return False
+
+
+def _is_excluded(dataset_name, exclude_patterns):
+    for pattern in exclude_patterns:
+        if re.match(pattern, dataset_name):
+            print(f"Excluding {dataset_name} (pattern: {pattern})")
+            return True
+    return False
+
+
+class Dataset:
+    def __init__(self, split, ps=16, max_patches=16_384, nreg=0, include=[".*"], exclude=[]):
+        base_path = "/checkpoint/rigi/data/FineVision"
+
+        paths = []
+        dataset_exid_ranges = []
+        current_exid = 0
+
+        for dataset_name, bag_pattern in DATA_TO_BAG.items():
+            if not _is_included(dataset_name, include) or _is_excluded(dataset_name, exclude):
+                continue
+
+            dataset_path = os.path.join(base_path, dataset_name)
+            path = f"{dataset_path}/{bag_pattern}"
+            dataset_size = len(get_bagz_reader(path))
+            start_exid = current_exid
+            end_exid = current_exid + dataset_size
+
+            dataset_exid_ranges.append(
+                {
+                    "name": dataset_name,
+                    "start": start_exid,
+                    "end": end_exid,
+                    "size": dataset_size,
+                }
+            )
+
+            paths.append(path)
+            current_exid += dataset_size
+
+        self.fspec = ",".join(paths)
+        self.dataset_exid_ranges = dataset_exid_ranges
+        self.ps = {"ph": ps, "pw": ps}
+        self.max_patches = max_patches
+        self.nreg = nreg
+
+    @property
+    def reader(self):
+        return get_bagz_reader(self.fspec)
+
+    def make_example(self, exid, epoch):
+        with ZipFile(BytesIO(self.reader[exid])) as zf:
+            data = json.load(zf.open("data.json"))
+
+            def _read_img(f):
+                img = Image.open(zf.open(f))
+                img.load()
+                return img if img.mode == "RGB" else img.convert("RGB")
+
+            images = []
+            if "image" in zf.namelist():
+                images.append(_read_img("image"))
+            else:
+                image_files = [n for n in zf.namelist() if n.startswith("images/")]
+                image_files.sort(key=lambda x: int(x.split("/")[1]))
+                for image_file in image_files:
+                    images.append(_read_img(image_file))
+
+            has_image = len(images) > 0
+
+        # TODO: some datasets contain a sequence of QAs, with follow up questions like:
+        # question - answer; follow q - answer; follow q - answer. In this case, we should
+        # concat all the QAs instead of picking a random one.
+        q_cycle, q_idx = divmod(epoch, len(data["qas"]))
+        question, answers = data["qas"][list(data["qas"])[q_idx]]
+        answer = answers[q_cycle % len(answers)]
+
+        t = _get_tiktoken()
+        prefix = t.encode(question)
+        suffix = t.encode(answer)
+        npre, nsuf = len(prefix), len(suffix)
+
+        if has_image:
+            all_patches, all_positions = [], []
+            for img in images:
+                img_resized = resize_max_patches(img, self.max_patches, **self.ps)
+                patches, positions = patchify(img_resized, **self.ps)
+                ny, nx, ph, pw, c = patches.shape
+                patches_flat = patches.reshape(ny * nx, ph, pw, c)
+                positions_flat = positions.reshape(ny * nx, 4)
+                all_patches.append(patches_flat)
+                all_positions.append(positions_flat)
+
+            nimg = sum(map(len, all_patches))
+            nsep = len(images)  # one separator after each image
+            nreg = self.nreg
+
+            nbytes = max(d.nbytes_text(), d.nbytes_image(**self.ps), d.nbytes_reg())
+            tokens = np.zeros((1 + npre + 1 + nimg + nsep + nreg + 1 + nsuf + 1, nbytes), np.uint8)
+
+            txtpos = np.arange(1 + npre + 1 + nsep + 1 + nsuf + 1)
+            d.pack_text([t.bos, prefix, t.sep], positions=txtpos[: 1 + npre + 1], out=tokens[: 1 + npre + 1])
+
+            pos = 1 + npre + 1
+            img_start = 0
+            for i_img, img_patches in enumerate(all_patches):
+                n_patches = img_patches.shape[0]
+                d.pack_image(img_patches, all_positions[i_img], out=tokens[pos:pos + n_patches])
+                pos += n_patches
+
+                d.pack_text([t.sep], positions=[txtpos[1 + npre + 1 + i_img]], out=tokens[pos:pos + 1])
+                pos += 1
+
+                # Optional: pack regs after each image here, for cases with multiple images only.
+
+            d.pack_regs(nreg, out=tokens[pos:pos + nreg])
+            d.pack_text([t.sep, suffix, t.eos], positions=txtpos[-(1 + nsuf + 1) :], out=tokens[-(1 + nsuf + 1) :])
+
+            return sanity_check({
+                "tokens": tokens,
+                "loss_weights":  np.r_[0, [0] * npre, 0,  [0] * nimg,  [0] * nsep, [0] * nreg, 0, [1] * nsuf, 1].astype(np.int64),
+                "attn_regions":  np.r_[1, [1] * npre, 1,  [1] * nimg,  [1] * nsep, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
+                "attn_regions2": np.r_[1, [1] * npre, 1, [-1] * nimg, [-1] * nsep, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
+                "id": exid,
+            })
+        else:
+            nreg = self.nreg
+            nbytes = max(d.nbytes_text(), d.nbytes_image(**self.ps), d.nbytes_reg())
+            tokens = np.zeros((1 + npre + 1 + nreg + 1 + nsuf + 1, nbytes), np.uint8)
+
+            txtpos = np.arange(1 + npre + 1 + 1 + nsuf + 1)
+            d.pack_text([t.bos, prefix, t.sep], positions=txtpos[: 1 + npre + 1], out=tokens[: 1 + npre + 1])
+            d.pack_regs(nreg, out=tokens[1 + npre + 1 : 1 + npre + 1 + nreg])
+            d.pack_text([t.sep, suffix, t.eos], positions=txtpos[-(1 + nsuf + 1) :], out=tokens[-(1 + nsuf + 1) :])
+
+            return sanity_check({
+                "tokens": tokens,
+                "loss_weights":  np.r_[0, [0] * npre, 0, [0] * nreg, 0, [1] * nsuf, 1].astype(np.int64),
+                "attn_regions":  np.r_[1, [1] * npre, 1, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
+                "attn_regions2": np.r_[1, [1] * npre, 1, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
+                "id": exid,
+            })
+
+    def make_exids(self, *a, **kw):
+        return sharded_iota_exids(len(self.reader), *a, **kw)
+
+    def get_dataset_for_exid(self, exid):
+        """Return which dataset an exid belongs to"""
+        for dataset_info in self.dataset_exid_ranges:
+            if dataset_info["start"] <= exid < dataset_info["end"]:
+                return dataset_info["name"]
+        raise ValueError(f"unknown dataset for {exid} from {dataset_exid_ranges}")
+
+    def vocab_size(self):
+        return _get_tiktoken().n_vocab
+
+
+def _get_tiktoken(first_N=None):
+    import bv2.data.tokenizer
+
+    return bv2.data.tokenizer.get_tiktoken(first_N=first_N)
+
+
+DATA_TO_BAG = {
+    "aguvis-stage-1": "train@256.bag",
+    "ai2d_merged": "train@1.bag",
+    "alfworldgpt": "train@4.bag",
+    "allava_laion": "train@256.bag",
+    "allava_vflan": "train@256.bag",
+    "aokvqa": "train@1.bag",
+    "a_okvqa": "train@32.bag",
+    "art": "train@32.bag",
+    "arxivqa": "train@256.bag",
+    "bentham": "train@4.bag",
+    "blockdiagramcomputerized": "train@1.bag",
+    "blockdiagramhandwritten": "train@1.bag",
+    "cambrian(filtered)_processed": "train@256.bag",
+    "captcha": "train@4.bag",
+    "chart2text": "train@4.bag",
+    "chartqa": "train@1.bag",
+    "chinesememe": "train@32.bag",
+    "chrome_writting": "train@1.bag",
+    "clevr_math(mathv360k)": "train@1.bag",
+    "clevr_math": "train@32.bag",
+    "clevr": "train@32.bag",
+    "coco_colors": "train@256.bag",
+    "cocoqa": "train@4.bag",
+    "cocotext": "train@32.bag",
+    "CoSyn_400k_chart": "train@32.bag",
+    "CoSyn_400k_chemical": "train@1.bag",
+    "CoSyn_400k_circuit": "train@1.bag",
+    "CoSyn_400k_diagram": "train@32.bag",
+    "CoSyn_400k_document": "train@32.bag",
+    "CoSyn_400k_graphic": "train@1.bag",
+    "CoSyn_400k_math": "train@32.bag",
+    "CoSyn_400k_music": "train@1.bag",
+    "CoSyn_400k_nutrition": "train@4.bag",
+    "CoSyn_400k_table": "train@32.bag",
+    "ctw": "train@32.bag",
+    "datik": "train@4.bag",
+    "datikz": "train@1.bag",
+    "densefusion_1m": "train@256.bag",
+    "diagram_image_to_text": "train@1.bag",
+    "DoclingMatix": "train@256.bag",
+    "docvqa": "train@32.bag",
+    "drivelm": "train@4.bag",
+    "dvqa": "train@32.bag",
+    "est_vqa": "train@32.bag",
+    "figureqa(mathv360k)": "train@1.bag",
+    "figureqa": "train@4.bag",
+    "finqa": "train@1.bag",
+    "funsd": "train@1.bag",
+    "geo170k(align)": "train@1.bag",
+    "geo170k(qa)": "train@1.bag",
+    "geo3k": "train@1.bag",
+    "geometry3k(mathv360k)": "train@1.bag",
+    "geomverse": "train@4.bag",
+    "geoqa+(mathv360k)": "train@1.bag",
+    "geos(mathv360k)": "train@1.bag",
+    "google_landmarks": "train@256.bag",
+    "groundui": "train@32.bag",
+    "handwriting_forms": "train@1.bag",
+    "hateful_memes": "train@4.bag",
+    "hitab": "train@1.bag",
+    "hme100k": "train@4.bag",
+    "hw_squad": "train@32.bag",
+    "iam": "train@4.bag",
+    "iconqa(mathv360k)": "train@1.bag",
+    "iconqa": "train@1.bag",
+    "idk": "train@32.bag",
+    "iiit5k": "train@1.bag",
+    "image_textualization(filtered)": "train@256.bag",
+    "imgur5k": "train@32.bag",
+    "indoor_qa": "train@1.bag",
+    "infographic(gpt4v)": "train@4.bag",
+    "infographic_vqa_llava_format": "train@4.bag",
+    "infographic_vqa": "train@32.bag",
+    "intergps": "train@1.bag",
+    "invoices_receipts": "train@4.bag",
+    "k12_printing": "train@32.bag",
+    "laion_gpt4v": "train@4.bag",
+    "latexformulas": "train@32.bag",
+    "latex_handwritten": "train@32.bag",
+    "LLaVA_Instruct_150K": "train@256.bag",
+    "llavar_gpt4_20k": "train@32.bag",
+    "lnqa": "train@256.bag",
+    "localized_narratives": "train@32.bag",
+    "lrv_chart": "train@1.bag",
+    "lrv_normal(filtered)": "train@4.bag",
+    "lvis_instruct4v": "train@256.bag",
+    "mapqa(mathv360k)": "train@1.bag",
+    "mapqa": "train@4.bag",
+    "maptext": "train@1.bag",
+    "mathwriting-google": "train@32.bag",
+    "mavis_math_metagen": "train@4.bag",
+    "mavis_math_rule_geo": "train@32.bag",
+    "memotion": "train@4.bag",
+    "mimic_cgd": "train@32.bag",
+    "mmc_instruct": "train@32.bag",
+    "mmevol": "train@32.bag",
+    "mmra": "train@4.bag",
+    "mmsoc_memotion": "train@4.bag",
+    "multihiertt": "train@4.bag",
+    "nlvr2": "train@32.bag",
+    "objects365_qa": "train@256.bag",
+    "ocrvqa": "train@32.bag",
+    "olmOCR-mix-0225-books": "train@32.bag",
+    "olmOCR-mix-0225-documents": "train@256.bag",
+    "oodvqa": "train@32.bag",
+    "orand_car_a": "train@1.bag",
+    "pathvqa": "train@32.bag",
+    "pdfvqa": "train@4.bag",
+    "plotqa": "train@32.bag",
+    "pmc_vqa(mathv360k)": "train@4.bag",
+    "raven": "train@4.bag",
+    "rendered_text": "train@32.bag",
+    "robut_sqa": "train@1.bag",
+    "robut_wikisql": "train@32.bag",
+    "robut_wtq": "train@32.bag",
+    "scienceqa(nona_context)": "train@4.bag",
+    "scienceqa": "train@1.bag",
+    "screen2words": "train@4.bag",
+    "screenqa": "train@256.bag",
+    "sharegpt4o": "train@256.bag",
+    "sharegpt4v(coco)": "train@32.bag",
+    "sharegpt4v(knowledge)": "train@4.bag",
+    "sharegpt4v(llava)": "train@32.bag",
+    "sharegpt4v(sam)": "train@4.bag",
+    "sketchyvqa": "train@1.bag",
+    "slidevqa": "train@32.bag",
+    "spark": "train@4.bag",
+    "spatialsense": "train@4.bag",
+    "spot_the_diff": "train@4.bag",
+    "sroie": "train@1.bag",
+    "st_vqa": "train@1.bag",
+    "sujet_finance": "train@32.bag",
+    "super_clevr(mathv360k)": "train@4.bag",
+    "svrd": "train@32.bag",
+    "SynthChartNet": "train@32.bag",
+    "SynthCodeNet": "train@256.bag",
+    "synthdog": "train@256.bag",
+    "SynthFormulaNet": "train@4.bag",
+    "tabmwp(mathv360k)": "train@1.bag",
+    "tabmwp": "train@1.bag",
+    "tallyqa": "train@32.bag",
+    "tal_ocr_eng": "train@32.bag",
+    "tat_dqa": "train@1.bag",
+    "tat_qa": "train@1.bag",
+    "textcaps": "train@32.bag",
+    "text_codefeedback_filtered_instruction": "train@1.bag",
+    "text_code_feedback": "train@1.bag",
+    "text_infinitymath": "train@1.bag",
+    "text_mathinstruct": "train@1.bag",
+    "text_mathqa": "train@1.bag",
+    "text_mathstepdpo10k": "train@1.bag",
+    "text_numinamath_cot": "train@4.bag",
+    "textocr(gpt4v)": "train@32.bag",
+    "text_openhermes_2_5": "train@4.bag",
+    "text_OpenMathInstruct-2": "train@4.bag",
+    "text_openorca": "train@32.bag",
+    "text_orcamath": "train@1.bag",
+    "text_pythoncode25k": "train@1.bag",
+    "text_pythoncodealpaca": "train@1.bag",
+    "text_ruozhiba": "train@1.bag",
+    "text_theoremqa": "train@1.bag",
+    "textvqa": "train@4.bag",
+    "text_wizardlm_evol": "train@1.bag",
+    "tqa": "train@1.bag",
+    "Unichart": "train@32.bag",
+    "unigeo(mathv360k)": "train@1.bag",
+    "ureader_cap": "train@256.bag",
+    "ureader_ie": "train@32.bag",
+    "ureader_kg_processed": "train@32.bag",
+    "ureader_qa_processed": "train@256.bag",
+    "vision_flan(filtered)": "train@256.bag",
+    "vistext": "train@1.bag",
+    "visual7w": "train@32.bag",
+    "visualmrc": "train@4.bag",
+    "visualwebinstruct(filtered)": "train@256.bag",
+    "vizwiz(mathv360k)": "train@32.bag",
+    "vqaonbd": "train@32.bag",
+    "vqarad": "train@1.bag",
+    "vqav2": "train@32.bag",
+    "vsr": "train@1.bag",
+    "websight": "train@32.bag",
+    "wildvision": "train@1.bag",
+    "wordart": "train@4.bag",
+    "yesbut": "train@4.bag",
+}
