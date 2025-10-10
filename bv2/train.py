@@ -199,7 +199,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         run_evals(first_step)
         prints0("Done!")
 
-    dataset_counts = Counter()
+    per_src_examples_seen, per_src_tokens_seen = Counter(), Counter()
     for step, data in zip(
         range(first_step, c.nsteps),
         bv2.simple_data.data_iter(
@@ -260,12 +260,29 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             {f"loss/{k}": v.item() for k, v in extras.items() if v.numel() == 1}
         )
 
-        # For dataset mixtures, collect and report per-component stats.
-        if hasattr(ds, "subset_names") and "src" in data:
-            breakpoint()
+        # For dataset mixtures, collect and report per-component stats and loss.
+        if "src" in data:
+            # Count the number of examples of each subset source:
             all_counts = u.all_gather_object(Counter(data["src"]))
-            dataset_counts = sum(all_counts, dataset_counts)
-            wlogger.log({f"datamix/count/{n}": c for n, c in dataset_counts.items()})
+            per_src_examples_seen = sum(all_counts, per_src_examples_seen)
+            wlogger.log({f"mix_examples_seen/{n}": c for n, c in per_src_examples_seen.items()})
+
+            per_src_toks = Counter()
+            per_src_loss = Counter()
+            per_src_loss_denom = Counter()
+            for iseq, src in enumerate(data["src"]):  # This is basically for each example.
+                iseq_mask = (data["iseq"] == iseq)  # Which token is from this example?
+                iseq_weights = data["loss_weights"][:-1] * iseq_mask[:-1]
+                per_src_toks[src] += iseq_mask.sum().cpu()
+                per_src_loss[src] += (extras["tok_losses"] * iseq_weights).sum().cpu()
+                per_src_loss_denom[src] += iseq_weights.sum().cpu()
+
+            per_src_tokens_seen = sum(u.all_gather_object(per_src_toks), per_src_tokens_seen)
+            wlogger.log({f"mix_tokens_seen/{n}": v for n, v in per_src_tokens_seen.items()})
+
+            per_src_loss = sum(u.all_gather_object(per_src_loss), Counter())
+            per_src_loss_denom = sum(u.all_gather_object(per_src_loss_denom), Counter())
+            wlogger.log({f"mix_loss/{k}": per_src_loss[k] / max(per_src_loss_denom[k], 1e-8) for k in per_src_loss})
 
         # After the update is done, we are at the step+1
         torch.cuda.synchronize()

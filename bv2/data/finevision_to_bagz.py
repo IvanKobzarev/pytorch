@@ -76,7 +76,7 @@ def extract_image_bytes(images):
     return [img["bytes"] for img in images if "bytes" in img]
 
 
-def process_row(row, parquet_path, idx, output_shards, shard_writers):
+def process_row(row, parquet_path, idx, output_shards, shard_writers, subset_name):
     qas = process_row_texts(row["texts"])
 
     has_images = len(row["images"]) > 0
@@ -84,7 +84,7 @@ def process_row(row, parquet_path, idx, output_shards, shard_writers):
 
     data = {
         "qas": qas,
-        "source": row["source"],
+        "source": [subset_name, row["source"]],
         "id": f"{parquet_path.stem}_{idx}",
         "relevance_ratings": row["relevance_ratings"],
         "formatting_ratings": row["formatting_ratings"],
@@ -102,13 +102,10 @@ def process_row(row, parquet_path, idx, output_shards, shard_writers):
 def convert_parquets_to_sharded_bagz(parquet_paths, output_dir):
     start_time = time.time()
     output_shards = get_shard_count(len(parquet_paths))
-
-    print(
-        f"Processing {output_dir.name}: {len(parquet_paths)} files -> {output_shards} shards"
-    )
+    subset_name = output_dir.name
 
     if is_already_converted(output_dir, output_shards):
-        print(f"Skipping {output_dir.name} (already converted)")
+        print(f"\nSkipping {subset_name} (already converted)")
         return
 
     shard_writers = {}
@@ -130,12 +127,11 @@ def convert_parquets_to_sharded_bagz(parquet_paths, output_dir):
         for batch in table.to_batches():
             df = batch.to_pandas()
             for idx, row in df.iterrows():
-                process_row(row, parquet_path, idx, output_shards, shard_writers)
+                process_row(row, parquet_path, idx, output_shards, shard_writers, subset_name)
                 total_rows += 1
 
         elapsed = time.time() - start_time
-        file_size_mb = parquet_path.stat().st_size / (1024 * 1024)
-        print(f"    {parquet_path.name}: {file_size_mb:.2f}MB, {elapsed:.2f}s")
+        print(f"\rProcessing {subset_name}: {len(parquet_paths)}", end="", flush=True)
 
     for shard_idx in range(output_shards):
         shard_writers[shard_idx].close()
@@ -144,7 +140,7 @@ def convert_parquets_to_sharded_bagz(parquet_paths, output_dir):
         os.rename(temp_path, final_path)
 
     elapsed = time.time() - start_time
-    print(f"  * Converted: {total_rows} rows, {elapsed:.2f}s")
+    print(f"\nDone with {subset_name}: {total_rows} rows, {elapsed:.2f}s")
 
 
 def main():
@@ -159,23 +155,24 @@ def main():
     # fmt:on
 
     data_path = Path(args.data_path)
-    processed_shards = 0
 
     # 178 datasets in "*/train/", 3 datasets in "*/partial-train/", 4 datasets in "*/"
     total_parquets = len(list(data_path.glob("*/*train/*.parquet"))) + len(list(data_path.glob("*/*.parquet")))
 
-    for dataset_dir in data_path.iterdir():
+    def _convert_one(dataset_dir):
         parquet_files = (sorted(dataset_dir.glob("*train/*.parquet")) or
-                        sorted(dataset_dir.glob("*.parquet")))
+                         sorted(dataset_dir.glob("*.parquet")))
         if not parquet_files:
-            continue
+            return
 
-        print(f"[{processed_shards}/{total_parquets}] {time.time() - start_time:.2f}s")
         output_dir = Path(args.output_base) / dataset_dir.name
         output_dir.mkdir(parents=True, exist_ok=True)
-
         convert_parquets_to_sharded_bagz(parquet_files, output_dir)
-        processed_shards += len(parquet_files)
+
+    # Makes it 2x faster. Probably ProcessPoolExecutor even more, but didn't try.
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor() as executor:
+        list(executor.map(_convert_one, data_path.iterdir()))
 
     total_elapsed = time.time() - start_time
     print(f"\nTotal processing time: {total_elapsed:.2f}s")

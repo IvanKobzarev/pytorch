@@ -14,18 +14,14 @@ from PIL import Image
 
 class Dataset:
     def __init__(self, split, ps=16, max_patches=16_384, nreg=0, include=[".*"], exclude=[]):
-        base_path = "/checkpoint/rigi/data/FineVision"
+        base_path = "/checkpoint/rigi/data/FineVision-1.0.1"
 
-        self.subset_names = []
         paths = []
-
         re_inc = [re.compile(p) for p in include]
         re_exc = [re.compile(p) for p in exclude]
         for name, bag_pattern in DATA_TO_BAG.items():
             if not any(r.match(name) for r in re_inc) or any(r.match(name) for r in re_exc):
                 continue
-
-            self.subset_names.append(name)
             paths.append(os.path.join(base_path, name, bag_pattern))
 
         self.fspec = ",".join(paths)
@@ -110,7 +106,7 @@ class Dataset:
                 "loss_weights":  np.r_[0, [0] * npre, 0,  [0] * nimg,  [0] * nsep, [0] * nreg, 0, [1] * nsuf, 1].astype(np.int64),
                 "attn_regions":  np.r_[1, [1] * npre, 1,  [1] * nimg,  [1] * nsep, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
                 "attn_regions2": np.r_[1, [1] * npre, 1, [-1] * nimg, [-1] * nsep, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
-                "src": data["source"],
+                "src": data["source"][0],
                 "id": exid,
             })
         else:
@@ -128,7 +124,7 @@ class Dataset:
                 "loss_weights":  np.r_[0, [0] * npre, 0, [0] * nreg, 0, [1] * nsuf, 1].astype(np.int64),
                 "attn_regions":  np.r_[1, [1] * npre, 1, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
                 "attn_regions2": np.r_[1, [1] * npre, 1, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
-                "src": self.subset_names.index(data["source"]),
+                "src": data["source"][0],
                 "id": exid,
             })
 
