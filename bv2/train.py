@@ -6,7 +6,7 @@ torchrun --nproc_per_node=gpu -m bv2.train
 import json
 import os
 import re
-from collections import defaultdict
+from collections import Counter
 from datetime import datetime
 from functools import partial
 from getpass import getuser
@@ -199,7 +199,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         run_evals(first_step)
         prints0("Done!")
 
-    dataset_counts = defaultdict(int)
+    dataset_counts = Counter()
     for step, data in zip(
         range(first_step, c.nsteps),
         bv2.simple_data.data_iter(
@@ -260,19 +260,12 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             {f"loss/{k}": v.item() for k, v in extras.items() if v.numel() == 1}
         )
 
-        # Log accumulated dataset usage to wandb with all_gather across GPUs
-        if hasattr(ds, "get_dataset_for_exid") and "id" in data:
-            local_counts = defaultdict(int)
-            for exid in data["id"]:
-                dataset_name = ds.get_dataset_for_exid(exid)
-                local_counts[dataset_name] += 1
-
-            all_counts = u.all_gather_object(dict(local_counts))
-            for gpu_counts in all_counts:
-                for name, count in gpu_counts.items():
-                    dataset_counts[name] += count
-
-            wlogger.log({f"data/count/{n}": c for n, c in dataset_counts.items()})
+        # For dataset mixtures, collect and report per-component stats.
+        if hasattr(ds, "subset_names") and "src" in data:
+            breakpoint()
+            all_counts = u.all_gather_object(Counter(data["src"]))
+            dataset_counts = sum(all_counts, dataset_counts)
+            wlogger.log({f"datamix/count/{n}": c for n, c in dataset_counts.items()})
 
         # After the update is done, we are at the step+1
         torch.cuda.synchronize()

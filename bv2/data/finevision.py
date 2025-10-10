@@ -12,53 +12,23 @@ from bv2.data.pp import patchify, unpatchify, resize_max_patches, sanity_check
 from PIL import Image
 
 
-def _is_included(dataset_name, include_patterns):
-    for pattern in include_patterns:
-        if re.match(pattern, dataset_name):
-            return True
-    return False
-
-
-def _is_excluded(dataset_name, exclude_patterns):
-    for pattern in exclude_patterns:
-        if re.match(pattern, dataset_name):
-            print(f"Excluding {dataset_name} (pattern: {pattern})")
-            return True
-    return False
-
-
 class Dataset:
     def __init__(self, split, ps=16, max_patches=16_384, nreg=0, include=[".*"], exclude=[]):
         base_path = "/checkpoint/rigi/data/FineVision"
 
+        self.subset_names = []
         paths = []
-        dataset_exid_ranges = []
-        current_exid = 0
 
-        for dataset_name, bag_pattern in DATA_TO_BAG.items():
-            if not _is_included(dataset_name, include) or _is_excluded(dataset_name, exclude):
+        re_inc = [re.compile(p) for p in include]
+        re_exc = [re.compile(p) for p in exclude]
+        for name, bag_pattern in DATA_TO_BAG.items():
+            if not any(r.match(name) for r in re_inc) or any(r.match(name) for r in re_exc):
                 continue
 
-            dataset_path = os.path.join(base_path, dataset_name)
-            path = f"{dataset_path}/{bag_pattern}"
-            dataset_size = len(get_bagz_reader(path))
-            start_exid = current_exid
-            end_exid = current_exid + dataset_size
-
-            dataset_exid_ranges.append(
-                {
-                    "name": dataset_name,
-                    "start": start_exid,
-                    "end": end_exid,
-                    "size": dataset_size,
-                }
-            )
-
-            paths.append(path)
-            current_exid += dataset_size
+            self.subset_names.append(name)
+            paths.append(os.path.join(base_path, name, bag_pattern))
 
         self.fspec = ",".join(paths)
-        self.dataset_exid_ranges = dataset_exid_ranges
         self.ps = {"ph": ps, "pw": ps}
         self.max_patches = max_patches
         self.nreg = nreg
@@ -140,6 +110,7 @@ class Dataset:
                 "loss_weights":  np.r_[0, [0] * npre, 0,  [0] * nimg,  [0] * nsep, [0] * nreg, 0, [1] * nsuf, 1].astype(np.int64),
                 "attn_regions":  np.r_[1, [1] * npre, 1,  [1] * nimg,  [1] * nsep, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
                 "attn_regions2": np.r_[1, [1] * npre, 1, [-1] * nimg, [-1] * nsep, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
+                "src": data["source"],
                 "id": exid,
             })
         else:
@@ -157,18 +128,12 @@ class Dataset:
                 "loss_weights":  np.r_[0, [0] * npre, 0, [0] * nreg, 0, [1] * nsuf, 1].astype(np.int64),
                 "attn_regions":  np.r_[1, [1] * npre, 1, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
                 "attn_regions2": np.r_[1, [1] * npre, 1, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
+                "src": self.subset_names.index(data["source"]),
                 "id": exid,
             })
 
     def make_exids(self, *a, **kw):
         return sharded_iota_exids(len(self.reader), *a, **kw)
-
-    def get_dataset_for_exid(self, exid):
-        """Return which dataset an exid belongs to"""
-        for dataset_info in self.dataset_exid_ranges:
-            if dataset_info["start"] <= exid < dataset_info["end"]:
-                return dataset_info["name"]
-        raise ValueError(f"unknown dataset for {exid} from {dataset_exid_ranges}")
 
     def vocab_size(self):
         return _get_tiktoken().n_vocab
