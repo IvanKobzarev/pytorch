@@ -317,9 +317,10 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             pred = extras["predictions"].detach().cpu()
             wlogger.log({f"vis/output{step}": ds.vis_output_wandb(data, pred)})
 
-        distr.barrier()  # Just for simplicity for now.
+        if step <= 50 or step % 10 == 0:  # Save some logging
+            log_pg(model, wlogger)
 
-        log_pg(model, wlogger)
+        distr.barrier()  # To get accurate datawait timing.
         t_prev_step_end = perf_counter()
 
     prints(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
