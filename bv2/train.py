@@ -195,10 +195,11 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             # TODO: Check how switching train/eval mode (dropout) interacts with compile
 
     if not c.get("skip_initial_eval", False):
+        prints0("Running initial evals... (pass skip_initial_eval:=True to skip)")
         run_evals(first_step)
+        prints0("Done!")
 
     dataset_counts = defaultdict(int)
-    # NOTE: this way of timing misses waits for data.
     for step, data in zip(
         range(first_step, c.nsteps),
         bv2.simple_data.data_iter(
@@ -208,9 +209,10 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             **c.iter.to_dict(),
         ),
     ):
-        tprev, t0 = t0, perf_counter()
         torch.cuda.reset_peak_memory_stats()
         torch.cuda.synchronize()
+        distr.barrier()  # For accurate global datawait timing.
+        tprev, t0 = t0, perf_counter()
         if prof and step == 3:
             torch.cuda.cudart().cudaProfilerStart()
             prof.start()
@@ -277,10 +279,10 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         wlogger.end_step()
         step += 1
 
-        train_times.append((perf_counter() - t0) * 1000)  # ms
+        train_times.append(perf_counter() - t0)  # seconds
         peak_mems.append(torch.cuda.max_memory_allocated() / 1024**2)  # MiB
         wlogger.log({"chrono/peakmem": peak_mems[-1]})
-        wlogger.log({"chrono/traintime": train_times[-1]})
+        wlogger.log({"chrono/traintime": train_times[-1]*1000})
         wlogger.log({"chrono/steptime": t0 - tprev})
         wlogger.log({"chrono/datawait": t0 - t_prev_step_end})
 
@@ -324,7 +326,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         t_prev_step_end = perf_counter()
 
     prints(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
-    prints(f"Step times (med: {np.median(train_times):.1f}ms): {' '.join(f'{t:.0f}' for t in train_times)}")  # fmt: skip
+    prints(f"Step times (med: {np.median(train_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in train_times)}")  # fmt: skip
     torch._dynamo.reset()  # Avoid hang: https://x.com/main_horse/status/1937900381574717940
     if ckpt_future:
         ckpt_future.result()
