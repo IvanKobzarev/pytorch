@@ -28,9 +28,11 @@ sweep = lambda: [
 If there is no sweep function in the config, it just launches the single job.
 """
 
+import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime
 from runpy import run_path
 
@@ -76,7 +78,21 @@ if __name__ == "__main__":
     njobs = len(all_jobs)
 
     c = GREEN if njobs <= 4 else YELLOW if njobs <= 16 else RED
-    print(f"About to launch experiment {BLUE}{xid}{RESET} with {c}{BOLD}{njobs}{RESET} jobs.", flush=True)
+    print(f"About to launch experiment {BLUE}{xid}{RESET} with {c}{BOLD}{njobs}{RESET} jobs...", flush=True)
+
+    # Now, we actually need to copy the whole source-code folder to a folder with XID in its name.
+    # The reason is that slurm doesn't checkpoint the code at launch-time. If a job from this sweep
+    # later gets pre-empted and resumed, it will run whatever is in the code folder at that point,
+    # which might already be very different as we continue working on the code while sweeps run!
+    code_dst = os.path.expanduser(f"~/rigi-xids/{xid}")
+    excludes = [f"--exclude={p}" for p in (".git/", "__pycache__/")]
+    print(f"Copying the code from pwd to {code_dst}...", flush=True)
+    subprocess.run(["rsync", "-az", "--mkpath", "--info=progress2", *excludes, "./", code_dst], check=True)
+    os.chdir(code_dst)  # This does change dir for all subsequent calls, such as slurm ones.
+    for i in range(5):
+        print(f"\rDone! Giving you {5-i} more seconds of grace period...", flush=True, end="")
+        time.sleep(1)
+    print("Let's gooooo!")
 
     try:
         for wid, work_unit_args in enumerate(all_jobs):
