@@ -82,6 +82,9 @@ if __name__ == "__main__":
         for wid, work_unit_args in enumerate(all_jobs):
             log_xwid = f"{LIGHT}xid {RESET}{xid}{LIGHT} | wid {RESET}{wid:{len(str(njobs))}d}{LIGHT}"
             log_args = "args: " + ", ".join(f"{RESET}{BOLD}{arg}{RESET}{LIGHT}" for arg in work_unit_args) + LIGHT
+            if sws_args:
+                log_over = "overrides: " + ", ".join(f"{RESET}{BOLD}{arg}{RESET}{LIGHT}" for arg in sws_args) + LIGHT
+                log_args = f"{log_over} | {log_args}"
 
             print(f"{log_xwid} | {log_args}", end="", flush=True)
 
