@@ -15,7 +15,7 @@ from bv2.data.common import get_bagz_reader, sharded_iota_exids, vis_image_text_
 from bv2.data.pp import patchify, resize_max_patches, sanity_check  # usort: skip
 
 
-PATH = "/checkpoint/rigi/data/infovqa/{split}.bag"
+PATH = "/checkpoint/rigi/data/{split}.bag"
 
 
 class Dataset:
@@ -36,6 +36,7 @@ class Dataset:
             data = json.load(zf.open("data.json"))
             img = Image.open(zf.open("image"))
             img.load()  # Ensure it's actually fully read.
+            img = img if img.mode == "RGB" else img.convert("RGB")
             # NOTE: Not using "ocr.json" here yet.
 
         # Cycle through the questions and its answers by epochs
@@ -92,7 +93,7 @@ class Dataset:
         return vis_image_text_wandb(data, _get_tiktoken(), **self.ps)
 
 
-def _get_tiktoken(first_N=30_000):
+def _get_tiktoken(first_N=None):
     import bv2.data.tokenizer
 
     return bv2.data.tokenizer.get_tiktoken(first_N=first_N)

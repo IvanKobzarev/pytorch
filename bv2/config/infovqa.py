@@ -1,3 +1,5 @@
+# torchrun --nproc_per_node=gpu -m bv2.train --config bv2/config/infovqa.py c.model.reg.nreg=10
+
 import sws
 
 
@@ -7,8 +9,8 @@ def get_config():
 
     c.maxtok = 32_768
 
-    c.data.name = "infovqa"
-    c.data.split = "train"
+    c.data.name = "vqa"
+    c.data.split = "infovqa/train"
     c.data.max_patches = 16_384
     c.data.nreg = lambda: c.model.reg.nreg
 
@@ -27,8 +29,8 @@ def get_config():
 
     c.evals.pplx_val.type = "pplx"
     c.evals.pplx_val.steps = 180  # ~1ep for 8gpus maxpatch=16k, maxtok=32k.
-    c.evals.pplx_val.data.name = "infovqa"
-    c.evals.pplx_val.data.split = "val"
+    c.evals.pplx_val.data.name = "vqa"
+    c.evals.pplx_val.data.split = "infovqa/val"
     c.evals.pplx_val.data.max_patches = lambda: c.data.max_patches
     c.evals.pplx_val.data.nreg = lambda: c.data.nreg
     c.evals.pplx_val.iter.eagerness = 2
