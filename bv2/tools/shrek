@@ -9,12 +9,20 @@ SRC="${SRC%/}"
 DST="${DST%/}"
 # However, below we'll always USE SRC with a slash and DST without.
 
-# Initial sync
-rsync -az --delete "$SRC/" "$DST"
-echo "Files synchronized at" `date`
+# Put common excludes in an array (easy to extend)
+EXCLUDES=(
+  --exclude='.git/'
+  --exclude='__pycache__/'
+  --exclude='/venv*/'
+)
 
+sync_once() {
+  rsync -az --delete "${EXCLUDES[@]}" "$SRC/" "$DST"
+  echo "Files synchronized at $(date)"
+}
+
+sync_once
 # Watch for modify/create/delete events recursively and rsync again on any event
 while inotifywait -r -e modify,create,delete,move "$SRC/"; do
-    rsync -az --delete "$SRC/" "$DST"
-    echo "Files synchronized at" `date`
+  sync_once
 done
