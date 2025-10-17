@@ -230,11 +230,13 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         model.zero_grad(set_to_none=True)
 
         all_lens = u.all_gather_object(data["lens"])
-        tokens_seen += sum(sum(l) for l in all_lens)
+        num_tokens = sum(sum(l) for l in all_lens)
         num_examples = sum(len(l) for l in all_lens)
+        tokens_seen += num_tokens
         examples_seen += num_examples
         wlogger.log({"chrono/tokens_seen": tokens_seen})
         wlogger.log({"chrono/examples_seen": examples_seen})
+        wlogger.log({"chrono/num_tokens": num_tokens})
         wlogger.log({"chrono/num_examples": num_examples})
         wlogger.log({"chrono/percent": (step + 1) / c.nsteps})
         all_max_epoch = u.all_gather_object(max(s["ep"] for s in data["state_after"]))
