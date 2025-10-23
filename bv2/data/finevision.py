@@ -13,7 +13,7 @@ from PIL import Image
 
 
 class Dataset:
-    def __init__(self, split, ps=16, max_patches=16_384, nreg=0, include=[".*"], exclude=[]):
+    def __init__(self, ps=16, max_patches=16_384, nreg=0, include=[".*"], exclude=[]):
         base_path = "/checkpoint/rigi/data/FineVision-1.0.1"
 
         paths = []
@@ -65,68 +65,49 @@ class Dataset:
         suffix = t.encode(answer)
         npre, nsuf = len(prefix), len(suffix)
 
-        if has_image:
-            all_patches, all_positions = [], []
-            for img in images:
-                img_resized = resize_max_patches(img, self.max_patches, **self.ps)
-                patches, positions = patchify(img_resized, **self.ps)
-                ny, nx, ph, pw, c = patches.shape
-                patches_flat = patches.reshape(ny * nx, ph, pw, c)
-                positions_flat = positions.reshape(ny * nx, 4)
-                all_patches.append(patches_flat)
-                all_positions.append(positions_flat)
+        all_patches, all_positions = [], []
+        for img in images:
+            img_resized = resize_max_patches(img, self.max_patches, **self.ps)
+            patches, positions = patchify(img_resized, **self.ps)
+            ny, nx, ph, pw, c = patches.shape
+            patches_flat = patches.reshape(ny * nx, ph, pw, c)
+            positions_flat = positions.reshape(ny * nx, 4)
+            all_patches.append(patches_flat)
+            all_positions.append(positions_flat)
 
-            nimg = sum(map(len, all_patches))
-            nsep = len(images)  # one separator after each image
-            nreg = self.nreg
+        nimg = sum(map(len, all_patches))
+        nsep = len(images)  # one separator after each image
+        nreg = self.nreg
 
-            nbytes = max(d.nbytes_text(), d.nbytes_image(**self.ps), d.nbytes_reg())
-            tokens = np.zeros((1 + npre + 1 + nimg + nsep + nreg + 1 + nsuf + 1, nbytes), np.uint8)
+        nbytes = max(d.nbytes_text(), d.nbytes_image(**self.ps), d.nbytes_reg())
+        tokens = np.zeros((1 + npre + 1 + nimg + nsep + nreg + 1 + nsuf + 1, nbytes), np.uint8)
 
-            txtpos = np.arange(1 + npre + 1 + nsep + 1 + nsuf + 1)
-            d.pack_text([t.bos, prefix, t.sep], positions=txtpos[: 1 + npre + 1], out=tokens[: 1 + npre + 1])
+        txtpos = np.arange(1 + npre + 1 + nsep + 1 + nsuf + 1)
+        d.pack_text([t.bos, prefix, t.sep], positions=txtpos[: 1 + npre + 1], out=tokens[: 1 + npre + 1])
 
-            pos = 1 + npre + 1
-            img_start = 0
-            for i_img, img_patches in enumerate(all_patches):
-                n_patches = img_patches.shape[0]
-                d.pack_image(img_patches, all_positions[i_img], out=tokens[pos:pos + n_patches])
-                pos += n_patches
+        pos = 1 + npre + 1
+        img_start = 0
+        for i_img, img_patches in enumerate(all_patches):
+            n_patches = img_patches.shape[0]
+            d.pack_image(img_patches, all_positions[i_img], out=tokens[pos:pos + n_patches])
+            pos += n_patches
 
-                d.pack_text([t.sep], positions=[txtpos[1 + npre + 1 + i_img]], out=tokens[pos:pos + 1])
-                pos += 1
+            d.pack_text([t.sep], positions=[txtpos[1 + npre + 1 + i_img]], out=tokens[pos:pos + 1])
+            pos += 1
 
-                # Optional: pack regs after each image here, for cases with multiple images only.
+            # Optional: pack regs after each image here, for cases with multiple images only.
 
-            d.pack_regs(nreg, out=tokens[pos:pos + nreg])
-            d.pack_text([t.sep, suffix, t.eos], positions=txtpos[-(1 + nsuf + 1) :], out=tokens[-(1 + nsuf + 1) :])
+        d.pack_regs(nreg, out=tokens[pos:pos + nreg])
+        d.pack_text([t.sep, suffix, t.eos], positions=txtpos[-(1 + nsuf + 1) :], out=tokens[-(1 + nsuf + 1) :])
 
-            return sanity_check({
-                "tokens": tokens,
-                "loss_weights":  np.r_[0, [0] * npre, 0,  [0] * nimg,  [0] * nsep, [0] * nreg, 0, [1] * nsuf, 1].astype(np.int64),
-                "attn_regions":  np.r_[1, [1] * npre, 1,  [1] * nimg,  [1] * nsep, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
-                "attn_regions2": np.r_[1, [1] * npre, 1, [-1] * nimg, [-1] * nsep, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
-                "src": data["source"][0],
-                "id": exid,
-            })
-        else:
-            nreg = self.nreg
-            nbytes = max(d.nbytes_text(), d.nbytes_image(**self.ps), d.nbytes_reg())
-            tokens = np.zeros((1 + npre + 1 + nreg + 1 + nsuf + 1, nbytes), np.uint8)
-
-            txtpos = np.arange(1 + npre + 1 + 1 + nsuf + 1)
-            d.pack_text([t.bos, prefix, t.sep], positions=txtpos[: 1 + npre + 1], out=tokens[: 1 + npre + 1])
-            d.pack_regs(nreg, out=tokens[1 + npre + 1 : 1 + npre + 1 + nreg])
-            d.pack_text([t.sep, suffix, t.eos], positions=txtpos[-(1 + nsuf + 1) :], out=tokens[-(1 + nsuf + 1) :])
-
-            return sanity_check({
-                "tokens": tokens,
-                "loss_weights":  np.r_[0, [0] * npre, 0, [0] * nreg, 0, [1] * nsuf, 1].astype(np.int64),
-                "attn_regions":  np.r_[1, [1] * npre, 1, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
-                "attn_regions2": np.r_[1, [1] * npre, 1, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
-                "src": data["source"][0],
-                "id": exid,
-            })
+        return sanity_check({
+            "tokens": tokens,
+            "loss_weights":  np.r_[0, [0] * npre, 0,  [0] * (nimg + nsep), [0] * nreg, 0, [1] * nsuf, 1].astype(np.int64),
+            "attn_regions":  np.r_[1, [1] * npre, 1,  [1] * (nimg + nsep), [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
+            "attn_regions2": np.r_[1, [1] * npre, 1, [-1] * (nimg + nsep), [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
+            "src": data["source"][0],
+            "id": exid,
+        })
 
     def make_exids(self, *a, **kw):
         return sharded_iota_exids(len(self.reader), *a, **kw)

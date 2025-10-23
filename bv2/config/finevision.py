@@ -10,7 +10,6 @@ def get_config():
     c.maxtok = 32_768
 
     c.data.name = "finevision"
-    c.data.split = "train"
     # c.data.max_patches = 16_384  # FineVision resized to max 2048
     c.data.max_patches = 784  # (448/16)^2 = 784; (224/16)^2 = 196
     c.data.nreg = lambda: c.model.reg.nreg
