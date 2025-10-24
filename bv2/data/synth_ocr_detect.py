@@ -169,6 +169,8 @@ class Dataset:
             seq_mask = iseq == i
 
             txt, img = vis_image_text_unpack(tokens[seq_mask], ph=self.ps, pw=self.ps)
+            assert len(img) == 1
+            img = img[0]
             txt = t.decode(txt)
             prefix, _, suffix = txt.split("<|sep|>")
             prefix = prefix.removeprefix("<|bos|>")

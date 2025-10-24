@@ -43,30 +43,36 @@ def get_bagz_reader(fspec, cache_limits=True):
 
 
 def vis_image_text_unpack(tokens, *, ph, pw):
-    # decode text
     txt, _, mask = d.unpack_as_text(tokens)
-    txt, mask = txt.numpy(), mask.numpy()
-    txt = txt[mask]
-
-    # decode image
+    txt = txt.numpy()[mask.numpy()]
     patches, positions, _, mask = d.unpack_as_image(tokens, ph, pw)
-    patches, positions, mask = patches.numpy(), positions.numpy(), mask.numpy()
-    patches, positions = patches[mask], positions[mask]
-    image = unpatchify(patches, positions)
+    patches, positions = patches.numpy()[mask.numpy()], positions.numpy()[mask.numpy()]
 
-    return txt, image
+    # Supports multiple images.
+    curr_patches, curr_positions, images = [], [], []
+    for pos, patch in zip(positions, patches):
+        curr_patches.append(patch)
+        curr_positions.append(pos)
+
+        if len(curr_patches) == pos[2] * pos[3]:
+            images.append(unpatchify(np.array(curr_patches), np.array(curr_positions)))
+            curr_patches, curr_positions = [], []
+
+    return txt, images
 
 
 def vis_image_text_wandb(data, tiktoken, *, ph, pw):
     import wandb  # Local import to not pollute tests with silly warnings.
-    table = wandb.Table(["id", "text", "image"])
+    table = wandb.Table(["id", "text", "images"])
 
     tokens = data["tokens"].cpu()
     iseq = data["iseq"].cpu()
 
     for _id in range(iseq.max() + 1):
-        txt, image = vis_image_text_unpack(tokens[iseq == _id], ph=ph, pw=pw)
+        txt, images = vis_image_text_unpack(tokens[iseq == _id], ph=ph, pw=pw)
         txt = tiktoken.decode(txt)
-        table.add_data(_id, txt, wandb.Image(image))
+
+        wandb_images = [wandb.Image(img) for img in images] or None
+        table.add_data(_id, txt, wandb_images)
 
     return table

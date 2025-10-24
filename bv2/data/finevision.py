@@ -7,7 +7,7 @@ from zipfile import ZipFile
 import bv2.data.dpack as d
 
 import numpy as np
-from bv2.data.common import get_bagz_reader, sharded_iota_exids
+from bv2.data.common import get_bagz_reader, sharded_iota_exids, vis_image_text_wandb
 from bv2.data.pp import patchify, unpatchify, resize_max_patches, sanity_check
 from PIL import Image
 
@@ -28,6 +28,9 @@ class Dataset:
         self.ps = {"ph": ps, "pw": ps}
         self.max_patches = max_patches
         self.nreg = nreg
+
+    def vis_data_wandb(self, data):
+        return vis_image_text_wandb(data, _get_tiktoken(), **self.ps)
 
     @property
     def reader(self):
