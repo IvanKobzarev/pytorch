@@ -4,9 +4,10 @@ from zipfile import ZipFile
 
 import numpy as np
 
-import bv2.data.dpack as d  # usort: skip
-from bv2.data.common import get_bagz_reader, sharded_iota_exids  # usort: skip  # fmt: skip
+import bv2.data.dpack as d
+from bv2.data.common import get_bagz_reader, sharded_iota_exids
 from bv2.data.pp import sanity_check
+from bv2.data.tokenizer import get_tiktoken
 
 
 PATH = {
@@ -16,34 +17,34 @@ PATH = {
 
 
 class Dataset:
-    def __init__(self, split):
+    def __init__(self, split, tokenizer={}):
         # Idea: here or in pp: randomize sub-seqlen, because many are >32k!
         self.fspec = PATH[split]
+        self.tt = get_tiktoken()
 
-    @property
-    def reader(self):  # BagzReader is not picklable. Create and cache per-process.
-        return get_bagz_reader(self.fspec)  # This is functools.cache'd
+    @property  # Not a cached_property because BagzReader is not picklable.
+    def reader(self):  # which would make the whole class unpicklable.
+        return get_bagz_reader(self.fspec)  # But this is functools.cache'd per process.
 
     def make_example(self, exid, epoch):
         with ZipFile(BytesIO(self.reader[exid])) as zf:
             data = json.load(zf.open("txt.json"))
             # NOTE: Not using "meta.json" here yet.
 
-        t = _get_tiktoken()
-        toks = t.encode(data)
+        toks = self.tt.encode(data)
 
         return sanity_check({
-            "tokens": d.pack_text(np.r_[t.bos, toks, t.eos], positions="auto"),
+            "tokens": d.pack_text(np.r_[self.tt.bos, toks, self.tt.eos], positions="auto"),
             "loss_weights": np.r_[0, [1] * len(toks), 1],
             "attn_regions": np.zeros(2 + len(toks), int),  # 0 = AR
             "id": exid,
-        })  # fmt: skip
+        })
 
     def make_exids(self, *a, **kw):
         return sharded_iota_exids(len(self.reader), *a, **kw)
 
     def vocab_size(self):
-        return _get_tiktoken().n_vocab
+        return self.tt.n_vocab
 
     def vis_data_wandb(self, data):
         import wandb  # Local import to not pollute tests with silly warnings.
@@ -55,11 +56,6 @@ class Dataset:
         for _id in range(iseq.max() + 1):
             txt, _, mask = d.unpack_as_text(tokens[iseq == _id])
             txt = txt.numpy()[mask.numpy()]
-            table.add_data(_id, _get_tiktoken().decode(txt))
+            table.add_data(_id, self.tt.decode(txt))
 
         return table
-
-
-def _get_tiktoken():
-    import bv2.data.tokenizer
-    return bv2.data.tokenizer.get_tiktoken()
