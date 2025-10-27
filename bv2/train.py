@@ -294,7 +294,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         train_times.append(perf_counter() - t0)  # seconds
         peak_mems.append(torch.cuda.max_memory_allocated() / 1024**2)  # MiB
         wlogger.log({"chrono/peakmem": peak_mems[-1]})
-        wlogger.log({"chrono/traintime": train_times[-1]*1000})
+        wlogger.log({"chrono/traintime": train_times[-1]})
         wlogger.log({"chrono/steptime": t0 - tprev})
         wlogger.log({"chrono/datawait": t0 - t_prev_step_end})
 
