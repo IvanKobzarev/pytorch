@@ -339,9 +339,15 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     prints(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
     prints(f"Step times (med: {np.median(train_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in train_times)}")  # fmt: skip
-    torch._dynamo.reset()  # Avoid hang: https://x.com/main_horse/status/1937900381574717940
+
     if ckpt_future:
         ckpt_future.result()
+
+    with open(pjoin(workdir, "DONE"), "w+") as f:
+        f.write("All good!")
+    print(f"Done. Workdir: {workdir}")
+
+    torch._dynamo.reset()  # Avoid hang: https://x.com/main_horse/status/1937900381574717940
     distr.destroy_process_group()
     wlogger.finish()
     prints("Destroyed group")
