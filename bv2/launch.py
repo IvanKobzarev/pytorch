@@ -96,6 +96,8 @@ if __name__ == "__main__":
 
     try:
         for wid, work_unit_args in enumerate(all_jobs):
+            if isinstance(work_unit_args, str):  # Normalize single-arg sweep.
+                work_unit_args = [work_unit_args]
             log_xwid = f"{LIGHT}xid {RESET}{xid}{LIGHT} | wid {RESET}{wid:{len(str(njobs))}d}{LIGHT}"
             log_args = "args: " + ", ".join(f"{RESET}{BOLD}{arg}{RESET}{LIGHT}" for arg in work_unit_args) + LIGHT
             if sws_args:
