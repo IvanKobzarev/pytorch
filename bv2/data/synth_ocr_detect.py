@@ -9,9 +9,10 @@ import bv2.data.dpack as d  # isort: skip
 from bv2.data.pp import patchify, sanity_check  # isort: skip
 from bv2.data.synth_ocr import font, render  # isort: skip
 from bv2.data.common import infinite_random_exids, vis_image_text_unpack  # isort: skip
+from bv2.data.tokenizer import get_tiktoken
 
 class Dataset:
-    def __init__(self, mode="tlwh", add_row_sep=False, add_hw=False, tiptoi=0, fs=18, ps=16, **kw):
+    def __init__(self, mode="tlwh", add_row_sep=False, add_hw=False, tiptoi=0, fs=18, ps=16, tokenizer={}, **kw):
         self.fs = fs
         self.ps = ps
         self.render_kw = kw
@@ -19,6 +20,7 @@ class Dataset:
         self.add_row_sep = add_row_sep
         self.add_hw = add_hw
         self.tiptoi = tiptoi
+        self.tt = get_tiktoken(**tokenizer) 
 
     def make_exids(self, *a, **kw):
         return infinite_random_exids(*a, epoch_size=2048, **kw)
@@ -59,9 +61,8 @@ class Dataset:
             case "lrtb": coords_str = f"{x} {x2} {y} {y2}"
             case _: raise ValueError(f"Unknown mode {self.mode}. See code")
 
-        t = _get_tiktoken()
-        prefix = np.array(t.encode(f"Where is the word {query_word}"))
-        suffix = np.array(t.encode(coords_str))
+        prefix = np.array(self.tt.encode(f"Where is the word {query_word}"))
+        suffix = np.array(self.tt.encode(coords_str))
 
         # TODO: also do a "resize to min/max" in the future.
         patches, positions = patchify(img, pw=self.ps, ph=self.ps)
@@ -152,7 +153,6 @@ class Dataset:
 
     def vis_output_wandb(self, data, preds, max_examples=20):
         import wandb  # Local import to not pollute tests with silly warnings.
-        t = _get_tiktoken()
         table = wandb.Table([
             "input_text",
             "ground_truth",
@@ -171,7 +171,7 @@ class Dataset:
             txt, img = vis_image_text_unpack(tokens[seq_mask], ph=self.ps, pw=self.ps)
             assert len(img) == 1
             img = img[0]
-            txt = t.decode(txt)
+            txt = self.tt.decode(txt)
             prefix, _, suffix = txt.split("<|sep|>")
             prefix = prefix.removeprefix("<|bos|>")
             suffix = suffix.removesuffix("<|eos|>")
@@ -182,10 +182,10 @@ class Dataset:
             tgt_mask = seq_mask & loss_mask
             seq_preds = preds[tgt_mask[1:]].numpy()
 
-            pred_suffix = t.decode(seq_preds)
+            pred_suffix = self.tt.decode(seq_preds)
 
-            if seq_preds[-1] == t.eos:
-                pred_str = t.decode(seq_preds[:-1])
+            if seq_preds[-1] == self.tt.eos:
+                pred_str = self.tt.decode(seq_preds[:-1])
                 img_pred = self.parse_and_draw(img, pred_str, color="blue")
             else:
                 img_pred = img
@@ -200,10 +200,4 @@ class Dataset:
         return table
 
     def vocab_size(self):
-        return _get_tiktoken().n_vocab
-
-
-def _get_tiktoken(first_N=30_000):
-    import bv2.data.tokenizer
-
-    return bv2.data.tokenizer.get_tiktoken(first_N=first_N)
+        return self.tt.n_vocab

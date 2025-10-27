@@ -9,11 +9,12 @@ import bv2.data.dpack as d
 import numpy as np
 from bv2.data.common import get_bagz_reader, sharded_iota_exids, vis_image_text_wandb
 from bv2.data.pp import patchify, unpatchify, resize_max_patches, sanity_check
+from bv2.data.tokenizer import get_tiktoken
 from PIL import Image
 
 
 class Dataset:
-    def __init__(self, ps=16, max_patches=16_384, nreg=0, include=[".*"], exclude=[]):
+    def __init__(self, ps=16, max_patches=16_384, nreg=0, include=[".*"], exclude=[], tokenizer={}):
         base_path = "/checkpoint/rigi/data/FineVision-1.0.1"
 
         paths = []
@@ -29,8 +30,10 @@ class Dataset:
         self.max_patches = max_patches
         self.nreg = nreg
 
+        self.tt = get_tiktoken(**tokenizer)
+
     def vis_data_wandb(self, data):
-        return vis_image_text_wandb(data, _get_tiktoken(), **self.ps)
+        return vis_image_text_wandb(data, self.tt, **self.ps)
 
     @property
     def reader(self):
@@ -63,9 +66,8 @@ class Dataset:
         question, answers = data["qas"][list(data["qas"])[q_idx]]
         answer = answers[q_cycle % len(answers)]
 
-        t = _get_tiktoken()
-        prefix = t.encode(question)
-        suffix = t.encode(answer)
+        prefix = self.tt.encode(question)
+        suffix = self.tt.encode(answer)
         npre, nsuf = len(prefix), len(suffix)
 
         all_patches, all_positions = [], []
@@ -116,13 +118,7 @@ class Dataset:
         return sharded_iota_exids(len(self.reader), *a, **kw)
 
     def vocab_size(self):
-        return _get_tiktoken().n_vocab
-
-
-def _get_tiktoken(first_N=None):
-    import bv2.data.tokenizer
-
-    return bv2.data.tokenizer.get_tiktoken(first_N=first_N)
+        return self.tt.n_vocab
 
 
 DATA_TO_BAG = {

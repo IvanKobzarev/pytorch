@@ -13,17 +13,19 @@ from PIL import Image
 import bv2.data.dpack as d  # usort: skip
 from bv2.data.common import get_bagz_reader, sharded_iota_exids, vis_image_text_wandb  # usort: skip  # fmt: skip
 from bv2.data.pp import patchify, resize_max_patches, sanity_check  # usort: skip
+from bv2.data.tokenizer import get_tiktoken
 
 
 PATH = "/checkpoint/rigi/data/{split}.bag"
 
 
 class Dataset:
-    def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, nreg=0):
+    def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, nreg=0, tokenizer={}):
         self.fspec = basepath.format(split=split)
         self.ps = dict(ph=ps, pw=ps)
         self.max_patches = max_patches
         self.nreg = nreg
+        self.tt = get_tiktoken(**tokenizer)
 
     @property
     def reader(self):  # BagzReader is not picklable. Create and cache per-process.
@@ -44,9 +46,8 @@ class Dataset:
         question, answers = data["qas"][list(data["qas"])[q_idx]]
         answer = answers[q_cycle % len(answers)]
 
-        t = _get_tiktoken()
-        prefix = t.encode(question.lower())
-        suffix = t.encode(answer.lower())
+        prefix = self.tt.encode(question.lower())
+        suffix = self.tt.encode(answer.lower())
 
         img = resize_max_patches(img, self.max_patches, **self.ps)
         patches, positions = patchify(img, **self.ps)
@@ -87,13 +88,7 @@ class Dataset:
         return sharded_iota_exids(len(self.reader), *a, **kw)
 
     def vocab_size(self):
-        return _get_tiktoken().n_vocab
+        return self.tt.n_vocab
 
     def vis_data_wandb(self, data):
-        return vis_image_text_wandb(data, _get_tiktoken(), **self.ps)
-
-
-def _get_tiktoken(first_N=None):
-    import bv2.data.tokenizer
-
-    return bv2.data.tokenizer.get_tiktoken(first_N=first_N)
+        return vis_image_text_wandb(data, self.tt, **self.ps)

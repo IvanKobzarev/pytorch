@@ -574,6 +574,7 @@ def get_config():
     c.data.name = "random_nouns"
     c.data.min_nouns = 128
     c.data.max_nouns = 256
+    c.data.tokenizer.first_N = 10_000
 
     c.iter.eagerness = 16
     c.iter.maxtok = lambda: c.maxtok
@@ -592,6 +593,7 @@ def get_config():
     c.evals.pplx_val.type = "pplx"
     c.evals.pplx_val.steps = 10
     c.evals.pplx_val.data.name = lambda: c.data.name
+    c.evals.pplx_val.data.tokenizer.first_N = lambda: c.data.tokenizer.first_N
     c.evals.pplx_val.iter.maxtok = lambda: c.maxtok
     c.evals.pplx_val.iter.seed = 31337  # "val split"
     c.evals.pplx_val.iter.eagerness = 1

@@ -14,6 +14,7 @@ import bv2.data.dpack as d  # isort: skip
 from bv2.data.noun_vocab import VOCAB  # isort: skip
 from bv2.data.pp import patchify, sanity_check, unpatchify  # isort: skip
 from bv2.data.common import infinite_random_exids, vis_image_text_wandb  # isort: skip
+from bv2.data.tokenizer import get_tiktoken
 
 
 @cache
@@ -66,19 +67,19 @@ def render(seed, *, min_h=224, min_w=224, max_h=288, max_w=288, ps=16, fs=18, un
 
 
 class Dataset:
-    def __init__(self, ps=16, **kw):
+    def __init__(self, ps=16, tokenizer={}, **kw):
         self.ps = ps
         self.render_kw = kw
+        self.tt = get_tiktoken(**tokenizer)
 
     def make_exids(self, *a, **kw):
         return infinite_random_exids(*a, **kw)
 
     def make_example(self, exid, epoch):
         img, txt, _ = render(exid, ps=self.ps, **self.render_kw)
-        t = _get_tiktoken()
 
-        prefix = np.array(t.encode("ocr"))
-        suffix = np.array(t.encode(txt))
+        prefix = np.array(self.tt.encode("ocr"))
+        suffix = np.array(self.tt.encode(txt))
 
         # TODO: also do a "resize to min/max" in the future.
         patches, positions = patchify(img, pw=ps, ph=ps)
@@ -91,9 +92,9 @@ class Dataset:
         tokens = np.zeros((npre + nimg + nsuf, nbytes), np.uint8)
 
         txtpos = np.arange(npre + nsuf)
-        d.pack_text([t.bos, prefix, t.sep], positions=txtpos[:npre], out=tokens[:npre])
+        d.pack_text([self.tt.bos, prefix, self.tt.sep], positions=txtpos[:npre], out=tokens[:npre])
         d.pack_image(patches, positions, out=tokens[npre:-nsuf])
-        d.pack_text([t.sep, suffix, t.eos], positions=txtpos[-nsuf:], out=tokens[-nsuf:])
+        d.pack_text([self.tt.sep, suffix, self.tt.eos], positions=txtpos[-nsuf:], out=tokens[-nsuf:])
 
         return sanity_check({
             "tokens": tokens,
@@ -104,13 +105,7 @@ class Dataset:
         })  # fmt: skip
 
     def vocab_size(self):
-        return _get_tiktoken().n_vocab
+        return self.tt.n_vocab
 
     def vis_data_wandb(self, data):
-        return vis_image_text_wandb(data, _get_tiktoken(), self.ps, self.ps)
-
-
-def _get_tiktoken(first_N=10_000):
-    import bv2.data.tokenizer
-
-    return bv2.data.tokenizer.get_tiktoken(first_N=first_N)
+        return vis_image_text_wandb(data, self.tt, self.ps, self.ps)
