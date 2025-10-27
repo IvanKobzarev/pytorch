@@ -219,6 +219,7 @@ def estimate_nccl_collective_runtime_nccl_estimator(snode) -> Optional[float]:  
 def estimate_nccl_collective_runtime_impl(
     tensor_storage_size_bytes: int, group_size: int, coll: NCCL_COLL
 ) -> float:
+    print(f"XXX ESTIMATE_NCCL_COLLECTIVE tensor_size:{tensor_storage_size_bytes} group_size:{group_size} coll:{coll}")
     """
     Returns estimated NCCL collective runtime in milliseconds (ms).
 
@@ -238,6 +239,7 @@ def estimate_nccl_collective_runtime_impl(
     # TODO: Need to find a way to get accurate "gpus per node" and "# nodes" info.
     num_gpus_per_node = 8
     nNodes = math.ceil(group_size / num_gpus_per_node)
+    print(f"XXX nNodes:{nNodes}")
     nRanks = group_size  # this is total # of gpus globally that participate in this collective op
 
     if nRanks <= 1:
@@ -357,7 +359,7 @@ def estimate_fx_collective_size(fx_node: torch.fx.Node) -> int:
 
 
 def estimate_nccl_collective_runtime_from_fx_node(
-    fx_node: torch.fx.Node, override_size: Optional[int] = None
+    fx_node: torch.fx.Node, override_size: Optional[int] = None, use_nccl_estimator: bool = True
 ) -> float:
     """
     Returns estimated NCCL collective runtime in nanoseconds (ns).
@@ -386,11 +388,26 @@ def estimate_nccl_collective_runtime_from_fx_node(
         normalize_to_only_use_kwargs=True,
     )
     assert opt_args_kwargs is not None
-    _, kwargs = opt_args_kwargs
+    args, kwargs = opt_args_kwargs
 
     group_size = _get_group_size_by_name(kwargs["group_name"])
     assert isinstance(fx_node.target, torch._ops.OpOverload)
     coll = get_collective_type_from_kernel_name(fx_node.target.name())
+
+    if use_nccl_estimator:
+        # TODO: Refactor with estimate_nccl_collective_runtime_nccl_estimator
+        with torch.distributed._time_estimator(
+            group=pg, device=device
+        ) as time_estimator:
+            w = fn(*args, **kwargs)
+            torch.ops._c10d_functional.wait_tensor.default(w)
+        est_time_us = time_estimator.estimated_time
+        # -1000 constant is NCCL return in case of error during estimations.
+        # Observed it for all_to_all estimations.
+        if est_time_us < 0:
+            return None
+        est_time_ms = est_time_us / 1e3
+        return est_time_ms
 
     return estimate_nccl_collective_runtime_impl(
         tensor_storage_size_bytes, group_size, coll

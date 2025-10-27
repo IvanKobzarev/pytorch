@@ -102,6 +102,15 @@ class SymmetricMemoryTest(MultiProcContinuousTest):
         t = symm_mem.empty(2 * 1024**3, dtype=torch.uint8, device="cuda")
         self.assertEqual(t.numel() * t.element_size(), 2 * 1024**3)
 
+    def test_test(self) -> None:
+        self._init_process()
+        group = dist.group.WORLD
+        print(f"XXX TEST_TOPO group:{group.name()}")
+        # print(f"XXX dir(group):{dir(group)}")
+        topo = torch.ops.topo.get_topology(torch.empty(0), group.name())
+        # topo = torch.ops.symm_mem._get_topology(torch.empty(0, device="cuda"), group.name())
+        print(f"XXX topo:{topo}")
+
     @skipIf(
         not PLATFORM_SUPPORTS_SYMM_MEM, "SymmMem is not supported on this ROCm arch"
     )

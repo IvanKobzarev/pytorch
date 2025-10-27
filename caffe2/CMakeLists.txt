@@ -588,6 +588,8 @@ if(USE_CUDA)
         ${TORCH_SRC_DIR}/csrc/distributed/c10d/ProcessGroupNCCL.cpp
         ${TORCH_SRC_DIR}/csrc/distributed/c10d/cuda/utils.cpp
         ${TORCH_SRC_DIR}/csrc/distributed/c10d/intra_node_comm.cpp
+        ${TORCH_SRC_DIR}/csrc/distributed/c10d/NCCLTopology.cpp
+        ${TORCH_SRC_DIR}/csrc/distributed/c10d/NCCLTopology.cu
         ${TORCH_SRC_DIR}/csrc/distributed/c10d/symm_mem/CudaDMAConnectivity.cpp
         ${TORCH_SRC_DIR}/csrc/distributed/c10d/symm_mem/CUDASymmetricMemory.cu
         ${TORCH_SRC_DIR}/csrc/distributed/c10d/symm_mem/CUDASymmetricMemoryOps.cu

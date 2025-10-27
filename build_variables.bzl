@@ -749,6 +749,8 @@ libtorch_cuda_distributed_base_sources = [
 libtorch_cuda_distributed_extra_sources = [
     "torch/csrc/distributed/c10d/FlightRecorderCuda.cpp",
     "torch/csrc/distributed/c10d/NCCLUtils.cpp",
+    "torch/csrc/distributed/c10d/NCCLTopology.cpp",
+    "torch/csrc/distributed/c10d/NCCLTopology.cu",
     "torch/csrc/distributed/c10d/NanCheck.cu",
     "torch/csrc/distributed/c10d/ProcessGroupGlooCuda.cpp",
     "torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp",
