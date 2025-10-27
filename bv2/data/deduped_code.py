@@ -17,10 +17,11 @@ PATH = {
 
 
 class Dataset:
-    def __init__(self, split, tokenizer={}):
+    def __init__(self, split, first_N=float("inf"), tokenizer={}):
         # Idea: here or in pp: randomize sub-seqlen, because many are >32k!
         self.fspec = PATH[split]
-        self.tt = get_tiktoken()
+        self.first_N = first_N
+        self.tt = get_tiktoken(**tokenizer)
 
     @property  # Not a cached_property because BagzReader is not picklable.
     def reader(self):  # which would make the whole class unpicklable.
@@ -41,7 +42,7 @@ class Dataset:
         })
 
     def make_exids(self, *a, **kw):
-        return sharded_iota_exids(len(self.reader), *a, **kw)
+        return sharded_iota_exids(min(len(self.reader), self.first_N), *a, **kw)
 
     def vocab_size(self):
         return self.tt.n_vocab
