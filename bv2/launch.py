@@ -34,6 +34,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 from runpy import run_path
 
 
@@ -124,6 +125,12 @@ if __name__ == "__main__":
                 print(ret.stdout)
     except KeyboardInterrupt:
         print(f"\n{RED}{BOLD}Launch interrupted. See command below to kill launched jobs.{RESET}")
+
+    # Storing the exact launch command into the XID folder, this is useful for resuming
+    # individual jobs that failed in the future, for example.
+    p = Path(f"/checkpoint/rigi/bv2/workdirs/{xid}/launchinfo.txt")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(" ".join(sys.argv), encoding="utf-8")
 
     print(f"{RESET}To kill all these jobs: {BLUE}scancel -n {xid}{RESET}")
     print(f"To see status of all these jobs (triple-click to select line):\n{BLUE}squeue -n {xid}{RESET} -O JobId:7,Name:20,UserName:5,State:10,TimeUsed:9,NumCPUs:5,QOS:9,NumNodes:6,GRES:14,RestartCnt:4,Reason")
