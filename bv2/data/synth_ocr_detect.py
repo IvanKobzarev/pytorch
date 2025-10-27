@@ -20,7 +20,7 @@ class Dataset:
         self.add_row_sep = add_row_sep
         self.add_hw = add_hw
         self.tiptoi = tiptoi
-        self.tt = get_tiktoken(**tokenizer) 
+        self.tt = get_tiktoken(**tokenizer)
 
     def make_exids(self, *a, **kw):
         return infinite_random_exids(*a, epoch_size=2048, **kw)
