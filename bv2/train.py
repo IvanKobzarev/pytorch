@@ -213,7 +213,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         torch.cuda.synchronize()
         distr.barrier()  # For accurate global datawait timing.
         tprev, t0 = t0, perf_counter()
-        if prof and step == 3:
+        if prof and step == 50:
             torch.cuda.cudart().cudaProfilerStart()
             prof.start()
 
@@ -307,12 +307,12 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                 "metrics": wlogger.save_ckpt(),
             })  # fmt: skip
 
-        if prof and step == 2:
+        if c.nsteps > 50 and step == 2:
             # dumping first 3 iterations from init are enough to include optim states.
             # Otherwise the .pkl becomes too big and freezes chrome.
             # Drag .pkl file to https://docs.pytorch.org/memory_viz
             torch.cuda.memory._dump_snapshot(pjoin(workdir, f"prof_memsnap_r{rank}.pkl"))  # fmt: skip
-        if prof and step == 6:  # Open in about://tracing or ui.perfetto.dev
+        if prof and step == 53:  # Open in about://tracing or ui.perfetto.dev
             torch.cuda.cudart().cudaProfilerStop()
             prof.stop()  # TODO: speedup gz
             prof.export_chrome_trace(pjoin(workdir, f"prof_trace_r{rank}.json.gz"))
