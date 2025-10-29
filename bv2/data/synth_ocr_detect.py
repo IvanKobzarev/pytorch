@@ -12,7 +12,7 @@ from bv2.data.common import infinite_random_exids, vis_image_text_unpack  # isor
 from bv2.data.tokenizer import get_tiktoken
 
 class Dataset:
-    def __init__(self, mode="tlwh", add_row_sep=False, add_hw=False, tiptoi=0, fs=18, ps=16, tokenizer={}, **kw):
+    def __init__(self, mode="tlwh", add_row_sep=False, add_hw=False, tiptoi=0, fs=18, ps=16, tokenizer=None, **kw):
         self.fs = fs
         self.ps = ps
         self.render_kw = kw
@@ -20,7 +20,7 @@ class Dataset:
         self.add_row_sep = add_row_sep
         self.add_hw = add_hw
         self.tiptoi = tiptoi
-        self.tt = get_tiktoken(**tokenizer)
+        self.ttkw = tokenizer or {}
 
     def make_exids(self, *a, **kw):
         return infinite_random_exids(*a, epoch_size=2048, **kw)
@@ -96,6 +96,9 @@ class Dataset:
             "id": exid,
         })  # fmt: skip
 
+    @property  # Not a cached_property because we don't want to pickle/unpickle tokenizer.
+    def tt(self):
+        return get_tiktoken(**self.ttkw)  # But this is functools.cache'd per process.
 
     def draw_bbox(self, image, x1, y1, x2, y2, color="red", width=2):
         image = Image.fromarray(np.array(image))  # Make a copy for sure.

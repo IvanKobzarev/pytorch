@@ -14,7 +14,7 @@ from PIL import Image
 
 
 class Dataset:
-    def __init__(self, ps=16, max_patches=16_384, nreg=0, include=[".*"], exclude=[], tokenizer={}):
+    def __init__(self, ps=16, max_patches=16_384, nreg=0, include=[".*"], exclude=[], tokenizer=None):
         base_path = "/checkpoint/rigi/data/FineVision-1.0.1"
 
         paths = []
@@ -29,15 +29,18 @@ class Dataset:
         self.ps = {"ph": ps, "pw": ps}
         self.max_patches = max_patches
         self.nreg = nreg
-
-        self.tt = get_tiktoken(**tokenizer)
+        self.ttkw = tokenizer or {}
 
     def vis_data_wandb(self, data):
         return vis_image_text_wandb(data, self.tt, **self.ps)
 
+    @property  # Not a cached_property because BagzReader is not picklable.
+    def reader(self):  # which would make the whole class unpicklable.
+        return get_bagz_reader(self.fspec)  # But this is functools.cache'd per process.
+
     @property
-    def reader(self):
-        return get_bagz_reader(self.fspec)
+    def tt(self):  # Same story as for the bagz reader above.
+        return get_tiktoken(**self.ttkw)
 
     def make_example(self, exid, epoch):
         with ZipFile(BytesIO(self.reader[exid])) as zf:
@@ -88,7 +91,7 @@ class Dataset:
         tokens = np.zeros((1 + npre + 1 + nimg + nsep + nreg + 1 + nsuf + 1, nbytes), np.uint8)
 
         txtpos = np.arange(1 + npre + 1 + nsep + 1 + nsuf + 1)
-        d.pack_text([t.bos, prefix, t.sep], positions=txtpos[: 1 + npre + 1], out=tokens[: 1 + npre + 1])
+        d.pack_text([self.tt.bos, prefix, self.tt.sep], positions=txtpos[: 1 + npre + 1], out=tokens[: 1 + npre + 1])
 
         pos = 1 + npre + 1
         img_start = 0
@@ -97,13 +100,13 @@ class Dataset:
             d.pack_image(img_patches, all_positions[i_img], out=tokens[pos:pos + n_patches])
             pos += n_patches
 
-            d.pack_text([t.sep], positions=[txtpos[1 + npre + 1 + i_img]], out=tokens[pos:pos + 1])
+            d.pack_text([self.tt.sep], positions=[txtpos[1 + npre + 1 + i_img]], out=tokens[pos:pos + 1])
             pos += 1
 
             # Optional: pack regs after each image here, for cases with multiple images only.
 
         d.pack_regs(nreg, out=tokens[pos:pos + nreg])
-        d.pack_text([t.sep, suffix, t.eos], positions=txtpos[-(1 + nsuf + 1) :], out=tokens[-(1 + nsuf + 1) :])
+        d.pack_text([self.tt.sep, suffix, self.tt.eos], positions=txtpos[-(1 + nsuf + 1) :], out=tokens[-(1 + nsuf + 1) :])
 
         return sanity_check({
             "tokens": tokens,

@@ -21,8 +21,8 @@ def render(seed, tiktoken, *, min_nouns=128, max_nouns=256):
 
 
 class Dataset:
-    def __init__(self, tokenizer={}, **kw):
-        self.tt = get_tiktoken(**tokenizer)
+    def __init__(self, tokenizer=None, **kw):
+        self.ttkw = tokenizer or {}
         self.render_kw = kw
 
     def make_exids(self, *a, **kw):
@@ -38,6 +38,10 @@ class Dataset:
             # NOTE: for attn_regions, 0 = AR, >0 = dense region ID.
             "id": exid,
         })  # fmt: skip
+
+    @property  # Not a cached_property because we don't want to pickle/unpickle tokenizer.
+    def tt(self):
+        return get_tiktoken(**self.ttkw)  # But this is functools.cache'd per process.
 
     def vocab_size(self):
         return self.tt.n_vocab

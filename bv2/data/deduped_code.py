@@ -17,15 +17,19 @@ PATH = {
 
 
 class Dataset:
-    def __init__(self, split, first_N=float("inf"), tokenizer={}):
+    def __init__(self, split, first_N=float("inf"), tokenizer=None):
         # Idea: here or in pp: randomize sub-seqlen, because many are >32k!
         self.fspec = PATH[split]
         self.first_N = first_N
-        self.tt = get_tiktoken(**tokenizer)
+        self.ttkw = tokenizer or {}
 
     @property  # Not a cached_property because BagzReader is not picklable.
     def reader(self):  # which would make the whole class unpicklable.
         return get_bagz_reader(self.fspec)  # But this is functools.cache'd per process.
+
+    @property
+    def tt(self):  # Same story as for the bagz reader above.
+        return get_tiktoken(**self.ttkw)
 
     def make_example(self, exid, epoch):
         with ZipFile(BytesIO(self.reader[exid])) as zf:

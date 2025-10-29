@@ -19,16 +19,20 @@ PATH = "/checkpoint/rigi/data/{split}.bag"
 
 
 class Dataset:
-    def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, nreg=0, tokenizer={}):
+    def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, nreg=0, tokenizer=None):
         self.fspec = basepath.format(split=split)
         self.ps = dict(ph=ps, pw=ps)
         self.max_patches = max_patches
         self.nreg = nreg
-        self.tt = get_tiktoken(**tokenizer)
+        self.ttkw = tokenizer or {}
+
+    @property  # Not a cached_property because BagzReader is not picklable.
+    def reader(self):  # which would make the whole class unpicklable.
+        return get_bagz_reader(self.fspec)  # But this is functools.cache'd per process.
 
     @property
-    def reader(self):  # BagzReader is not picklable. Create and cache per-process.
-        return get_bagz_reader(self.fspec)  # This is functools.cache'd
+    def tt(self):  # Same story as for the bagz reader above.
+        return get_tiktoken(**self.ttkw)
 
     def make_example(self, exid, epoch):
         # NOTE: Could further optimize by having each rank go only to a subset of all indices.
