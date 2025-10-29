@@ -64,10 +64,10 @@ class Dataset:
         tokens = np.zeros((1 + npre + 1 + nimg + nreg + 1 + nsuf + 1, nbytes), np.uint8)
 
         txtpos = np.arange(1 + npre + 1 + 1 + nsuf + 1)
-        d.pack_text([t.bos, prefix, t.sep], positions=txtpos[:1 + npre + 1], out=tokens[:1 + npre + 1])  # fmt: skip
+        d.pack_text([self.tt.bos, prefix, self.tt.sep], positions=txtpos[:1 + npre + 1], out=tokens[:1 + npre + 1])  # fmt: skip
         d.pack_image(patches, positions, out=tokens[1 + npre + 1 : 1 + npre + 1 + nimg])
         d.pack_regs(nreg, out=tokens[1 + npre + 1 + nimg : -(1 + nsuf + 1)])
-        d.pack_text([t.sep, suffix, t.eos], positions=txtpos[-(1 + nsuf + 1):], out=tokens[-(1 + nsuf + 1):])  # fmt: skip
+        d.pack_text([self.tt.sep, suffix, self.tt.eos], positions=txtpos[-(1 + nsuf + 1):], out=tokens[-(1 + nsuf + 1):])  # fmt: skip
 
         return sanity_check({
             "tokens": tokens,
