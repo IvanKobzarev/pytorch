@@ -52,6 +52,17 @@ def get_config():
     c.evals.pplx_info_vqa.data.nreg = lambda: c.model.reg.nreg
     c.evals.pplx_info_vqa.iter.maxtok = lambda: c.maxtok
 
+    c.evals.inference_info_vqa.type = "decode"
+    c.evals.inference_info_vqa.steps = 5000
+    c.evals.inference_info_vqa.data.name = "vqa"
+    c.evals.inference_info_vqa.data.split = "infovqa/val"
+    c.evals.inference_info_vqa.data.max_patches = lambda: c.data.max_patches
+    c.evals.inference_info_vqa.data.nreg = lambda: c.model.reg.nreg
+    c.evals.inference_info_vqa.iter.max_prefix = lambda: c.data.max_patches + 128
+    c.evals.inference_info_vqa.iter.batch_size = 32
+    c.evals.inference_info_vqa.args.max_decode = 12
+    c.evals.inference_info_vqa.args.T = 1.0
+
     c.evals.pplx_text_vqa.type = "pplx"
     c.evals.pplx_text_vqa.steps = 2000
     c.evals.pplx_text_vqa.data.name = "vqa"

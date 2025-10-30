@@ -45,6 +45,10 @@ def get_bagz_reader(fspec, cache_limits=True):
 def vis_image_text_unpack(tokens, *, ph, pw):
     txt, _, mask = d.unpack_as_text(tokens)
     txt = txt.numpy()[mask.numpy()]
+
+    if not any(tokens[..., -1] == d.MOD_IMG):
+        return txt, []
+
     patches, positions, _, mask = d.unpack_as_image(tokens, ph, pw)
     patches, positions = patches.numpy()[mask.numpy()], positions.numpy()[mask.numpy()]
 

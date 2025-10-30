@@ -178,7 +178,11 @@ class TxtUnembedding(nn.Module):
         return loss.detach(), toklosses.detach(), pred.detach()
 
     def forward(self, x, targets, loss_weights, seqids, mode):
-        assert mode in ("loss and bwd", "loss"), f"Invalid mode {mode}"
+        assert mode in ("loss and bwd", "loss", "logits"), f"Invalid mode {mode}"
+
+        if mode == "logits":
+            return self.head(x)
+
         targets, _, mask = dpack.unpack_as_text(targets)
         x_detached = x.detach().requires_grad_() if mode == "loss and bwd" else x
 
@@ -207,8 +211,8 @@ class TxtUnembedding(nn.Module):
             total_loss += loss
             total_pplx += tok_losses_chunk.sum()
             total_lsum += (tok_losses_chunk * chunk_loss_weights).sum()
-            predictions[start:end] = pred
-            tok_losses[start:end] = tok_losses_chunk
+            predictions[..., start:end] = pred
+            tok_losses[..., start:end] = tok_losses_chunk
             total_correct += ((pred == chunk_targets) * (chunk_loss_weights > 0)).sum()
 
         if mode == "loss and bwd":
@@ -363,7 +367,7 @@ class SimpleTransformer(nn.Module):
 
     @record_function("Transformer")
     def forward(self, tokens, flex_masks, loss_weights, seqids, mode):
-        assert mode in ("loss and bwd", "loss"), f"Invalid mode {mode}"
+        assert mode in ("loss and bwd", "loss", "logits"), f"Invalid mode {mode}"
 
         xtxt = self.txt_emb(tokens)
         xreg = self.reg_emb(tokens)

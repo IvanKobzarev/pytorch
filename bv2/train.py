@@ -137,8 +137,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         return loss, extras
 
     @torch.compile
-    def _fwd(*a, **kw):
-        return model(*a, mode="loss", **kw)
+    def _fwd(*a, mode="loss", **kw):
+        return model(*a, mode=mode, **kw)
 
     # Make sure each hosts generates different data.
     data_seed = rng.integers(2**32, size=world_size)[rank].item()
@@ -182,7 +182,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             ev = c.evals[ev_name]
             is_every_n_steps = step % ev.steps == 0
             is_final = step == c.nsteps
-            if not(is_every_n_steps) and not(is_final):
+            if not is_every_n_steps and not is_final:
                 continue
             em = import_module(f"bv2.eval.{ev.type}")
             ds_ev = bv2.simple_data.from_config(ev.data.to_dict())

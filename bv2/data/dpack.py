@@ -24,20 +24,21 @@ def pack_text(tokens, positions="auto", out=None):
     tokens = np.asarray(tokens, dtype=np.int64)
 
     if isinstance(positions, str) and positions == "auto":
-        positions = np.arange(len(tokens), dtype=np.int32)
+        # also works for batched inputs
+        positions = np.broadcast_to(np.arange(tokens.shape[-1], dtype=np.int32), tokens.shape)
     else:
         positions = np.asarray(positions, dtype=np.int32)
 
     nbytes = nbytes_text()
     if out is None:
-        out = np.zeros((len(tokens), nbytes), dtype=np.uint8)
+        out = np.zeros((*tokens.shape, nbytes), dtype=np.uint8)
     else:
         assert out.dtype == np.uint8, "Can only pack into uint8 buffer."
         assert out.shape[-1] >= nbytes, f"Need at least {nbytes} bytes for packing."
 
     # View each of them as raw bytes:
-    out[..., :8] = tokens[:, None].view(dtype=np.uint8)
-    out[..., 8:8+4] = positions[:, None].view(dtype=np.uint8)
+    out[..., :8] = tokens[..., None].view(dtype=np.uint8)
+    out[..., 8:8+4] = positions[..., None].view(dtype=np.uint8)
     out[..., -1] = MOD_TXT
     return out
 

@@ -67,8 +67,11 @@ def render(seed, *, min_h=224, min_w=224, max_h=288, max_w=288, ps=16, fs=18, un
 
 
 class Dataset:
-    def __init__(self, ps=16, tokenizer=None, **kw):
+    def __init__(self, add_row_sep=False, add_hw=False, tiptoi=0, fs=18, ps=16, tokenizer=None, **kw):
         self.ps = ps
+        self.add_row_sep = add_row_sep
+        self.add_hw = add_hw
+        self.tiptoi = tiptoi
         self.render_kw = kw
         self.ttkw = tokenizer or {}
 
@@ -82,18 +85,19 @@ class Dataset:
         suffix = np.array(self.tt.encode(txt))
 
         # TODO: also do a "resize to min/max" in the future.
-        patches, positions = patchify(img, pw=ps, ph=ps)
+        patches, positions = patchify(img, pw=self.ps, ph=self.ps)
 
         npre = 1 + len(prefix) + 1
         nsuf = 1 + len(suffix) + 1
-        nimg = len(patches)
+        nimg = np.prod(patches.shape[:2])
 
-        nbytes = max(d.nbytes_text(), d.nbytes_image(ph=ps, pw=ps))
+        nbytes = max(d.nbytes_text(), d.nbytes_image_with_extras(ph=self.ps, pw=self.ps, tiptoi=self.tiptoi))
         tokens = np.zeros((npre + nimg + nsuf, nbytes), np.uint8)
 
         txtpos = np.arange(npre + nsuf)
         d.pack_text([self.tt.bos, prefix, self.tt.sep], positions=txtpos[:npre], out=tokens[:npre])
-        d.pack_image(patches, positions, out=tokens[npre:-nsuf])
+        d.pack_image_with_extras(patches, positions, out=tokens[npre:-nsuf],
+                                 add_hw=self.add_hw, add_row_sep=self.add_row_sep, tiptoi=self.tiptoi)
         d.pack_text([self.tt.sep, suffix, self.tt.eos], positions=txtpos[-nsuf:], out=tokens[-nsuf:])
 
         return sanity_check({
@@ -112,4 +116,4 @@ class Dataset:
         return get_tiktoken(**self.ttkw)  # But this is functools.cache'd per process.
 
     def vis_data_wandb(self, data):
-        return vis_image_text_wandb(data, self.tt, self.ps, self.ps)
+        return vis_image_text_wandb(data, self.tt, ph=self.ps, pw=self.ps)

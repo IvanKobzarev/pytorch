@@ -87,10 +87,8 @@ def iter_packed_examples(
     yield seq  # Let's not forget about the last sequence!
 
 
-def pad_seq(seq, to_length, *, pad_values=0):
+def to_len(seq, to_len, *, pad_values=0, allow_cut=False):
     def _rpad_dim0(a, npad, padval):
-        if npad == 0:
-            return a
         return np.pad(a, [(0, npad)] + [(0, 0)] * (a.ndim - 1), constant_values=padval)
 
     padded = {}
@@ -102,9 +100,17 @@ def pad_seq(seq, to_length, *, pad_values=0):
 
         # Padding is requested. Pad numpy arrays as such, otherwise assume it's lists.
         padval = pad_values[k] if isinstance(pad_values, dict) else pad_values
-        if isinstance(v, np.ndarray):
-            padded[k] = _rpad_dim0(v, to_length - v.shape[0], padval)
+        npad = to_len - len(v)
+        if npad > 0:
+            if isinstance(v, np.ndarray):
+                padded[k] = _rpad_dim0(v, npad, padval)
+            else:
+                padded[k] = v + [padval] * npad
+        elif npad < 0:
+            if not allow_cut:
+                raise ValueError("Cutting inputs with `to_len` is now allowed by default. Set `allow_cut=True` to enable.")
+            padded[k] = v[:to_len]
         else:
-            padded[k] = v + [padval] * (to_length - len(v))
+            padded[k] = v
 
     return padded

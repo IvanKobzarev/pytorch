@@ -7,7 +7,7 @@ import sws
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
 
-from bv2.simple_input import iter_packed_examples, pad_seq, parallel_prefetch  # fmt: skip  # usort: skip
+from bv2.simple_input import iter_packed_examples, to_len, parallel_prefetch  # fmt: skip  # usort: skip
 
 # Current high-level description of input pipeline:
 # 0. A dataset module `ds` defines two functions: `make_exids` and `make_example`.
@@ -51,7 +51,7 @@ def data_iter(ds, *, maxtok, device, seed=0, eagerness=16,
         make_example = partial(_with_state, make_example=ds.make_example)
         ex_gen = parallel_prefetch(ex_id_gen(), make_example, eagerness)
 
-        seq_padder = lambda seq: pad_seq(seq, to_length=maxtok, pad_values={
+        seq_padder = lambda seq: to_len(seq, to_len=maxtok, pad_values={
             # Only pad these fields, keep unmentioned fields unpadded.
             "tokens": 0,
             "loss_weights": 0.0,  # Also makes sure it's float.
@@ -96,7 +96,7 @@ create_block_mask = torch.compile(partial(create_block_mask, B=None, H=None))
 def make_mask(ntoks, attn_regions, document_ids, device):
     def mask_mod(b, h, q_idx, kv_idx):
         causal = q_idx >= kv_idx
-        is_padding = (attn_regions[q_idx] == -1) | (attn_regions[kv_idx] == -1)
+        is_padding = (document_ids[q_idx] == -1) | (document_ids[kv_idx] == -1)
         dense_region = (attn_regions[q_idx] > 0) & (attn_regions[kv_idx] > 0)
         same_region = attn_regions[q_idx] == attn_regions[kv_idx]
         same_document = document_ids[q_idx] == document_ids[kv_idx]

@@ -1,5 +1,6 @@
 import json
 import os
+import io
 
 # fmt: off
 # Ignore a warning-spam from pydantic via wandb
@@ -46,10 +47,22 @@ class WandbLogger:
         )
 
         self.step_metrics = {}
+        self.dir = dir
         self.fname = os.path.join(dir, "metrics.jsonl")
 
     @only_on_rank0
     def log(self, data):
+        # Dump BytesIO objects to a file inside workdir, do not attempt to log in W&B.
+        for filename, buf in ((k, v) for k, v in data.items() if isinstance(v, io.BytesIO)):
+            filename = os.path.join(self.dir, filename)
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+            # Save twice, with and without step name.
+            for fname in [filename, f"{filename}-{self.step:09d}"]:
+                with open(fname, "wb") as f:
+                    f.write(buf.getvalue()) 
+
+        # Filter out BytesIO fields and log whats left to W&B.
+        data = {k: v for k, v in data.items() if not isinstance(v, io.BytesIO)}
         self.wandb_run.log(data, step=self.step, commit=False)
         self.step_metrics.update(data)
 
