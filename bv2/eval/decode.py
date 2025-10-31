@@ -83,7 +83,7 @@ def run(predict_fn, ds, iter_args, max_decode, T=1.0, ps=16):
 
         # Get the last txt token position for each sequence for positional embeddings.
         _, txtpos, mask = dpack.unpack_as_text(torch.from_numpy(batch["tokens"]))
-        txtpos = (txtpos * mask).max(dim=1).values.numpy()
+        txtpos = (txtpos * mask).max(dim=1).values.numpy() + 1
 
         ids = batch.pop("id")
         batch = {k: torch.from_numpy(v).to(device) for k, v in batch.items()}
