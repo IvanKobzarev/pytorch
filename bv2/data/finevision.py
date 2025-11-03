@@ -14,7 +14,7 @@ from bv2.data.tokenizer import get_tiktoken
 
 
 class Dataset:
-    def __init__(self, ps=16, max_patches=16_384, nreg=0, include=[".*"], exclude=[], tokenizer=None):
+    def __init__(self, ps=16, max_patches=16_384, nreg=0, include=[".*"], exclude=[], tokenizer=None, greyout_frac=0.0):
         base_path = "/checkpoint/rigi/data/FineVision-1.0.1"
 
         paths = []
@@ -30,6 +30,7 @@ class Dataset:
         self.max_patches = max_patches
         self.nreg = nreg
         self.ttkw = tokenizer or {}
+        self.greyout_frac = greyout_frac
 
     def vis_data_wandb(self, data):
         return vis_image_text_wandb(data, self.tt, **self.ps)
@@ -72,7 +73,10 @@ class Dataset:
         npre, nsuf = len(prefix), len(suffix)
 
         all_patches, all_positions = [], []
+        rng = np.random.default_rng([exid, epoch])
         for img in images:
+            if rng.random() < self.greyout_frac:
+                img.paste((128, 128, 128), box=(0, 0) + img.size)
             img_resized = resize_max_patches(img, self.max_patches, **self.ps)
             patches, positions = patchify(img_resized, **self.ps)
             ny, nx, ph, pw, c = patches.shape
