@@ -38,16 +38,11 @@ def iter_packed_examples(
     debugid="id",
     dont_repeat=("id", "state_after", "src"),
 ):
-    """Numpy arrays get packed, anything else gets repeated. Add `iseq` counter."""
-
     def not_too_long(ex):  # pyre-ignore[53]
         if len(ex[leader]) <= max_seqlen:
             return True
         else:
-            print(
-                f"Dropping too long example {ex[debugid]} because "
-                f"{len(ex[leader])} > {max_seqlen}"
-            )
+            print(f"Dropping too long example {ex[debugid]} because {len(ex[leader])} > {max_seqlen}")
             return False
 
     good_example_generator = (ex for ex in example_generator if not_too_long(ex))
@@ -55,36 +50,32 @@ def iter_packed_examples(
     def tolist_maybe_repeat(ex, k):
         return [ex[k]] * (len(ex[leader]) if k not in dont_repeat else 1)
 
-    def start_from(ex):  # pyre-ignore[53]
-        return {
-            "iseq": np.zeros(len(ex[leader]), np.int64),
-            "lens": [len(ex[leader])],
-        } | {
-            k: v.copy() if isinstance(v, np.ndarray) else tolist_maybe_repeat(ex, k)
-            for k, v in ex.items()
-        }
+    def seq_from(exs):  # NOTE: This also works when `exs` is empty.
+        seq = {}
+        seq["lens"] = [len(ex[leader]) for ex in exs]
+        seq["iseq"] = np.repeat(np.arange(len(exs)), seq["lens"])
 
-    # Start with the first example (that's not too long)
-    seq = start_from(next(good_example_generator))
-
-    for ex in good_example_generator:
-        # Packing next one would be too much -> yield seq and start new using next.
-        if len(seq[leader]) + len(ex[leader]) > max_seqlen:
-            yield seq
-            seq = start_from(ex)
-            continue
-
-        # Not yet full, and next fits: concat them on arrays, repeat non-arrays (eg ID).
-        for k in seq:
-            if k == "iseq":  # Special-case counting the sequence number.
-                seq[k] = np.r_[seq[k], np.full(len(ex[leader]), seq[k][-1] + 1)]
-            elif k == "lens":  # Special-case tracking sequence lengths.
-                seq[k].append(len(ex[leader]))
-            elif isinstance(seq[k], np.ndarray):
-                seq[k] = np.r_[seq[k], ex[k]]
+        # Concat all arrays, potentially repeat all non-arrays.
+        for k in set().union(*exs) - {"lens", "iseq"}:
+            if any(isinstance(ex[k], np.ndarray) for ex in exs):
+                seq[k] = np.concatenate([ex[k] for ex in exs])
             else:
-                seq[k].extend(tolist_maybe_repeat(ex, k))
-    yield seq  # Let's not forget about the last sequence!
+                seq[k] = []
+                for ex in exs:  # This is much faster than the sum(, []) one-liner
+                    seq[k].extend(tolist_maybe_repeat(ex, k))
+        return seq
+
+    seq_exs = []
+    for ex in good_example_generator:
+        # Packing next one would be too much -> yield current and start new using next.
+        if sum(len(e[leader]) for e in seq_exs) + len(ex[leader]) > max_seqlen:
+            # Pack the sequence of examples into an actual sequence:
+            yield seq_from(seq_exs)
+            seq_exs = []
+
+        seq_exs.append(ex)
+
+    yield seq_from(seq_exs)  # Let's not forget about the last sequence!
 
 
 def to_len(seq, to_len, *, pad_values=0, allow_cut=False):
