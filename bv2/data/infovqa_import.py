@@ -26,12 +26,12 @@ import bagz
 
 
 def convert(outname, inname, args):
-    print(f"\rReading QAs", flush=True, end="")
+    print("\rReading QAs", flush=True, end="")
     with zipfile.ZipFile("infographicsvqa_qas.zip", "r") as z:
         with z.open(inname) as f:
             data = json.load(f)["data"]
 
-    print(f"\rCollating", flush=True, end="")
+    print("\rCollating", flush=True, end="")
     # The original data is "flat" in terms of question IDs, but multiple question
     # IDs may share the same image. We turn it into "multi-turn" image-keyed format here.
     mtdata = {}
@@ -49,7 +49,7 @@ def convert(outname, inname, args):
         else:
             mtdata[exid]["qas"][ex["questionId"]] = (ex["question"], ex.get("answers", []))  # fmt: skip
 
-    print(f"\rShuffling", flush=True, end="")
+    print("\rShuffling", flush=True, end="")
     mtdata = list(mtdata.values())
     random.seed(args.shuffle_seed)
     random.shuffle(mtdata)

@@ -37,7 +37,6 @@ from datetime import datetime
 from pathlib import Path
 from runpy import run_path
 
-
 # ANSI escape codes
 RED = '\033[31m'
 GREEN = '\033[32m'
@@ -65,7 +64,7 @@ if __name__ == "__main__":
         slurm_args = sys.argv[2:sys.argv.index("--")]
         sws_args = sys.argv[sys.argv.index("--") + 1:]
     else:
-        _is_sws = lambda a: "=" in a and not "--" in a
+        _is_sws = lambda a: "=" in a and "--" not in a
         slurm_args = [a for a in sys.argv[2:] if not _is_sws(a)]
         sws_args = [a for a in sys.argv[2:] if _is_sws(a)]
 

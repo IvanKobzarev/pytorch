@@ -19,15 +19,16 @@ import numpy as np
 import sws
 import torch
 import torch.distributed as distr
-from torch.profiler import profile, ProfilerActivity, record_function
+import torch.distributed.checkpoint as dcp
+import torch.distributed.checkpoint.state_dict as dcpsd
+from torch.profiler import ProfilerActivity, profile, record_function
 
-import bv2.pdb_distr  # isort: skip
-import bv2.simple_data  # isort: skip
-import bv2.simple_fsdp  # isort: skip
-import bv2.utils as u  # isort: skip
-from bv2.metrics import WandbLogger  # isort: skip
-from bv2.model import SimpleTransformer  # isort: skip
-
+import bv2.pdb_distr
+import bv2.simple_data
+import bv2.simple_fsdp
+import bv2.utils as u
+from bv2.metrics import WandbLogger
+from bv2.model import SimpleTransformer
 
 # Allow using the (lower-precision) tensorcores for all fp32 matmuls.
 # See https://docs.pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices
@@ -462,8 +463,6 @@ def summary_table(model, stats=True):
 
 
 # ---- CHECKPOINTING ----
-import torch.distributed.checkpoint as dcp
-import torch.distributed.checkpoint.state_dict as dcpsd
 
 
 def suppress_warnings(message, category=Warning):

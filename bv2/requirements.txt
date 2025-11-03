@@ -10,3 +10,4 @@ rich
 sws-config
 tiktoken
 wandb
+ruff

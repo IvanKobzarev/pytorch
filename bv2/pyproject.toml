@@ -1,0 +1,10 @@
+[tool.ruff]
+line-length = 120
+
+
+[tool.ruff.lint]
+ignore = ["E741", "E731", "E722"]
+
+
+[tool.ruff.lint.isort]
+known-first-party = ["bv2"]

@@ -8,7 +8,7 @@ with-proxy python data/finevision_downloader.py --download_dir=/home/zhai/tmp/da
 import argparse
 from collections import defaultdict
 
-from huggingface_hub import HfApi, snapshot_download
+from huggingface_hub import HfApi, snapshot_download  # type: ignore
 
 
 def main():

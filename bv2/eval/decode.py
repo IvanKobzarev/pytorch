@@ -1,16 +1,16 @@
 import copy
-import json
 import io
-import torch
-import numpy as np
+import json
 from functools import partial
+
+import numpy as np
+import torch
 from torch.nn.attention.flex_attention import create_block_mask
 
-import bv2.utils as u
 import bv2.data.dpack as dpack
-from bv2.data.tokenizer import get_tiktoken
-from bv2.simple_input import parallel_prefetch, to_len
+import bv2.utils as u
 from bv2.data.common import vis_image_text_wandb
+from bv2.simple_input import parallel_prefetch, to_len
 
 
 def _make_ex(_id, ds, max_prefix, max_decode):

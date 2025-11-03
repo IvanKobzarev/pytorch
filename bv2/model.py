@@ -4,14 +4,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from einops import rearrange
 from torch.nn.attention.flex_attention import flex_attention
 from torch.profiler import record_function
 from torch.utils.checkpoint import checkpoint
 
 import bv2.data.dpack as dpack  # usort: skip
-
 
 # 1: Compiled flex_attention is necessary to checkpoint the attention block, see:
 # https://github.com/pytorch/pytorch/issues/147879#issuecomment-3041193259

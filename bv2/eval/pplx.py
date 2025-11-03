@@ -1,6 +1,7 @@
 import torch
-import bv2.utils as u  # isort: skip
+
 import bv2.simple_data as simple_data
+import bv2.utils as u
 
 
 def run(predict_fn, ds, iter_args):
@@ -91,13 +92,14 @@ def test(rank, local_rank, world_size):
     )
     import bv2.pdb_distr
     bv2.pdb_distr.enable_as_default()
-    mesh = distr.device_mesh.init_device_mesh(
+    distr.device_mesh.init_device_mesh(
         "cuda",
         mesh_shape=(world_size,),
         mesh_dim_names=("dp",),  # Add "tp" for 2d parallel
     )
 
     from functools import partial
+
     import bv2.simple_data
     data_iter = bv2.simple_data.get_iter(TestDataset(), eagerness=0)
     data_iter = partial(data_iter, maxtok=10, device=device, rank=rank, world_size=world_size)

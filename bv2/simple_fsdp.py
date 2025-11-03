@@ -14,24 +14,22 @@ from typing import Mapping, Optional
 
 import torch
 import torch.nn as nn
-
 from torch.distributed._tensor import (
-    distribute_tensor,
     DTensor,
     Partial,
     Replicate,
     Shard,
+    distribute_tensor,
 )
-from torch.distributed.device_mesh import _mesh_resources, DeviceMesh
+from torch.distributed.device_mesh import DeviceMesh, _mesh_resources
 from torch.distributed.tensor._dtensor_spec import DTensorSpec
 from torch.distributed.tensor._redistribute import redistribute_local_tensor
-from torch.distributed.tensor.placement_types import _StridedShard, Placement
+from torch.distributed.tensor.placement_types import Placement, _StridedShard
 from torch.utils.checkpoint import (
-    checkpoint,
     CheckpointPolicy,
+    checkpoint,
     create_selective_checkpoint_contexts,
 )
-
 
 _active_parametrization = True
 

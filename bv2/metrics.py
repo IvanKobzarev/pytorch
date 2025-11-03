@@ -1,14 +1,15 @@
+import io
 import json
 import os
-import io
 
 # fmt: off
 # Ignore a warning-spam from pydantic via wandb
 import warnings
+
 warnings.filterwarnings("ignore", message=r".*The '(repr|frozen)'.*`Field\(\)`.*")
 # fmt: on
 
-import wandb
+import wandb  # noqa: E402
 
 
 def only_on_rank0(func):
@@ -59,7 +60,7 @@ class WandbLogger:
             # Save twice, with and without step name.
             for fname in [filename, f"{filename}-{self.step:09d}"]:
                 with open(fname, "wb") as f:
-                    f.write(buf.getvalue()) 
+                    f.write(buf.getvalue())
 
         # Filter out BytesIO fields and log whats left to W&B.
         data = {k: v for k, v in data.items() if not isinstance(v, io.BytesIO)}

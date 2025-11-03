@@ -4,13 +4,13 @@ import re
 from io import BytesIO
 from zipfile import ZipFile
 
-import bv2.data.dpack as d
-
 import numpy as np
-from bv2.data.common import get_bagz_reader, sharded_iota_exids, vis_image_text_wandb
-from bv2.data.pp import patchify, unpatchify, resize_max_patches, sanity_check
-from bv2.data.tokenizer import get_tiktoken
 from PIL import Image
+
+import bv2.data.dpack as d
+from bv2.data.common import get_bagz_reader, sharded_iota_exids, vis_image_text_wandb
+from bv2.data.pp import patchify, resize_max_patches, sanity_check
+from bv2.data.tokenizer import get_tiktoken
 
 
 class Dataset:
@@ -60,8 +60,6 @@ class Dataset:
                 for image_file in image_files:
                     images.append(_read_img(image_file))
 
-            has_image = len(images) > 0
-
         # TODO: some datasets contain a sequence of QAs, with follow up questions like:
         # question - answer; follow q - answer; follow q - answer. In this case, we should
         # concat all the QAs instead of picking a random one.
@@ -94,7 +92,6 @@ class Dataset:
         d.pack_text([self.tt.bos, prefix, self.tt.sep], positions=txtpos[: 1 + npre + 1], out=tokens[: 1 + npre + 1])
 
         pos = 1 + npre + 1
-        img_start = 0
         for i_img, img_patches in enumerate(all_patches):
             n_patches = img_patches.shape[0]
             d.pack_image(img_patches, all_positions[i_img], out=tokens[pos:pos + n_patches])

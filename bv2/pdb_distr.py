@@ -1,11 +1,10 @@
 # dist_pdb.py
 import functools
-import io, pdb, sys
-
+import io
+import pdb
 import sys
 
 import torch.distributed as dist
-
 from IPython.core.debugger import Pdb as iPdb
 
 

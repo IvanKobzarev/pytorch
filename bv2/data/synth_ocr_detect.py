@@ -1,15 +1,17 @@
 """
 "Where is the word {word}" + Image -> "x y width height"
 """
+# ruff: noqa: E701
 
 import numpy as np
 from PIL import Image, ImageDraw
 
-import bv2.data.dpack as d  # isort: skip
-from bv2.data.pp import patchify, sanity_check  # isort: skip
-from bv2.data.synth_ocr import font, render  # isort: skip
-from bv2.data.common import infinite_random_exids, vis_image_text_unpack  # isort: skip
+import bv2.data.dpack as d
+from bv2.data.common import infinite_random_exids, vis_image_text_unpack
+from bv2.data.pp import patchify, sanity_check
+from bv2.data.synth_ocr import font, render
 from bv2.data.tokenizer import get_tiktoken
+
 
 class Dataset:
     def __init__(self, mode="tlwh", add_row_sep=False, add_hw=False, tiptoi=0, fs=18, ps=16, tokenizer=None, **kw):
@@ -80,11 +82,11 @@ class Dataset:
         txtpos = np.arange(npre + nsuf)
 
         # fmt:off
-        d.pack_text([t.bos, prefix, t.sep], positions=txtpos[:npre], out=tokens[:npre])
+        d.pack_text([self.tt.bos, prefix, self.tt.sep], positions=txtpos[:npre], out=tokens[:npre])
         d.pack_image_with_extras(
             patches, positions, out=tokens[npre:-nsuf],
             add_row_sep=self.add_row_sep, add_hw=self.add_hw, tiptoi=self.tiptoi)
-        d.pack_text([t.sep, suffix, t.eos], positions=txtpos[-nsuf:], out=tokens[-nsuf:])
+        d.pack_text([self.tt.sep, suffix, self.tt.eos], positions=txtpos[-nsuf:], out=tokens[-nsuf:])
         # fmt:on
 
         return sanity_check({

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import bagz
 import numpy as np
-import pyarrow.parquet as pq
+import pyarrow.parquet as pq  # type: ignore (not in pip, but it's ok, as this file not used for training)
 
 
 def array_tolist(obj):
@@ -155,9 +155,6 @@ def main():
     # fmt:on
 
     data_path = Path(args.data_path)
-
-    # 178 datasets in "*/train/", 3 datasets in "*/partial-train/", 4 datasets in "*/"
-    total_parquets = len(list(data_path.glob("*/*train/*.parquet"))) + len(list(data_path.glob("*/*.parquet")))
 
     def _convert_one(dataset_dir):
         parquet_files = (sorted(dataset_dir.glob("*train/*.parquet")) or

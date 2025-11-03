@@ -1,14 +1,11 @@
-import functools
-
 import numpy as np
 import pytest
 import torch
-
 from torch.nn.attention.flex_attention import create_block_mask
 
-import bv2.data.dpack as d  # usort: skip
-import bv2.data.pp as pp  # usort: skip
-import bv2.model as model  # usort: skip
+import bv2.data.dpack as d
+import bv2.data.pp as pp
+import bv2.model as model
 
 
 @pytest.mark.gpu

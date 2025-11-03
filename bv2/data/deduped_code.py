@@ -9,7 +9,6 @@ from bv2.data.common import get_bagz_reader, sharded_iota_exids
 from bv2.data.pp import sanity_check
 from bv2.data.tokenizer import get_tiktoken
 
-
 PATH = {
     "train": "/checkpoint/rigi/data/deduped_code/train@256.bag",
     "val": "/checkpoint/rigi/data/deduped_code/val@32.bag",

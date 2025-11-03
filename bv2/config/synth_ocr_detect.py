@@ -1,6 +1,3 @@
-from datetime import datetime
-from getpass import getuser
-
 import sws
 
 
@@ -20,8 +17,6 @@ def get_config():
     c.data.tiptoi = 0
     c.data.add_hw = False
     c.data.add_row_sep = False
-
-    c.name = lambda: f"{getuser()}-{datetime.now():%y%m%d-%H%M%S}-detect-{c.data.mode}"
 
     c.nsteps = 150_000
     c.warmup_nsteps = 2000

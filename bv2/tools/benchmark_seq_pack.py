@@ -11,9 +11,9 @@ Some results on a H200 machine, with random documents of sizes 1024 to 4096:
 import argparse
 import time
 
-import torch
 import numpy as np
-from torch.profiler import profile, ProfilerActivity
+import torch
+from torch.profiler import ProfilerActivity, profile
 
 from bv2.simple_input import iter_packed_examples
 
@@ -47,7 +47,8 @@ def main_bench(fn, repeats=10, device="cpu"):
 
 
 def main_prof(fn, device="cpu"):
-    fn() ; fn()  # Compile and warmup
+    fn()  # compile
+    fn()  # warmup
 
     if device == "cuda":
         torch.cuda.synchronize()

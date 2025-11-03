@@ -29,7 +29,6 @@ from statistics import mean, median
 import bagz
 import numpy as np
 
-
 INDIR = "/datasets/llama/codegen/shuffled/deduped_code/"
 OUTDIR = "/checkpoint/rigi/data/deduped_code/"
 
@@ -80,7 +79,7 @@ def normalize_meta(row):
         meta["is_minjs"] = row["is_minified_js"]
 
     if len(meta) == 2:
-        raise ValueError(f"Unknown type of entry:\n" + json.dumps(row, indent=1))
+        raise ValueError("Unknown type of entry:\n" + json.dumps(row, indent=1))
     return meta
 
 

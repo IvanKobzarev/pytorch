@@ -1,13 +1,13 @@
 from functools import partial
 from importlib import import_module
-from itertools import count as icount, islice
+from itertools import count as icount
+from itertools import islice
 
 import numpy as np
-import sws
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
 
-from bv2.simple_input import iter_packed_examples, to_len, parallel_prefetch  # fmt: skip  # usort: skip
+from bv2.simple_input import iter_packed_examples, parallel_prefetch, to_len
 
 # Current high-level description of input pipeline:
 # 0. A dataset module `ds` defines two functions: `make_exids` and `make_example`.

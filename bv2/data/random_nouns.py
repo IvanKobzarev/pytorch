@@ -1,8 +1,6 @@
-from itertools import count
-
 import numpy as np
 
-from bv2.data.common import infinite_random_exids  # isort: skip
+from bv2.data.common import infinite_random_exids
 from bv2.data.dpack import pack_text
 from bv2.data.noun_vocab import VOCAB
 from bv2.data.pp import sanity_check
