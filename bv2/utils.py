@@ -1,5 +1,7 @@
+import hashlib
 from functools import cache
 
+import numpy as np
 import torch
 import torch.distributed as distr
 
@@ -43,3 +45,17 @@ def broadcast_object_from(rank, obj, world_size=None, my_rank=None):
     objlist = [obj] if my_rank == rank else [None]
     distr.broadcast_object_list(objlist, src=rank, group=gloo_group())
     return objlist[0]
+
+
+def hash64(s):
+    digest = hashlib.blake2b(s.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, signed=False)
+
+
+def rng(seeds):
+    def to_nat(x):
+        if isinstance(x, str):
+            return hash64(x)
+        return x  # Anything else bad, numpy rng will raise a clear exception.
+
+    return np.random.default_rng([to_nat(s) for s in seeds])

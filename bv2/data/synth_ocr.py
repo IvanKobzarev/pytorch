@@ -67,7 +67,7 @@ def render(seed, *, min_h=224, min_w=224, max_h=288, max_w=288, ps=16, fs=18, un
 
 
 class Dataset:
-    def __init__(self, add_row_sep=False, add_hw=False, tiptoi=0, fs=18, ps=16, tokenizer=None, **kw):
+    def __init__(self, add_row_sep=False, add_hw=False, tiptoi=0, fs=18, ps=16, tokenizer=None, seed=0, **kw):
         self.ps = ps
         self.add_row_sep = add_row_sep
         self.add_hw = add_hw

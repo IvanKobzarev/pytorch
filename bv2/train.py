@@ -85,7 +85,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             f.write(c.to_flat_json(indent=0))
 
     # Import and get data source. We need it early on to know vocab size.
-    ds = bv2.simple_data.from_config(c.data.to_dict())
+    ds = bv2.simple_data.from_config({'seed': c.seed, **c.data.to_dict()})
 
     # Create the model on "meta" device, this avoids materializing param buffers.
     with torch.device("meta"):

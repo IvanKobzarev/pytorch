@@ -8,13 +8,14 @@ import numpy as np
 from PIL import Image
 
 import bv2.data.dpack as d
+import bv2.utils as u
 from bv2.data.common import get_bagz_reader, sharded_iota_exids, vis_image_text_wandb
 from bv2.data.pp import patchify, resize_max_patches, sanity_check
 from bv2.data.tokenizer import get_tiktoken
 
 
 class Dataset:
-    def __init__(self, ps=16, max_patches=16_384, nreg=0, include=[".*"], exclude=[], tokenizer=None, greyout_frac=0.0):
+    def __init__(self, ps=16, max_patches=16_384, nreg=0, include=[".*"], exclude=[], tokenizer=None, greyout_frac=0.0, seed=0):
         base_path = "/checkpoint/rigi/data/FineVision-1.0.1"
 
         paths = []
@@ -31,6 +32,7 @@ class Dataset:
         self.nreg = nreg
         self.ttkw = tokenizer or {}
         self.greyout_frac = greyout_frac
+        self.seed = seed
 
     def vis_data_wandb(self, data):
         return vis_image_text_wandb(data, self.tt, **self.ps)
@@ -73,9 +75,8 @@ class Dataset:
         npre, nsuf = len(prefix), len(suffix)
 
         all_patches, all_positions = [], []
-        rng = np.random.default_rng([exid, epoch])
-        for img in images:
-            if rng.random() < self.greyout_frac:
+        for i, img in enumerate(images):
+            if u.rng([exid, epoch, self.seed, i, "greyout"]).random() < self.greyout_frac:
                 img.paste((128, 128, 128), box=(0, 0) + img.size)
             img_resized = resize_max_patches(img, self.max_patches, **self.ps)
             patches, positions = patchify(img_resized, **self.ps)

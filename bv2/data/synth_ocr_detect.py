@@ -7,6 +7,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 import bv2.data.dpack as d
+import bv2.utils as u
 from bv2.data.common import infinite_random_exids, vis_image_text_unpack
 from bv2.data.pp import patchify, sanity_check
 from bv2.data.synth_ocr import font, render
@@ -14,7 +15,7 @@ from bv2.data.tokenizer import get_tiktoken
 
 
 class Dataset:
-    def __init__(self, mode="tlwh", add_row_sep=False, add_hw=False, tiptoi=0, fs=18, ps=16, tokenizer=None, **kw):
+    def __init__(self, mode="tlwh", add_row_sep=False, add_hw=False, tiptoi=0, fs=18, ps=16, tokenizer=None, seed=0, **kw):
         self.fs = fs
         self.ps = ps
         self.render_kw = kw
@@ -35,7 +36,7 @@ class Dataset:
         # below, but not into the number given to `render`.
         # Note, however, that currently we do generate new independent exids each epoch.
         img, text, _ = render(exid, ps=self.ps, unique=True, **self.render_kw)
-        epoch_rng = np.random.default_rng([exid, epoch])
+        epoch_rng = u.rng([exid, epoch])
         lines = text.split("\n")
         line_idx = epoch_rng.integers(0, len(lines))
         words_in_line = lines[line_idx].split()

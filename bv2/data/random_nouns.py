@@ -19,7 +19,7 @@ def render(seed, tiktoken, *, min_nouns=128, max_nouns=256):
 
 
 class Dataset:
-    def __init__(self, tokenizer=None, **kw):
+    def __init__(self, tokenizer=None, seed=0, **kw):
         self.ttkw = tokenizer or {}
         self.render_kw = kw
 
