@@ -1,5 +1,6 @@
 bagz
 blobfile
+editdistance
 einops
 ipdb
 numpy
@@ -7,7 +8,7 @@ pillow
 pytest
 pytest-json-report
 rich
+ruff
 sws-config
 tiktoken
 wandb
-ruff

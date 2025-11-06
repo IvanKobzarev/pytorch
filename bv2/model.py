@@ -387,7 +387,7 @@ class SimpleTransformer(nn.Module):
         return self.txt_unemb(
             x[..., :-1, :],
             tokens[..., 1:, :],
-            loss_weights[..., 1:],
+            loss_weights[..., 1:] if loss_weights is not None else None,
             seqids[..., 1:],
             mode,
         )
