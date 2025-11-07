@@ -144,14 +144,18 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     # Make sure each hosts generates different data.
     data_seed = rng.integers(2**32, size=world_size)[rank].item()
 
-    # Potentially resume from a checkpoint, if not, init stuff.
+    # Potentially resume/fork from a checkpoint, if not, init stuff.
     first_step, tokens_seen, examples_seen = 0, 0, 0
     resumed_ep, resumed_i = 0, 0
-    if extras := maybe_load_ckpt(c.get("resume") or pjoin(workdir, "latest"), model, optim):  # fmt: skip
+    if extras := maybe_load_ckpt(c.get("fork") or pjoin(workdir, "latest"), model, optim):  # fmt: skip
         data_seed, resumed_ep, resumed_i = (
             extras["data"]["seed"], extras["data"]["ep"], extras["data"]["i"])  # fmt: skip
         first_step, tokens_seen, examples_seen = (
             extras["step"], extras["tokens_seen"], extras["examples_seen"])  # fmt: skip
+
+        # If forking, erase the `metrics` key, so a new W&B instance is created.
+        if c.get("fork"):
+            extras["metrics"] = None
 
     wlogger = WandbLogger(
         c.to_dict(), rank, name, workdir, project="bv2" if c.nsteps > 50 else "bv2-dev",
@@ -548,8 +552,10 @@ def maybe_save_ckpt(step, model, optim, workdir, extras=None, last_future=None):
 
 
 def maybe_load_ckpt(path, model, optim):
-    if not os.path.exists(path or ""):
+    if not path:
         return
+    elif not os.path.exists(path):
+        raise ValueError(f"Checkpoint path not found: {path}")
 
     print(f"Resuming from {path}")
 
@@ -592,8 +598,6 @@ def get_config():
     c.model.dim = 4096
     c.model.depth = 4
     c.model.txt_unemb.chunks = 8
-
-    c.resume = None  # Optional path to checkpoint.
 
     c.evals.pplx_val.type = "pplx"
     c.evals.pplx_val.steps = 10

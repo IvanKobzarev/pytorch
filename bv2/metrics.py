@@ -37,7 +37,7 @@ class WandbLogger:
             project=project,
             dir=dir,
             name=name,
-            config=config,
+            config={**config, "workdir": dir},
             settings=wandb.Settings(quiet=True),
             tags=[config.get("data_name", "N/A")],
             # I tried using both {resume,fork}_from arguments for resuming, but they
