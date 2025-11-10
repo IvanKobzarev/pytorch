@@ -59,3 +59,9 @@ def rng(*seeds):
         return x  # Anything else bad, numpy rng will raise a clear exception.
 
     return np.random.default_rng([to_nat(s) for s in seeds])
+
+
+def rng_torch(*seeds, device):
+    return torch.Generator(device=device).manual_seed(
+        rng(*seeds).integers(0, 2**32).item()
+    )

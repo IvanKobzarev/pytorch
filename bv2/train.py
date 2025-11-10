@@ -110,14 +110,13 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     # Allocate buffers and sharded parameters on GPU
     model.to_empty(device=device)
 
-    # And then run initializers on them, one by one.
-    rng_param = u.rng(c.seed, 'param')
+    # For initialization, it's important to disable FSDP, otherwise init would only
+    # be applied to an all-gathered copy of each param, so have no effect.
+    # Also, in latest PyTorch (after this? https://github.com/pytorch/pytorch/pull/159933)
+    # we should pass the same RNG instance to DTensor on all processes.
     with torch.no_grad():
         with bv2.simple_fsdp.disable_data_parallel():  # super important, or nothing happens.
-            rng_param = torch.Generator(device=device).manual_seed(
-                int(rng_param.integers(0, 2**32, world_size)[rank])
-            )
-            model.init_weights(rng_param)
+            model.init_weights(u.rng_torch(c.seed, "param_init", device=device))
     if rank == 0:
         summary_table(model, stats=c.get("param_stats", False))
 
