@@ -155,7 +155,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
         # If forking, erase the `metrics` key, so a new W&B instance is created.
         if c.get("fork"):
-            extras["metrics"] = None
+            del extras["metrics"]
 
     wlogger = WandbLogger(
         c.to_dict(), rank, name, workdir, project="bv2" if c.nsteps > 50 else "bv2-dev",
@@ -555,7 +555,7 @@ def maybe_load_ckpt(path, model, optim):
     if not path:
         return
     elif not os.path.exists(path):
-        raise ValueError(f"Checkpoint path not found: {path}")
+        raise ValueError(f"Checkpoint path was not found: {path}")
 
     print(f"Resuming from {path}")
 
