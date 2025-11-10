@@ -76,7 +76,7 @@ class Dataset:
 
         all_patches, all_positions = [], []
         for i, img in enumerate(images):
-            if u.rng([exid, epoch, self.seed, i, "greyout"]).random() < self.greyout_frac:
+            if u.rng(exid, epoch, self.seed, i, "greyout").random() < self.greyout_frac:
                 img.paste((128, 128, 128), box=(0, 0) + img.size)
             img_resized = resize_max_patches(img, self.max_patches, **self.ps)
             patches, positions = patchify(img_resized, **self.ps)

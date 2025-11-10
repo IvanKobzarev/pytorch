@@ -36,7 +36,7 @@ class Dataset:
         # below, but not into the number given to `render`.
         # Note, however, that currently we do generate new independent exids each epoch.
         img, text, _ = render(exid, ps=self.ps, unique=True, **self.render_kw)
-        epoch_rng = u.rng([exid, epoch])
+        epoch_rng = u.rng(exid, epoch)
         lines = text.split("\n")
         line_idx = epoch_rng.integers(0, len(lines))
         words_in_line = lines[line_idx].split()

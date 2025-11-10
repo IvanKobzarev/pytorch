@@ -52,7 +52,7 @@ def hash64(s):
     return int.from_bytes(digest, signed=False)
 
 
-def rng(seeds):
+def rng(*seeds):
     def to_nat(x):
         if isinstance(x, str):
             return hash64(x)

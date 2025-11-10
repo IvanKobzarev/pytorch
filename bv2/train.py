@@ -15,7 +15,6 @@ from itertools import chain
 from os.path import join as pjoin
 from time import perf_counter
 
-from blobfile import exists
 import numpy as np
 import sws
 import torch
@@ -112,8 +111,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     model.to_empty(device=device)
 
     # And then run initializers on them, one by one.
-    rng = np.random.default_rng(c.seed)
-    rng, rng_param = rng.spawn(2)
+    rng_param = u.rng(c.seed, 'param')
     with torch.no_grad():
         with bv2.simple_fsdp.disable_data_parallel():  # super important, or nothing happens.
             rng_param = torch.Generator(device=device).manual_seed(
@@ -143,7 +141,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         return model(*a, mode=mode, **kw)
 
     # Make sure each hosts generates different data.
-    data_seed = rng.integers(2**32, size=world_size)[rank].item()
+    data_seed = u.rng(c.seed, 'data', rank).integers(2**32).item()
 
     # Potentially resume/fork from a checkpoint, if not, init stuff.
     first_step, tokens_seen, examples_seen = 0, 0, 0
@@ -155,8 +153,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     if ckpt_path:
         extras = load_ckpt(ckpt_path, model, optim)
-        data_seed, resumed_ep, resumed_i = (
-            extras["data"]["seed"], extras["data"]["ep"], extras["data"]["i"])
+        resumed_ep, resumed_i = (
+            extras["data"]["ep"], extras["data"]["i"])
         first_step, tokens_seen, examples_seen = (
             extras["step"], extras["tokens_seen"], extras["examples_seen"])
 
@@ -313,7 +311,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         # Checkpoint, but note this is *after* `step`'s update, so +1.
         ckpt_future = maybe_save_ckpt(
             step, model, optim, workdir, last_future=ckpt_future, extras={
-                "data": {"seed": data_seed, **data["state_after"][-1]},
+                "data": data["state_after"][-1],
                 "tokens_seen": tokens_seen,
                 "examples_seen": examples_seen,
                 "metrics": wlogger.save_ckpt(),
