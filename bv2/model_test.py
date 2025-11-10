@@ -6,6 +6,7 @@ from torch.nn.attention.flex_attention import create_block_mask
 import bv2.data.dpack as d
 import bv2.data.pp as pp
 import bv2.model as model
+import bv2.utils as u
 
 
 @pytest.mark.gpu
@@ -30,7 +31,7 @@ def test_model_simple():
         head_dim=64,
         kv_reduce=1,
     )
-    m.init_weights(torch.Generator().manual_seed(0))
+    m.init_weights(u.rng_torch("test"))
     m.to(device)
 
     # Training data consists of random tokens ids.
@@ -77,7 +78,7 @@ def test_model_batching():
         head_dim=64,
         kv_reduce=1,
     )
-    m.init_weights(torch.Generator().manual_seed(0))
+    m.init_weights(u.rng_torch("test"))
     m.to(device)
 
     ntoks = [100, 150]

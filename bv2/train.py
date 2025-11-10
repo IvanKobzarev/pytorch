@@ -85,7 +85,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             f.write(c.to_flat_json(indent=0))
 
     # Import and get data source. We need it early on to know vocab size.
-    ds = bv2.simple_data.from_config({'seed': c.seed, **c.data.to_dict()})
+    ds = bv2.simple_data.from_config({'seed': (c.seed, "dataset"), **c.data.to_dict()})
 
     # Create the model on "meta" device, this avoids materializing param buffers.
     with torch.device("meta"):
@@ -138,9 +138,6 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     @torch.compile
     def _fwd(*a, mode="loss", **kw):
         return model(*a, mode=mode, **kw)
-
-    # Make sure each hosts generates different data.
-    data_seed = u.rng(c.seed, 'data', rank).integers(2**32).item()
 
     # Potentially resume/fork from a checkpoint, if not, init stuff.
     first_step, tokens_seen, examples_seen = 0, 0, 0
@@ -212,7 +209,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     for step, data in zip(
         range(first_step, c.nsteps),
         bv2.simple_data.data_iter(
-            ds, seed=data_seed,
+            ds, seed=(c.seed, "data_iter"),
             device=device, rank=rank, world_size=world_size,
             resumed_ep=resumed_ep, resumed_i=resumed_i,
             **c.iter.to_dict(),

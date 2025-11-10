@@ -3,27 +3,25 @@ from functools import cache
 import bagz
 import numpy as np
 
-import bv2.data.dpack as d  # isort: skip
-from bv2.data.pp import unpatchify  # isort: skip
+import bv2.data.dpack as d
+import bv2.utils as u
+from bv2.data.pp import unpatchify
 
 
 def infinite_random_exids(seed, epoch=0, rank=0, world_size=1, epoch_size=1024):
     # Infinite data. It's implemented as an infinite number of epochs, for two reasons:
     # 1. evaluators run for one epoch, so `epoch_size` is eval set size.
     # 2. for checkpointing: epoch boundary allows "fast-forward jump" upon resuming.
-    rng = np.random.default_rng([seed, epoch, rank])
     extra = rank < (epoch_size % world_size)
     num_examples = epoch_size // world_size + extra  # For this rank.
-    return (rng.integers(2**32) for _ in range(num_examples))
+    return (u.rng(seed, epoch, rank, i).integers(2**32) for i in range(num_examples))
 
 
 def sharded_iota_exids(n, seed, epoch=0, rank=0, world_size=1):
     split_size = n / world_size
     start = round(rank * split_size)
     end = round((rank + 1) * split_size)
-
-    rng = np.random.default_rng([seed, epoch])
-    return rng.permutation(np.arange(start, end))
+    return u.rng(seed, epoch, rank).permutation(np.arange(start, end))
 
 
 @cache

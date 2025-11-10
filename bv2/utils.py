@@ -5,6 +5,12 @@ import numpy as np
 import torch
 import torch.distributed as distr
 
+#    ____
+#   / ___|___  _ __ ___  _ __ ___  ___
+#  | |   / _ \| '_ ` _ \| '_ ` _ \/ __|
+#  | |__| (_) | | | | | | | | | | \__ \
+#   \____\___/|_| |_| |_|_| |_| |_|___/
+
 
 @cache
 def gloo_group():
@@ -47,21 +53,39 @@ def broadcast_object_from(rank, obj, world_size=None, my_rank=None):
     return objlist[0]
 
 
-def hash64(s):
-    digest = hashlib.blake2b(s.encode("utf-8"), digest_size=8).digest()
-    return int.from_bytes(digest, signed=False)
+#   ____                 _                   _   _                 _
+#  |  _ \ __ _ _ __   __| | ___  _ __ ___   | \ | |_   _ _ __ ___ | |__   ___ _ __ ___
+#  | |_) / _` | '_ \ / _` |/ _ \| '_ ` _ \  |  \| | | | | '_ ` _ \| '_ \ / _ \ '__/ __|
+#  |  _ < (_| | | | | (_| | (_) | | | | | | | |\  | |_| | | | | | | |_) |  __/ |  \__ \
+#  |_| \_\__,_|_| |_|\__,_|\___/|_| |_| |_| |_| \_|\__,_|_| |_| |_|_.__/ \___|_|  |___/
+#
 
 
-def rng(*seeds):
-    def to_nat(x):
-        if isinstance(x, str):
-            return hash64(x)
-        return x  # Anything else bad, numpy rng will raise a clear exception.
-
-    return np.random.default_rng([to_nat(s) for s in seeds])
+def shash(s, nbytes=8, signed=False):
+    digest = hashlib.blake2b(s.encode("utf-8"), digest_size=nbytes).digest()
+    return int.from_bytes(digest, signed=signed)
 
 
-def rng_torch(*seeds, device):
-    return torch.Generator(device=device).manual_seed(
-        rng(*seeds).integers(0, 2**32).item()
-    )
+def _to_s_for_seeds(x):  # It's faster if this function is outer, not inner to `def seeds`
+    if isinstance(x, (list, tuple)):
+        # Combining seeds by str.join then hash is much faster than hash and then merge. I tested.
+        # Use "string terminator" codepoint, insanely unlikely to be used and very short (2bytes)
+        return '\u009c'.join(map(_to_s_for_seeds, x))
+    if isinstance(x, str):
+        return x
+    if isinstance(x, int):
+        return str(x)
+    raise ValueError(f"Seed leaves can only be str or ints, got: {x} ({type(x)})")
+
+
+@torch.compiler.assume_constant_result
+def seeds(*seedz, nbytes=8, signed=False):
+    return shash(_to_s_for_seeds(seedz), nbytes=nbytes, signed=signed)
+
+
+def rng(*seedz):
+    return np.random.default_rng(seeds(*seedz))
+
+
+def rng_torch(*seedz, device="cpu"):  # Same default device as PyTorch API.
+    return torch.Generator(device=device).manual_seed(seeds(*seedz))

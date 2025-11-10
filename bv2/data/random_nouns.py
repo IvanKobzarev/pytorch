@@ -1,5 +1,6 @@
 import numpy as np
 
+import bv2.utils as u
 from bv2.data.common import infinite_random_exids
 from bv2.data.dpack import pack_text
 from bv2.data.noun_vocab import VOCAB
@@ -8,10 +9,9 @@ from bv2.data.tokenizer import get_tiktoken
 
 
 def render(seed, tiktoken, *, min_nouns=128, max_nouns=256):
-    rng = np.random.default_rng(seed)
-    n_nouns = rng.integers(min_nouns, max_nouns + 1)
+    n_nouns = u.rng(seed, "n_nouns").integers(min_nouns, max_nouns + 1)
 
-    sampled_nouns = rng.choice(VOCAB, size=n_nouns, replace=False)
+    sampled_nouns = u.rng(seed, "nouns").choice(VOCAB, size=n_nouns, replace=False)
     text = " ".join(sampled_nouns)
     tokens = np.array(tiktoken.encode(text))
 
@@ -27,7 +27,7 @@ class Dataset:
         return infinite_random_exids(*a, epoch_size=150, **kw)
 
     def make_example(self, exid, epoch):
-        noun_tokens = render(exid, self.tt, **self.render_kw)
+        noun_tokens = render((exid, "render"), self.tt, **self.render_kw)
 
         return sanity_check({
             "tokens": pack_text(np.r_[self.tt.bos, noun_tokens, self.tt.eos], positions="auto"),

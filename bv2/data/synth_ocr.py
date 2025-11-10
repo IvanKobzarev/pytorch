@@ -6,11 +6,13 @@ Bento: https://fburl.com/anp/9dej90z4
 """
 
 from functools import cache
+from itertools import count
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 import bv2.data.dpack as d
+import bv2.utils as u
 from bv2.data.common import infinite_random_exids, vis_image_text_wandb
 from bv2.data.noun_vocab import VOCAB
 from bv2.data.pp import patchify, sanity_check
@@ -32,11 +34,9 @@ def render(seed, *, min_h=224, min_w=224, max_h=288, max_w=288, ps=16, fs=18, un
     ft, info = font(fs)
     line_h, space_w = info["line_h"], info["space_w"]
 
-    rng = np.random.default_rng(seed)
-
     # Note we add ps to make sure size_max is inclusive
-    img_w = (rng.integers(min_w, max_w + ps) // ps) * ps
-    img_h = (rng.integers(min_h, max_h + ps) // ps) * ps
+    img_w = (u.rng(seed, "w").integers(min_w, max_w + ps) // ps) * ps
+    img_h = (u.rng(seed, "h").integers(min_h, max_h + ps) // ps) * ps
 
     img = None
     if draw_img:
@@ -45,9 +45,9 @@ def render(seed, *, min_h=224, min_w=224, max_h=288, max_w=288, ps=16, fs=18, un
 
     cur_line, cur_width, y = "", 0.0, 0.0
     all_words, all_text = [], ""
-    while True:
+    for iword in count():
         candidates = VOCAB if not unique else list(set(VOCAB) - set(all_words))
-        word = rng.choice(candidates).item()
+        word = u.rng(seed, "word", iword).choice(candidates).item()
         w_len = ft.getlength(word)
         add_w = w_len if not cur_line else space_w + w_len
         if cur_width + add_w <= img_w:
@@ -79,7 +79,7 @@ class Dataset:
         return infinite_random_exids(*a, **kw)
 
     def make_example(self, exid, epoch):
-        img, txt, _ = render(exid, ps=self.ps, **self.render_kw)
+        img, txt, _ = render((exid, "render"), ps=self.ps, **self.render_kw)
 
         prefix = np.array(self.tt.encode("ocr"))
         suffix = np.array(self.tt.encode(txt))

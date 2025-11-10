@@ -138,11 +138,7 @@ def decoding_iterator(predict_fn, ds, *, max_prefix, max_decode, device, batch_s
         while True:
             yield copy.deepcopy(dummy_batch), [True] * batch_size
 
-    # TODO: make rng for each example based on the example id.
-    rng = torch.Generator(device=device).manual_seed(rank)
-
-    for batch, done in _batched_iter():
-
+    for i, (batch, done) in enumerate(_batched_iter()):
         if all(u.all_gather_object(np.all(done))):
             break
 
@@ -155,7 +151,7 @@ def decoding_iterator(predict_fn, ds, *, max_prefix, max_decode, device, batch_s
         tokens = decode_batch(
             predict_fn, batch,
             decode_idx=decode_idx,
-            rng=rng,
+            rng=u.rng_torch("decode", i, rank, device=device),  # TODO: make one per example-id?
             T=T,
             eos=ds.tt.eos,
             device=device,
