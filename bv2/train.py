@@ -15,6 +15,7 @@ from itertools import chain
 from os.path import join as pjoin
 from time import perf_counter
 
+from blobfile import exists
 import numpy as np
 import sws
 import torch
@@ -146,20 +147,26 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     # Potentially resume/fork from a checkpoint, if not, init stuff.
     first_step, tokens_seen, examples_seen = 0, 0, 0
-    resumed_ep, resumed_i = 0, 0
-    if extras := maybe_load_ckpt(c.get("fork") or pjoin(workdir, "latest"), model, optim):  # fmt: skip
+    resumed_ep, resumed_i, extras = 0, 0, {}
+
+    ckpt_path = c.get("fork")
+    if is_resuming := os.path.exists(pjoin(workdir, "latest")):
+        ckpt_path = pjoin(workdir, "latest")
+
+    if ckpt_path:
+        extras = load_ckpt(ckpt_path, model, optim)
         data_seed, resumed_ep, resumed_i = (
-            extras["data"]["seed"], extras["data"]["ep"], extras["data"]["i"])  # fmt: skip
+            extras["data"]["seed"], extras["data"]["ep"], extras["data"]["i"])
         first_step, tokens_seen, examples_seen = (
-            extras["step"], extras["tokens_seen"], extras["examples_seen"])  # fmt: skip
+            extras["step"], extras["tokens_seen"], extras["examples_seen"])
 
         # If forking, erase the `metrics` key, so a new W&B instance is created.
-        if c.get("fork"):
+        if not is_resuming:
             del extras["metrics"]
 
     wlogger = WandbLogger(
         c.to_dict(), rank, name, workdir, project="bv2" if c.nsteps > 50 else "bv2-dev",
-        resume=(extras or {}).get("metrics"), first_step=first_step,
+        resume=extras.get("metrics"), first_step=first_step,
     )
     # Log once more here for two reasons: (1) track in wandb and (2) after ckpt resume.
     if rank == 0:
@@ -551,10 +558,8 @@ def maybe_save_ckpt(step, model, optim, workdir, extras=None, last_future=None):
     return last_future
 
 
-def maybe_load_ckpt(path, model, optim):
-    if not path:
-        return
-    elif not os.path.exists(path):
+def load_ckpt(path, model, optim):
+    if not os.path.exists(path):
         raise ValueError(f"Checkpoint path was not found: {path}")
 
     print(f"Resuming from {path}")
