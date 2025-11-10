@@ -283,7 +283,7 @@ def data_parallel(
             )
             mod.register_parameter(
                 p_name,
-                nn.Parameter(distribute_tensor_func(p, device_mesh, p_sharding)),
+                nn.Parameter(distribute_tensor_func(p, device_mesh, p_sharding), requires_grad=p.requires_grad),
             )
             # Wrap the parameter with the logic to do gather/scatter:
             param_computes[p_name] = ReplicateComputation(
