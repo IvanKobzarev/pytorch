@@ -88,7 +88,7 @@ def mmmm(l):
 
 
 def convert(args):
-    rng = np.random.default_rng(args.shuffle_seed)
+    rng = np.random.default_rng(args.shuffle_seed)  # noqa:TID251 - This file is bv2-free.
 
     # First, select which lines to set aside for val. In the original data, each shard
     # has at least 5.3M rows, so this works.

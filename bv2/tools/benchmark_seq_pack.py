@@ -15,6 +15,7 @@ import numpy as np
 import torch
 from torch.profiler import ProfilerActivity, profile
 
+import bv2.utils as u
 from bv2.simple_input import iter_packed_examples
 
 
@@ -87,10 +88,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Create a large pool of documents from which to sample.
-    rng = np.random.default_rng(args.seed)
-    seqlens = rng.integers(args.docmin, args.docmax, 1000)
+    seqlens = u.rng(args.seed, "seqlens").integers(args.docmin, args.docmax, 1000)
     documents = [{
-        "tokens": rng.integers(0, 255, size=(seqlen, args.tokbytes), dtype=np.uint8),
+        "tokens": u.rng(args.seed, "tokens", i).integers(0, 255, size=(seqlen, args.tokbytes), dtype=np.uint8),
         "loss_weights":  np.ones(seqlen, np.int64),
         "attn_regions":  np.ones(seqlen, np.int64),
         "attn_regions2": np.ones(seqlen, np.int64),
@@ -98,7 +98,7 @@ if __name__ == "__main__":
         "id": i,
     } for i, seqlen in enumerate(seqlens)]
 
-    mk_example_generator = lambda: (rng.choice(documents) for _ in range(1_000))
+    mk_example_generator = lambda: (u.rng(args.seed, "exgen", i).choice(documents) for i in range(1_000))
 
     fn = lambda: list(iter_packed_examples(mk_example_generator(), args.ntoks))
 

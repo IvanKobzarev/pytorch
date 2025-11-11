@@ -4,6 +4,12 @@ line-length = 120
 
 [tool.ruff.lint]
 ignore = ["E741", "E731", "E722"]
+extend-select = ["TID251"]  # flake8-tidy-imports, which bans using specific APIs, see below.
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# Now that we have a more explicit RNG API, let's enforce using it.
+"numpy.random.default_rng".msg = "Use u.rng instead of np.random.default_rng"
+"torch.Generator".msg = "Use u.rng_torch instead of torch.Generator"
 
 
 [tool.ruff.lint.isort]

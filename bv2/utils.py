@@ -86,8 +86,8 @@ def seeds(*seedz, nbytes=8, signed=False):
 
 
 def rng(*seedz):
-    return np.random.default_rng(seeds(*seedz))
+    return np.random.default_rng(seeds(*seedz))  # noqa:TID251
 
 
 def rng_torch(*seedz, device="cpu"):  # Same default device as PyTorch API.
-    return torch.Generator(device=device).manual_seed(seeds(*seedz))
+    return torch.Generator(device=device).manual_seed(seeds(*seedz))  # noqa:TID251
