@@ -73,10 +73,8 @@ def _to_s_for_seeds(x):  # It's faster if this function is outer, not inner to `
         return '\u009c'.join(map(_to_s_for_seeds, x))
     if isinstance(x, str):
         return x
-    if isinstance(x, int):
+    if isinstance(x, (int, np.integer)):
         return str(x)
-    if isinstance(x, np.integer):
-        return str(x.item())
     raise ValueError(f"Seed leaves can only be str or ints, got: {x} ({type(x)})")
 
 
