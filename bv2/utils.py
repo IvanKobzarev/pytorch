@@ -75,6 +75,8 @@ def _to_s_for_seeds(x):  # It's faster if this function is outer, not inner to `
         return x
     if isinstance(x, int):
         return str(x)
+    if isinstance(x, np.integer):
+        return str(x.item())
     raise ValueError(f"Seed leaves can only be str or ints, got: {x} ({type(x)})")
 
 
