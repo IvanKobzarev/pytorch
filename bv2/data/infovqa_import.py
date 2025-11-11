@@ -3,6 +3,10 @@ First, download and unzip the dataset from https://rrc.cvc.uab.es/?ch=17
 Then, run this as `python convert.py` in the folder with the files.
 This generates the `.bag` files to be copied wherever training data resides.
 
+To run on fair-sc-3:
+$ cd /checkpoint/rigi/data_orig/infovqa
+$ python3 ~/rigi/bv2/data/infovqa_import.py
+
 Statistics:
 
 Number of images:
@@ -17,6 +21,7 @@ Number of questions:
 """
 
 import argparse
+import copy
 import io
 import json
 import random
@@ -55,7 +60,7 @@ def convert(outname, inname, args):
     random.shuffle(mtdata)
 
     with bagz.Writer(outname) as writer:
-        for i, ex in enumerate(mtdata):
+        for i, ex in enumerate(mtdata if not args.flatten else flatten(mtdata)):
             print(f"\rWriting ex {i}", flush=True, end="")
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w") as z:
@@ -68,15 +73,23 @@ def convert(outname, inname, args):
     print("\nAll done!", flush=True)
 
 
+def flatten(mtdata):
+    for ex in mtdata:
+        for i, (q_id, qa) in enumerate(ex["qas"].items()):
+            ex_single_q = copy.deepcopy(ex)
+            ex_single_q["qas"] = {q_id: qa}
+            ex_single_q["id"] = f"{ex['id']}_{i:02d}"
+            yield ex_single_q
+
+
 if __name__ == "__main__":
-    # fmt:off
     parser = argparse.ArgumentParser()
     parser.add_argument("--ocr", action="store_true",
                         help="Store the (raw) OCR metadata.")
     parser.add_argument("--shuffle_seed", default=42, type=int,
                         help="The seed to use for shuffling the data.")
+    parser.add_argument("--flatten", action="store_true", help="Flatten the dataset: a single question per image.")
     args = parser.parse_args()
-    # fmt:on
 
     convert("val.bag", "infographicsVQA_val_v1.0_withQT.json", args)
     convert("test.bag", "infographicsVQA_test_v1.0.json", args)

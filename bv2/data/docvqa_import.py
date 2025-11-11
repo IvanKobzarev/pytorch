@@ -1,7 +1,7 @@
 """
 DocVQA dataset import script.
 
-cd /checkpoint/rigi/data/docvqa
+cd /checkpoint/rigi/data_orig/docvqa
 python ~/rigi/bv2/data/docvqa_import.py
 
 train: 10194 images
@@ -10,20 +10,19 @@ test: 1287 images
 """
 
 import argparse
+import copy
 import io
 import json
+import os
 import random
 import zipfile
 from collections import defaultdict
-from pathlib import Path
 
 import bagz
 
 
 def convert(outname, inname, args):
-    docvqa_path = Path("/checkpoint/rigi/data/docvqa")
-
-    with open(docvqa_path / inname) as f:
+    with open(inname) as f:
         data = json.load(f)["data"]
 
     mtdata = defaultdict(lambda: {"qas": {}, "id": None, "image_name": None})
@@ -44,27 +43,37 @@ def convert(outname, inname, args):
     random.shuffle(mtdata)
 
     with bagz.Writer(outname) as writer:
-        for i, ex in enumerate(mtdata):
+        for i, ex in enumerate(mtdata if not args.flatten else flatten(mtdata)):
             print(f"\r{outname}: {i+1}/{len(mtdata)}", flush=True, end="")
             buf = io.BytesIO()
 
             with zipfile.ZipFile(buf, "w") as z:
                 z.writestr("data.json", json.dumps(ex), zipfile.ZIP_LZMA, 9)
-                z.write(str(docvqa_path / ex["image_name"]), "image", zipfile.ZIP_STORED)
+                z.write(str(ex["image_name"]), "image", zipfile.ZIP_STORED)
 
                 if args.ocr:
                     ocr_name = ex["image_name"].replace(".png", ".json").replace(".jpg", ".json")
-                    z.write(str(docvqa_path / "spdocvqa_ocr" / ocr_name), "ocr.json", zipfile.ZIP_LZMA, 9)
+                    z.write(os.path.join("spdocvqa_ocr", ocr_name), "ocr.json", zipfile.ZIP_LZMA, 9)
 
             writer.write(buf.getvalue())
 
     print(f"\nCompleted {outname}!")
 
 
+def flatten(mtdata):
+    for ex in mtdata:
+        for i, (q_id, qa) in enumerate(ex["qas"].items()):
+            ex_single_q = copy.deepcopy(ex)
+            ex_single_q["qas"] = {q_id: qa}
+            ex_single_q["id"] = f"{ex['id']}_{i:02d}"
+            yield ex_single_q
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ocr", action="store_true", help="Include OCR metadata")
     parser.add_argument("--shuffle_seed", default=42, type=int, help="Shuffle seed")
+    parser.add_argument("--flatten", action="store_true", help="Flatten the dataset: a single question per image.")
     args = parser.parse_args()
 
     convert("train.bag", "train_v1.0_withQT.json", args)
