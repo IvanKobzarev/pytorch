@@ -76,49 +76,51 @@ def get_config():
         c.evals.pplx_doc_vqa.iter.maxtok = lambda: c.maxtok
 
     # VQA evals section
+    special_tokens = 64 # rough estimate of special tokens count: bos, eos, sep, image line sep.
+
     c.evals.info_vqa.type = "vqa"
-    c.evals.info_vqa.steps = 10_000
+    c.evals.info_vqa.steps = 5_000
     c.evals.info_vqa.data.name = "vqa"
     c.evals.info_vqa.data.split = "infovqa_flat/val"
     c.evals.info_vqa.data.max_patches = lambda: c.data.max_patches
     c.evals.info_vqa.data.nreg = lambda: c.model.reg.nreg
-    c.evals.info_vqa.iter.max_prefix = lambda: c.data.max_patches + 128
-    c.evals.info_vqa.iter.batch_size = 64
-    c.evals.info_vqa.args.max_decode = 16
-    c.evals.info_vqa.args.T = 0.01
+    c.evals.info_vqa.decode.max_prefix = lambda: c.data.max_patches + special_tokens + 28  # covers 99%, 38 for all
+    c.evals.info_vqa.decode.batch_size = 32
+    c.evals.info_vqa.decode.max_decode = 1 + 11  # covers 99%, 20 for all
+    c.evals.info_vqa.decode.T = 0.01
 
     c.evals.doc_vqa.type = "vqa"
-    c.evals.doc_vqa.steps = 10_000
+    c.evals.doc_vqa.steps = 5_000
     c.evals.doc_vqa.data.name = "vqa"
     c.evals.doc_vqa.data.split = "docvqa_flat/val"
     c.evals.doc_vqa.data.max_patches = lambda: c.data.max_patches
     c.evals.doc_vqa.data.nreg = lambda: c.model.reg.nreg
-    c.evals.doc_vqa.iter.max_prefix = lambda: c.data.max_patches + 128
-    c.evals.doc_vqa.iter.batch_size = 64
-    c.evals.doc_vqa.args.max_decode = 16
-    c.evals.doc_vqa.args.T = 0.01
+    c.evals.doc_vqa.decode.max_prefix = lambda: c.data.max_patches + special_tokens + 25  # covers 99%, 40 for all
+    c.evals.doc_vqa.decode.batch_size = 32
+    c.evals.doc_vqa.decode.max_decode = 1 + 16  # covers 99%, 33 for all
+    c.evals.doc_vqa.decode.T = 0.01
 
     c.evals.st_vqa.type = "vqa"
-    c.evals.st_vqa.steps = 10_000
+    c.evals.st_vqa.steps = 5_000
     c.evals.st_vqa.data.name = "vqa"
     c.evals.st_vqa.data.split = "stvqa_flat/val"
     c.evals.st_vqa.data.max_patches = lambda: c.data.max_patches
     c.evals.st_vqa.data.nreg = lambda: c.model.reg.nreg
-    c.evals.st_vqa.iter.max_prefix = lambda: c.data.max_patches + 128
-    c.evals.st_vqa.iter.batch_size = 64
-    c.evals.st_vqa.args.max_decode = 16
-    c.evals.st_vqa.args.T = 0.01
+    c.evals.st_vqa.decode.max_prefix = lambda: c.data.max_patches + special_tokens + 18  # covers 99%, 27 for all
+    c.evals.st_vqa.decode.batch_size = 32
+    c.evals.st_vqa.decode.max_decode = 1 + 11  # covers 99%, 23 for all
+    c.evals.st_vqa.decode.T = 0.01
 
     # Nice to visualize predictions in W&B periodically
     c.evals.decode_info_vqa.type = "decode"
-    c.evals.decode_info_vqa.steps = 5000
+    c.evals.decode_info_vqa.steps = 2_500
     c.evals.decode_info_vqa.data.name = "vqa"
     c.evals.decode_info_vqa.data.split = "infovqa_flat/val"
     c.evals.decode_info_vqa.data.max_patches = lambda: c.data.max_patches
     c.evals.decode_info_vqa.data.nreg = lambda: c.model.reg.nreg
-    c.evals.decode_info_vqa.iter.max_prefix = lambda: c.data.max_patches + 128
-    c.evals.decode_info_vqa.iter.batch_size = 64
-    c.evals.decode_info_vqa.args.max_decode = 16
-    c.evals.decode_info_vqa.args.T = 0.01
+    c.evals.decode_info_vqa.decode.max_prefix = lambda: c.data.max_patches + special_tokens + 28
+    c.evals.decode_info_vqa.decode.batch_size = 32
+    c.evals.decode_info_vqa.decode.max_decode = 8  # For visualization/qualitative purposes only, so intentially extra short.
+    c.evals.decode_info_vqa.decode.T = 0.01
 
     return c

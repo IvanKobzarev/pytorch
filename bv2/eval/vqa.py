@@ -1,24 +1,19 @@
 import functools
 import json
 from io import BytesIO
-from zipfile import ZipFile
 
 import editdistance
 import numpy as np
 
-import bv2.data.dpack as dpack
 import bv2.utils as u
 from bv2.eval.decode_lib import decoding_iterator
 
 
-def run(predict_fn, ds, iter_args, max_decode, T=1.0):
+def run(predict_fn, ds, decode, **comms):
     """VQA evaluator."""
 
     anls, acc, acc_any, preds = [], [], [], {}
-    for ex in decoding_iterator(
-        predict_fn, ds,
-        max_prefix=iter_args["max_prefix"], max_decode=max_decode, device=iter_args["device"], batch_size=iter_args["batch_size"],
-        T=T, omit_eos=True):
+    for ex in decoding_iterator(predict_fn, ds, **decode, **comms):
 
         if all(u.all_gather_object(obj=ex["done"])):
             break
@@ -26,10 +21,10 @@ def run(predict_fn, ds, iter_args, max_decode, T=1.0):
         pred = ds.tt.decode(ex["suffix"])
         preds[ex["id"].item()] = pred
 
-        data = ds.ground_truth(ex["id"])
+        gt = ds.ground_truth(ex["id"])
 
-        assert len(data['qas']) == 1
-        answers = list(data['qas'].values())[0]
+        assert len(gt['qas']) == 1
+        answers = list(gt['qas'].values())[0]
         num_match = sum([ans == pred for ans in answers])
         acc.append(min(1.0, num_match / 3.0))
         acc_any.append(min(1.0, float(num_match)))

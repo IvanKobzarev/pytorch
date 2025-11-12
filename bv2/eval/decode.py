@@ -16,8 +16,8 @@ from bv2.data.common import vis_image_text_unpack
 from bv2.eval.decode_lib import decoding_iterator
 
 
-def run(predict_fn, ds, iter_args, max_decode, T=1.0, ps=16, omit_eos=False, num_ex_to_vis=32):
-    pred_iter = decoding_iterator(predict_fn, ds, max_decode=max_decode, T=T, omit_eos=omit_eos, **iter_args)
+def run(predict_fn, ds, ps=16, num_ex_to_vis=32, decode={}, **comms):
+    pred_iter = decoding_iterator(predict_fn, ds, **decode, **comms)
 
     all_preds = {}
     vis_ex_to_wandb = []

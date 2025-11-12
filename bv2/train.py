@@ -192,11 +192,9 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                 continue
             em = import_module(f"bv2.eval.{ev.type}")
             ds_ev = bv2.simple_data.from_config(ev.data.to_dict())
-            iter_args = dict(rank=rank, world_size=world_size,
-                             device=device, **ev.iter.to_dict())
-            run_args = ev.get("args", sws.Config()).to_dict()
+            args = {k: v for k, v in ev.to_dict().items() if k not in {"type", "data", "steps"}}
             with torch.no_grad():
-                if results := em.run(_fwd, ds_ev, iter_args=iter_args, **run_args):
+                if results := em.run(_fwd, ds_ev, **args, rank=rank, world_size=world_size, device=device):
                     wlogger.log({f"{ev_name}/{k}": v for k, v in results.items()})
             # TODO: Check how switching train/eval mode (dropout) interacts with compile
 
