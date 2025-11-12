@@ -75,15 +75,50 @@ def get_config():
         c.evals.pplx_doc_vqa.data.greyout_frac = greyout_frac
         c.evals.pplx_doc_vqa.iter.maxtok = lambda: c.maxtok
 
-    c.evals.inference_info_vqa.type = "decode"
-    c.evals.inference_info_vqa.steps = 5000
-    c.evals.inference_info_vqa.data.name = "vqa"
-    c.evals.inference_info_vqa.data.split = "infovqa/val"
-    c.evals.inference_info_vqa.data.max_patches = lambda: c.data.max_patches
-    c.evals.inference_info_vqa.data.nreg = lambda: c.model.reg.nreg
-    c.evals.inference_info_vqa.iter.max_prefix = lambda: c.data.max_patches + 128
-    c.evals.inference_info_vqa.iter.batch_size = 32
-    c.evals.inference_info_vqa.args.max_decode = 12
-    c.evals.inference_info_vqa.args.T = 1.0
+    # VQA evals section
+    c.evals.info_vqa.type = "vqa"
+    c.evals.info_vqa.steps = 10_000
+    c.evals.info_vqa.data.name = "vqa"
+    c.evals.info_vqa.data.split = "infovqa_flat/val"
+    c.evals.info_vqa.data.max_patches = lambda: c.data.max_patches
+    c.evals.info_vqa.data.nreg = lambda: c.model.reg.nreg
+    c.evals.info_vqa.iter.max_prefix = lambda: c.data.max_patches + 128
+    c.evals.info_vqa.iter.batch_size = 64
+    c.evals.info_vqa.args.max_decode = 16
+    c.evals.info_vqa.args.T = 0.01
+
+    c.evals.doc_vqa.type = "vqa"
+    c.evals.doc_vqa.steps = 10_000
+    c.evals.doc_vqa.data.name = "vqa"
+    c.evals.doc_vqa.data.split = "docvqa_flat/val"
+    c.evals.doc_vqa.data.max_patches = lambda: c.data.max_patches
+    c.evals.doc_vqa.data.nreg = lambda: c.model.reg.nreg
+    c.evals.doc_vqa.iter.max_prefix = lambda: c.data.max_patches + 128
+    c.evals.doc_vqa.iter.batch_size = 64
+    c.evals.doc_vqa.args.max_decode = 16
+    c.evals.doc_vqa.args.T = 0.01
+
+    c.evals.st_vqa.type = "vqa"
+    c.evals.st_vqa.steps = 10_000
+    c.evals.st_vqa.data.name = "vqa"
+    c.evals.st_vqa.data.split = "stvqa_flat/val"
+    c.evals.st_vqa.data.max_patches = lambda: c.data.max_patches
+    c.evals.st_vqa.data.nreg = lambda: c.model.reg.nreg
+    c.evals.st_vqa.iter.max_prefix = lambda: c.data.max_patches + 128
+    c.evals.st_vqa.iter.batch_size = 64
+    c.evals.st_vqa.args.max_decode = 16
+    c.evals.st_vqa.args.T = 0.01
+
+    # Nice to visualize predictions in W&B periodically
+    c.evals.decode_info_vqa.type = "decode"
+    c.evals.decode_info_vqa.steps = 5000
+    c.evals.decode_info_vqa.data.name = "vqa"
+    c.evals.decode_info_vqa.data.split = "infovqa_flat/val"
+    c.evals.decode_info_vqa.data.max_patches = lambda: c.data.max_patches
+    c.evals.decode_info_vqa.data.nreg = lambda: c.model.reg.nreg
+    c.evals.decode_info_vqa.iter.max_prefix = lambda: c.data.max_patches + 128
+    c.evals.decode_info_vqa.iter.batch_size = 64
+    c.evals.decode_info_vqa.args.max_decode = 16
+    c.evals.decode_info_vqa.args.T = 0.01
 
     return c

@@ -159,7 +159,7 @@ def decoding_iterator(predict_fn, ds, *, max_prefix, max_decode, device, batch_s
             max_decode=max_decode)
 
         suffix, _, mask_suffix = dpack.unpack_as_text(tokens)
-        suffix_token_ids = [s[m].cpu().numpy() for s, m in zip(suffix, mask_suffix)]
+        suffix_token_ids = [s[start:][m[start:]].cpu().numpy() for s, m, start in zip(suffix, mask_suffix, prefix_lens)]
         if omit_eos:
             suffix_token_ids = [(s[:-1] if s[-1] == ds.tt.eos else s) for s in suffix_token_ids]
 

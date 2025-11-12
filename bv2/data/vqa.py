@@ -36,6 +36,10 @@ class Dataset:
     def tt(self):  # Same story as for the bagz reader above.
         return get_tiktoken(**self.ttkw)
 
+    def ground_truth(self, exid):
+        with ZipFile(BytesIO(self.reader[exid])) as zf:
+            return json.load(zf.open("data.json"))
+
     def make_example(self, exid, epoch):
         # NOTE: Could further optimize by having each rank go only to a subset of all indices.
         # But let's keep things simple as long as they are fast enough!
