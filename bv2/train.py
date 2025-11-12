@@ -166,12 +166,12 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     if rank == 0:
         summary_table(model, stats=c.get("param_stats", False))
     prints0(model)
-    log_pg(model, wlogger)
+    wlogger.log({f"pnorm/{n}": global_reduce(p, "norm") for n, p in model.named_parameters()})
 
     ckpt_future = None
     peak_mems = []
     train_times = []
-    t0 = t_prev_step_end = perf_counter()
+    t0 = t_step_start = t_prev_step_end = perf_counter()
     prof = c.nsteps > 50 and profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         record_shapes=True,
@@ -219,7 +219,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         torch.cuda.reset_peak_memory_stats()
         torch.cuda.synchronize()
         distr.barrier()  # For accurate global datawait timing.
-        tprev, t0 = t0, perf_counter()
+        t_prev_step_start, t_step_start = t_step_start, perf_counter()
+
         if prof and step == 50:
             torch.cuda.cudart().cudaProfilerStart()
             prof.start()
@@ -248,6 +249,10 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         wlogger.log({"chrono/percent": (step + 1) / c.nsteps})
         all_max_epoch = u.all_gather_object(max(s["ep"] for s in data["state_after"]))
         wlogger.log({"chrono/epoch": max(all_max_epoch)})
+
+        # Need to log param norms at this step before the update
+        if step <= 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
+            wlogger.log({f"pnorm/{n}": global_reduce(p, "norm") for n, p in model.named_parameters()})
 
         local_loss_piece, extras = _fwd_and_bwd_step(
             c.wd * sched,
@@ -289,17 +294,24 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             per_src_loss_denom = sum(u.all_gather_object(per_src_loss_denom), Counter())
             wlogger.log({f"mix_loss/{k}": (per_src_loss[k] / max(per_src_loss_denom[k], 1e-8)).item() for k in per_src_loss})
 
-        # After the update is done, we are at the step+1
+        # Sync for getting accurate "global" timings
         torch.cuda.synchronize()
-        wlogger.end_step()
-        step += 1
-
-        train_times.append(perf_counter() - t0)  # seconds
+        distr.barrier()
+        train_times.append(perf_counter() - t_step_start)
         peak_mems.append(torch.cuda.max_memory_allocated() / 1024**2)  # MiB
         wlogger.log({"chrono/peakmem": peak_mems[-1]})
         wlogger.log({"chrono/traintime": train_times[-1]})
-        wlogger.log({"chrono/steptime": t0 - tprev})
-        wlogger.log({"chrono/datawait": t0 - t_prev_step_end})
+        wlogger.log({"chrono/steptime": t_step_start - t_prev_step_start})
+        wlogger.log({"chrono/proctime": perf_counter() - t0})
+        wlogger.log({"chrono/datawait": t_step_start - t_prev_step_end})
+
+        # And grad-norms are for this step, but we only get them after the update ran, i.e. here.
+        if step <= 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
+            wlogger.log({f"gnorm/{n}": global_reduce(p.grad, "norm") for n, p in model.named_parameters()})
+
+        # After the update is done, we are at the step+1
+        wlogger.end_step()
+        step += 1
 
         # Checkpoint, but note this is *after* `step`'s update, so +1.
         ckpt_future = maybe_save_ckpt(
@@ -334,10 +346,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             pred = extras["predictions"].detach().cpu()
             wlogger.log({f"vis/output{step}": ds.vis_output_wandb(data, pred)})
 
-        if step <= 50 or step % 10 == 0:  # Save some logging
-            log_pg(model, wlogger)
-
-        distr.barrier()  # To get accurate datawait timing.
+        distr.barrier()  # Sync to get accurate datawait timing.
         t_prev_step_end = perf_counter()
 
     prints(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
@@ -389,19 +398,6 @@ def global_reduce(x, method):
         n = n.full_tensor()
 
     return n.item()
-
-
-def log_pg(model, wlogger=None):
-    # TODO: these are only here because Lucas is unsure.
-    torch.cuda.synchronize()
-    distr.barrier()
-    for name, param in model.named_parameters():
-        wlogger.log(
-            {
-                f"pnorm/{name}": global_reduce(param, "norm"),
-                f"gnorm/{name}": global_reduce(param.grad, "norm"),
-            },
-        )
 
 
 def swissnum(x):
