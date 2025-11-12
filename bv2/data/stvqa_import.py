@@ -14,7 +14,7 @@ Train and validation sub-splits:
 - Train images: /checkpoint/rigi/data/stvqa/imdb_subtrain.npy
 - Val images: /checkpoint/rigi/data/stvqa/imdb_subval.npy
 
-cd /checkpoint/rigi/data/docvqa
+cd /checkpoint/rigi/data_orig/stvqa
 python ~/rigi/bv2/data/stvqa_import.py
 
 train: 17028 images
@@ -22,9 +22,10 @@ val: 1893 images
 test: 2971 images
 """
 
+import argparse
+import copy
 import io
 import json
-import os
 import random
 import zipfile
 
@@ -39,7 +40,7 @@ def load_split_image_sets(train_npy_path, val_npy_path):
     return train_images, val_images
 
 
-def convert_split(outname, inname, split_name, shuffle_seed, image_set=None, image_dir=None):
+def convert_split(outname, inname, split_name, image_set=None, args=None):
     data = json.load(open(inname))["data"]
     filtered_data = [ex for ex in data if ex["file_path"] in image_set] if image_set else data
     print(f"\r{split_name}: {len(filtered_data)}/{len(data)} examples", flush=True, end="")
@@ -59,25 +60,38 @@ def convert_split(outname, inname, split_name, shuffle_seed, image_set=None, ima
         mtdata[image_id]["qas"][ex["question_id"]] = (ex["question"], ex.get("answers", []))
 
     mtdata = list(mtdata.values())
-    random.seed(shuffle_seed)
+    random.seed(args.shuffle_seed)
     random.shuffle(mtdata)
 
     with bagz.Writer(outname) as writer:
-        for i, ex in enumerate(mtdata):
+        for i, ex in enumerate(mtdata if not args.flatten else flatten(mtdata)):
             print(f"\rWriting {split_name} ex {i+1}/{len(mtdata)}", flush=True, end="")
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w") as z:
                 z.writestr("data.json", json.dumps(ex), zipfile.ZIP_LZMA, 9)
-                path = os.path.join(image_dir, ex["image_path"])
-                z.write(path, "image", zipfile.ZIP_STORED)
+                z.write(ex["image_path"], "image", zipfile.ZIP_STORED)
             writer.write(buf.getvalue())
 
     print(f"\n{split_name} split done!")
 
 
+def flatten(mtdata):
+    for ex in mtdata:
+        for i, (q_id, qa) in enumerate(ex["qas"].items()):
+            ex_single_q = copy.deepcopy(ex)
+            ex_single_q["qas"] = {q_id: qa}
+            ex_single_q["id"] = f"{ex['id']}_{i:02d}"
+            yield ex_single_q
+
+
 if __name__ == "__main__":
-    data_dir = "/checkpoint/rigi/data/stvqa"
-    train_images, val_images = load_split_image_sets(f"{data_dir}/imdb_subtrain.npy", f"{data_dir}/imdb_subval.npy")
-    convert_split("train.bag", f"{data_dir}/task3/train_task_3.json", "train", 42, train_images, data_dir)
-    convert_split("val.bag", f"{data_dir}/task3/train_task_3.json", "val", 42, val_images, data_dir)
-    convert_split("test.bag", f"{data_dir}/task3/test_task_3.json", "test", 42, image_dir=data_dir)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--shuffle_seed", default=42, type=int, help="Shuffle seed")
+    parser.add_argument("--flatten", action="store_true", help="Flatten the dataset: a single question per image.")
+    args = parser.parse_args()
+
+    train_images, val_images = load_split_image_sets("imdb_subtrain.npy", "imdb_subval.npy")
+    convert_split("train.bag", "task3/train_task_3.json", "train", train_images, args=args)
+    convert_split("val.bag", "task3/train_task_3.json", "val", val_images, args=args)
+    convert_split("test.bag", "task3/test_task_3.json", "test", args=args)
