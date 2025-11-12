@@ -284,11 +284,11 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                 per_src_loss_denom[src] += iseq_weights.sum().cpu()
 
             per_src_tokens_seen = sum(u.all_gather_object(per_src_toks), per_src_tokens_seen)
-            wlogger.log({f"mix_tokens_seen/{n}": v for n, v in per_src_tokens_seen.items()})
+            wlogger.log({f"mix_tokens_seen/{n}": v.item() for n, v in per_src_tokens_seen.items()})
 
             per_src_loss = sum(u.all_gather_object(per_src_loss), Counter())
             per_src_loss_denom = sum(u.all_gather_object(per_src_loss_denom), Counter())
-            wlogger.log({f"mix_loss/{k}": per_src_loss[k] / max(per_src_loss_denom[k], 1e-8) for k in per_src_loss})
+            wlogger.log({f"mix_loss/{k}": (per_src_loss[k] / max(per_src_loss_denom[k], 1e-8)).item() for k in per_src_loss})
 
         # After the update is done, we are at the step+1
         torch.cuda.synchronize()

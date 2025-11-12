@@ -85,6 +85,7 @@ class WandbLogger:
     def _append_flush_jsonl(self):
         self.step_metrics["step"] = self.step
         remove_invalid_json_(self.step_metrics)
+        self.step_metrics = round_floats_(self.step_metrics, sig_figs=7)
         js = json.dumps(self.step_metrics)
         with open(self.fname, "a+") as f:
             f.write(js + "\n")
@@ -97,13 +98,22 @@ class WandbLogger:
 
 def remove_invalid_json_(measurements):
     def _is_jsonable(x):
-        try:
-            json.dumps(x, allow_nan=True)
-            return True
-        except TypeError:
+        if isinstance(x, wandb.sdk.data_types.table.Table):
             return False
+        else:
+            return True
 
     for k, v in list(measurements.items()):
         if not _is_jsonable(v):
             del measurements[k]
     return measurements
+
+
+def round_floats_(obj, sig_figs=7):
+    if isinstance(obj, float):
+        return float(f"{obj:.{sig_figs}g}")
+    elif isinstance(obj, dict):
+        return {k: round_floats_(v, sig_figs) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [round_floats_(item, sig_figs) for item in obj]
+    return obj

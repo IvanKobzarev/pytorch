@@ -39,41 +39,43 @@ def get_config():
     c.model.txt_unemb.chunks = 8
 
     for greyout_frac in [0.0, 1.0]:
-        c.evals.pplx_st_vqa.type = "pplx"
-        c.evals.pplx_st_vqa.steps = 2000
-        c.evals.pplx_st_vqa.data.name = "vqa"
-        c.evals.pplx_st_vqa.data.split = "stvqa/val"
-        c.evals.pplx_st_vqa.data.max_patches = lambda: c.data.max_patches
-        c.evals.pplx_st_vqa.data.nreg = lambda: c.model.reg.nreg
-        c.evals.pplx_st_vqa.data.greyout_frac = greyout_frac
-        c.evals.pplx_st_vqa.iter.maxtok = lambda: c.maxtok
+        suffix = "_blind" if greyout_frac else ""
 
-        c.evals.pplx_info_vqa.type = "pplx"
-        c.evals.pplx_info_vqa.steps = 2000
-        c.evals.pplx_info_vqa.data.name = "vqa"
-        c.evals.pplx_info_vqa.data.split = "infovqa/val"
-        c.evals.pplx_info_vqa.data.max_patches = lambda: c.data.max_patches
-        c.evals.pplx_info_vqa.data.nreg = lambda: c.model.reg.nreg
-        c.evals.pplx_info_vqa.data.greyout_frac = greyout_frac
-        c.evals.pplx_info_vqa.iter.maxtok = lambda: c.maxtok
+        c.evals[f"pplx_st_vqa{suffix}"].type = "pplx"
+        c.evals[f"pplx_st_vqa{suffix}"].steps = 2000
+        c.evals[f"pplx_st_vqa{suffix}"].data.name = "vqa"
+        c.evals[f"pplx_st_vqa{suffix}"].data.split = "stvqa/val"
+        c.evals[f"pplx_st_vqa{suffix}"].data.max_patches = lambda: c.data.max_patches
+        c.evals[f"pplx_st_vqa{suffix}"].data.nreg = lambda: c.model.reg.nreg
+        c.evals[f"pplx_st_vqa{suffix}"].data.greyout_frac = greyout_frac
+        c.evals[f"pplx_st_vqa{suffix}"].iter.maxtok = lambda: c.maxtok
 
-        c.evals.pplx_text_vqa.type = "pplx"
-        c.evals.pplx_text_vqa.steps = 2000
-        c.evals.pplx_text_vqa.data.name = "vqa"
-        c.evals.pplx_text_vqa.data.split = "textvqa/val"
-        c.evals.pplx_text_vqa.data.max_patches = lambda: c.data.max_patches
-        c.evals.pplx_text_vqa.data.nreg = lambda: c.model.reg.nreg
-        c.evals.pplx_text_vqa.data.greyout_frac = greyout_frac
-        c.evals.pplx_text_vqa.iter.maxtok = lambda: c.maxtok
+        c.evals[f"pplx_info_vqa{suffix}"].type = "pplx"
+        c.evals[f"pplx_info_vqa{suffix}"].steps = 2000
+        c.evals[f"pplx_info_vqa{suffix}"].data.name = "vqa"
+        c.evals[f"pplx_info_vqa{suffix}"].data.split = "infovqa/val"
+        c.evals[f"pplx_info_vqa{suffix}"].data.max_patches = lambda: c.data.max_patches
+        c.evals[f"pplx_info_vqa{suffix}"].data.nreg = lambda: c.model.reg.nreg
+        c.evals[f"pplx_info_vqa{suffix}"].data.greyout_frac = greyout_frac
+        c.evals[f"pplx_info_vqa{suffix}"].iter.maxtok = lambda: c.maxtok
 
-        c.evals.pplx_doc_vqa.type = "pplx"
-        c.evals.pplx_doc_vqa.steps = 2000
-        c.evals.pplx_doc_vqa.data.name = "vqa"
-        c.evals.pplx_doc_vqa.data.split = "docvqa/val"
-        c.evals.pplx_doc_vqa.data.max_patches = lambda: c.data.max_patches
-        c.evals.pplx_doc_vqa.data.nreg = lambda: c.model.reg.nreg
-        c.evals.pplx_doc_vqa.data.greyout_frac = greyout_frac
-        c.evals.pplx_doc_vqa.iter.maxtok = lambda: c.maxtok
+        c.evals[f"pplx_text_vqa{suffix}"].type = "pplx"
+        c.evals[f"pplx_text_vqa{suffix}"].steps = 2000
+        c.evals[f"pplx_text_vqa{suffix}"].data.name = "vqa"
+        c.evals[f"pplx_text_vqa{suffix}"].data.split = "textvqa/val"
+        c.evals[f"pplx_text_vqa{suffix}"].data.max_patches = lambda: c.data.max_patches
+        c.evals[f"pplx_text_vqa{suffix}"].data.nreg = lambda: c.model.reg.nreg
+        c.evals[f"pplx_text_vqa{suffix}"].data.greyout_frac = greyout_frac
+        c.evals[f"pplx_text_vqa{suffix}"].iter.maxtok = lambda: c.maxtok
+
+        c.evals[f"pplx_doc_vqa{suffix}"].type = "pplx"
+        c.evals[f"pplx_doc_vqa{suffix}"].steps = 2000
+        c.evals[f"pplx_doc_vqa{suffix}"].data.name = "vqa"
+        c.evals[f"pplx_doc_vqa{suffix}"].data.split = "docvqa/val"
+        c.evals[f"pplx_doc_vqa{suffix}"].data.max_patches = lambda: c.data.max_patches
+        c.evals[f"pplx_doc_vqa{suffix}"].data.nreg = lambda: c.model.reg.nreg
+        c.evals[f"pplx_doc_vqa{suffix}"].data.greyout_frac = greyout_frac
+        c.evals[f"pplx_doc_vqa{suffix}"].iter.maxtok = lambda: c.maxtok
 
     # VQA evals section
     special_tokens = 64 # rough estimate of special tokens count: bos, eos, sep, image line sep.
