@@ -90,6 +90,7 @@ def get_config():
     c.evals.info_vqa.decode.batch_size = 32
     c.evals.info_vqa.decode.max_decode = 1 + 11  # covers 99%, 20 for all
     c.evals.info_vqa.decode.T = 0.01
+    c.evals.info_vqa.decode.omit_eos = True
 
     c.evals.doc_vqa.type = "vqa"
     c.evals.doc_vqa.steps = 5_000
@@ -101,6 +102,7 @@ def get_config():
     c.evals.doc_vqa.decode.batch_size = 32
     c.evals.doc_vqa.decode.max_decode = 1 + 16  # covers 99%, 33 for all
     c.evals.doc_vqa.decode.T = 0.01
+    c.evals.doc_vqa.decode.omit_eos = True
 
     c.evals.st_vqa.type = "vqa"
     c.evals.st_vqa.steps = 5_000
@@ -112,6 +114,7 @@ def get_config():
     c.evals.st_vqa.decode.batch_size = 32
     c.evals.st_vqa.decode.max_decode = 1 + 11  # covers 99%, 23 for all
     c.evals.st_vqa.decode.T = 0.01
+    c.evals.st_vqa.decode.omit_eos = True
 
     # Nice to visualize predictions in W&B periodically
     c.evals.decode_info_vqa.type = "decode"
