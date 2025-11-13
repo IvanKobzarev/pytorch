@@ -22,7 +22,20 @@ sync_once() {
 }
 
 sync_once
+
+watch_for_changes() {
+  # Linux systems have `inotifywait` while macs have `notifywait`. This function unites them.
+  if command -v inotifywait >/dev/null 2>&1; then
+    inotifywait -r -e modify,create,delete,move "$1"
+  elif command -v notifywait >/dev/null 2>&1; then
+    notifywait "$1" >/dev/null
+  else
+    echo "Error: No supported watcher found."
+    return 1
+  fi
+}
+
 # Watch for modify/create/delete events recursively and rsync again on any event
-while inotifywait -r -e modify,create,delete,move "$SRC/"; do
+while watch_for_changes "$SRC/"; do
   sync_once
 done
