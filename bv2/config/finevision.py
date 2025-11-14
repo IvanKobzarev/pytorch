@@ -38,87 +38,50 @@ def get_config():
     c.model.stages = lambda: "half" if c.model.reg.nreg > 0 else "single"
     c.model.txt_unemb.chunks = 8
 
-    for greyout_frac in [0.0, 1.0]:
-        suffix = "_blind" if greyout_frac else ""
+    def pplx_eval(split, greyout=0.0):
+        k = sws.Config()
+        k.type = "pplx"
+        k.steps = 2000
+        k.data.name = "vqa"
+        k.data.split = split
+        k.data.max_patches = lambda: c.data.max_patches
+        k.data.nreg = lambda: c.model.reg.nreg
+        k.data.greyout_frac = greyout
+        k.iter.maxtok = lambda: c.maxtok
+        return k
 
-        c.evals[f"pplx_st_vqa{suffix}"].type = "pplx"
-        c.evals[f"pplx_st_vqa{suffix}"].steps = 2000
-        c.evals[f"pplx_st_vqa{suffix}"].data.name = "vqa"
-        c.evals[f"pplx_st_vqa{suffix}"].data.split = "stvqa/val"
-        c.evals[f"pplx_st_vqa{suffix}"].data.max_patches = lambda: c.data.max_patches
-        c.evals[f"pplx_st_vqa{suffix}"].data.nreg = lambda: c.model.reg.nreg
-        c.evals[f"pplx_st_vqa{suffix}"].data.greyout_frac = greyout_frac
-        c.evals[f"pplx_st_vqa{suffix}"].iter.maxtok = lambda: c.maxtok
+    c.evals["docvqa/pplx"] = pplx_eval("docvqa/val")
+    c.evals["docvqa/pplx_blind"] = pplx_eval("docvqa/val", greyout=1.0)
+    c.evals["infovqa/pplx"] = pplx_eval("infovqa/val")
+    c.evals["infovqa/pplx_blind"] = pplx_eval("infovqa/val", greyout=1.0)
+    c.evals["stvqa/pplx"] = pplx_eval("stvqa/val")
+    c.evals["stvqa/pplx_blind"] = pplx_eval("stvqa/val", greyout=1.0)
+    c.evals["textvqa/pplx"] = pplx_eval("textvqa/val")
+    c.evals["textvqa/pplx_blind"] = pplx_eval("textvqa/val", greyout=1.0)
 
-        c.evals[f"pplx_info_vqa{suffix}"].type = "pplx"
-        c.evals[f"pplx_info_vqa{suffix}"].steps = 2000
-        c.evals[f"pplx_info_vqa{suffix}"].data.name = "vqa"
-        c.evals[f"pplx_info_vqa{suffix}"].data.split = "infovqa/val"
-        c.evals[f"pplx_info_vqa{suffix}"].data.max_patches = lambda: c.data.max_patches
-        c.evals[f"pplx_info_vqa{suffix}"].data.nreg = lambda: c.model.reg.nreg
-        c.evals[f"pplx_info_vqa{suffix}"].data.greyout_frac = greyout_frac
-        c.evals[f"pplx_info_vqa{suffix}"].iter.maxtok = lambda: c.maxtok
-
-        c.evals[f"pplx_text_vqa{suffix}"].type = "pplx"
-        c.evals[f"pplx_text_vqa{suffix}"].steps = 2000
-        c.evals[f"pplx_text_vqa{suffix}"].data.name = "vqa"
-        c.evals[f"pplx_text_vqa{suffix}"].data.split = "textvqa/val"
-        c.evals[f"pplx_text_vqa{suffix}"].data.max_patches = lambda: c.data.max_patches
-        c.evals[f"pplx_text_vqa{suffix}"].data.nreg = lambda: c.model.reg.nreg
-        c.evals[f"pplx_text_vqa{suffix}"].data.greyout_frac = greyout_frac
-        c.evals[f"pplx_text_vqa{suffix}"].iter.maxtok = lambda: c.maxtok
-
-        c.evals[f"pplx_doc_vqa{suffix}"].type = "pplx"
-        c.evals[f"pplx_doc_vqa{suffix}"].steps = 2000
-        c.evals[f"pplx_doc_vqa{suffix}"].data.name = "vqa"
-        c.evals[f"pplx_doc_vqa{suffix}"].data.split = "docvqa/val"
-        c.evals[f"pplx_doc_vqa{suffix}"].data.max_patches = lambda: c.data.max_patches
-        c.evals[f"pplx_doc_vqa{suffix}"].data.nreg = lambda: c.model.reg.nreg
-        c.evals[f"pplx_doc_vqa{suffix}"].data.greyout_frac = greyout_frac
-        c.evals[f"pplx_doc_vqa{suffix}"].iter.maxtok = lambda: c.maxtok
-
-    # VQA evals section
     special_tokens = 64 # rough estimate of special tokens count: bos, eos, sep, image line sep.
+    def vqa_eval(split, max_q, max_a):
+        k = sws.Config()
+        k.type = "vqa"
+        k.steps = lambda: range(5000, c.nsteps, 5000)  # Skip first, then every 5k
+        k.data.name = "vqa"
+        k.data.split = split
+        k.data.max_patches = lambda: c.data.max_patches
+        k.data.nreg = lambda: c.model.reg.nreg
+        k.decode.max_prefix = lambda: c.data.max_patches + special_tokens + max_q
+        k.decode.batch_size = 32
+        k.decode.max_decode = 1 + max_a
+        k.decode.T = 0.01
+        k.decode.omit_eos = True
+        return k
 
-    c.evals.info_vqa.type = "vqa"
-    c.evals.info_vqa.steps = 5_000
-    c.evals.info_vqa.data.name = "vqa"
-    c.evals.info_vqa.data.split = "infovqa_flat/val"
-    c.evals.info_vqa.data.max_patches = lambda: c.data.max_patches
-    c.evals.info_vqa.data.nreg = lambda: c.model.reg.nreg
-    c.evals.info_vqa.decode.max_prefix = lambda: c.data.max_patches + special_tokens + 28  # covers 99%, 38 for all
-    c.evals.info_vqa.decode.batch_size = 32
-    c.evals.info_vqa.decode.max_decode = 1 + 11  # covers 99%, 20 for all
-    c.evals.info_vqa.decode.T = 0.01
-    c.evals.info_vqa.decode.omit_eos = True
-
-    c.evals.doc_vqa.type = "vqa"
-    c.evals.doc_vqa.steps = 5_000
-    c.evals.doc_vqa.data.name = "vqa"
-    c.evals.doc_vqa.data.split = "docvqa_flat/val"
-    c.evals.doc_vqa.data.max_patches = lambda: c.data.max_patches
-    c.evals.doc_vqa.data.nreg = lambda: c.model.reg.nreg
-    c.evals.doc_vqa.decode.max_prefix = lambda: c.data.max_patches + special_tokens + 25  # covers 99%, 40 for all
-    c.evals.doc_vqa.decode.batch_size = 32
-    c.evals.doc_vqa.decode.max_decode = 1 + 16  # covers 99%, 33 for all
-    c.evals.doc_vqa.decode.T = 0.01
-    c.evals.doc_vqa.decode.omit_eos = True
-
-    c.evals.st_vqa.type = "vqa"
-    c.evals.st_vqa.steps = 5_000
-    c.evals.st_vqa.data.name = "vqa"
-    c.evals.st_vqa.data.split = "stvqa_flat/val"
-    c.evals.st_vqa.data.max_patches = lambda: c.data.max_patches
-    c.evals.st_vqa.data.nreg = lambda: c.model.reg.nreg
-    c.evals.st_vqa.decode.max_prefix = lambda: c.data.max_patches + special_tokens + 18  # covers 99%, 27 for all
-    c.evals.st_vqa.decode.batch_size = 32
-    c.evals.st_vqa.decode.max_decode = 1 + 11  # covers 99%, 23 for all
-    c.evals.st_vqa.decode.T = 0.01
-    c.evals.st_vqa.decode.omit_eos = True
+    c.evals['docvqa/vqa'] = vqa_eval("docvqa_flat/val", max_q=25, max_a=16)    # covers 99% ; do 40, 33 for all
+    c.evals['infovqa/vqa'] = vqa_eval("infovqa_flat/val", max_q=28, max_a=11)  # covers 99% ; do 38, 11 for all
+    c.evals['stvqa/vqa'] = vqa_eval("stvqa_flat/val", max_q=18, max_a=11)      # covers 99% ; do 27, 23 for all
 
     # Nice to visualize predictions in W&B periodically
     c.evals.decode_info_vqa.type = "decode"
-    c.evals.decode_info_vqa.steps = 2_500
+    c.evals.decode_info_vqa.steps = lambda: range(5000, c.nsteps, 5000)
     c.evals.decode_info_vqa.data.name = "vqa"
     c.evals.decode_info_vqa.data.split = "infovqa_flat/val"
     c.evals.decode_info_vqa.data.max_patches = lambda: c.data.max_patches

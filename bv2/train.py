@@ -186,9 +186,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         """Run evaluations for a given step if conditions are met."""
         for ev_name in c.get("evals", {}):
             ev = c.evals[ev_name]
-            is_every_n_steps = step % ev.steps == 0
-            is_final = step == c.nsteps
-            if not is_every_n_steps and not is_final:
+            is_step = (step % ev.steps == 0) if isinstance(ev.steps, int) else step in ev.steps
+            if not (is_step or step == c.nsteps):  # Always run on last step.
                 continue
             prints0(f"Running evaluator {ev_name}...")
             em = import_module(f"bv2.eval.{ev.type}")
