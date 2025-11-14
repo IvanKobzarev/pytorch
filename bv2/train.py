@@ -33,6 +33,7 @@ from bv2.model import SimpleTransformer
 # Allow using the (lower-precision) tensorcores for all fp32 matmuls.
 # See https://docs.pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices
 torch.backends.fp32_precision = "tf32"
+torch.backends.cuda.matmul.allow_tf32 = True
 
 # Reduce limit to make the issue appear faster
 # torch._dynamo.config.recompile_limit = 1
