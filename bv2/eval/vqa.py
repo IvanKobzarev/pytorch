@@ -19,12 +19,14 @@ def run(predict_fn, ds, decode, **comms):
             break
 
         pred = ds.tt.decode(ex["suffix"])
-        preds[ex["id"].item()] = pred
+        preds[f"{ex["id"].item()}/suffix"] = pred
 
         gt = ds.ground_truth(ex["id"])
 
         assert len(gt['qas']) == 1
-        answers = list(gt['qas'].values())[0]
+        question, answers = list(gt['qas'].values())[0]
+        preds[f"{ex["id"].item()}/question"] = question
+        preds[f"{ex["id"].item()}/answers"] = answers
         num_match = sum([ans == pred for ans in answers])
         acc.append(min(1.0, num_match / 3.0))
         acc_any.append(min(1.0, float(num_match)))
