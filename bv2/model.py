@@ -176,11 +176,16 @@ class TxtUnembedding(nn.Module):
 
         return loss.detach(), toklosses.detach(), pred.detach()
 
-    def forward(self, x, targets, loss_weights, seqids, mode):
+    def forward(self, x, targets, loss_weights, seqids, mode, logits_tok_idx=None):
         assert mode in ("loss and bwd", "loss", "logits"), f"Invalid mode {mode}"
 
         if mode == "logits":
-            return self.head(x)
+            if logits_tok_idx is not None:
+                assert x.ndim == 3, "Only works with 1D batch dimension."
+                batch_indices = torch.arange(x.shape[0], device=x.device)
+                return self.head(x[batch_indices, logits_tok_idx, :])
+            else:
+                return self.head(x)
 
         targets, _, mask = dpack.unpack_as_text(targets)
         x_detached = x.detach().requires_grad_() if mode == "loss and bwd" else x
@@ -369,7 +374,7 @@ class SimpleTransformer(nn.Module):
         assert len(self.flex_masks) == depth
 
     @record_function("Transformer")
-    def forward(self, tokens, flex_masks, loss_weights, seqids, mode):
+    def forward(self, tokens, flex_masks, loss_weights, seqids, mode, **mode_kw):
         assert mode in ("loss and bwd", "loss", "logits"), f"Invalid mode {mode}"
 
         xtxt = self.txt_emb(tokens)
@@ -395,6 +400,7 @@ class SimpleTransformer(nn.Module):
             loss_weights[..., 1:] if loss_weights is not None else None,
             seqids[..., 1:],
             mode,
+            **mode_kw,
         )
 
     def init_weights(self, rng):

@@ -75,8 +75,8 @@ def decode_batch(predict_fn, batch, *, decode_idx, rng,
         if all(u.all_gather_object(all(reached_eos))):
             break
 
-        logits = predict_fn(tokens, flex_masks, None, torch.zeros(tokens.shape[:2], dtype=torch.int64), mode="logits")
-        logits = logits[torch.arange(batch_size), decode_idx - 1]
+        logits_tok_idx = torch.from_numpy(decode_idx).to(device)
+        logits = predict_fn(tokens, flex_masks, None, torch.zeros(tokens.shape[:2], dtype=torch.int64), mode="logits", logits_tok_idx=logits_tok_idx)
 
         # TODO: add support for T=0
         probs = torch.softmax(logits / T, dim=-1)
@@ -168,4 +168,3 @@ def decoding_iterator(predict_fn, ds, *, max_prefix, max_decode, device, batch_s
                      "suffix": suffix,
                      "done": done}
             for id_, tok, prefix_len, suffix, done in zip(ids, tokens, prefix_lens, suffix_token_ids, done))
-
