@@ -190,6 +190,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             is_step = (step % ev.steps == 0) if isinstance(ev.steps, int) else step in ev.steps
             if not (is_step or step == c.nsteps):  # Always run on last step.
                 continue
+            tev0 = perf_counter()
             prints0(f"Running evaluator {ev_name}...")
             em = import_module(f"bv2.eval.{ev.type}")
             ds_ev = bv2.simple_data.from_config(ev.data.to_dict())
@@ -199,7 +200,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                     wlogger.log({f"{ev_name}/{k}": v for k, v in results.items()})
                     for k, v in results.items():
                         prints0(f"Eval results: {ev_name}/{k}: {v}")
-            # TODO: Check how switching train/eval mode (dropout) interacts with compile
+            wlogger.log({f"chrono/evals/{ev_name}": perf_counter() - tev0})
 
     if not c.get("skip_initial_eval", False):
         prints0("Running initial evals... (pass skip_initial_eval:=True to skip)")
