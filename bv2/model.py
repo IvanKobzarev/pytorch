@@ -2,6 +2,7 @@ from functools import partial
 
 import numpy as np
 import torch
+import torch.distributed as distr
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
@@ -155,7 +156,7 @@ class TxtUnembedding(nn.Module):
         self.chunks = chunks
         self.init_std = init_std
 
-    def _process_chunk(self, x, targets, loss_weights, total_loss_weights, mode):
+    def _process_chunk(self, x, targets, loss_weights, global_total_loss_weights, mode):
         logits = self.head(x)
         pred = logits.argmax(dim=-1)
 
@@ -169,7 +170,7 @@ class TxtUnembedding(nn.Module):
 
         toklosses = toklosses * (loss_weights > 0)
         lsum = (toklosses * loss_weights).sum()
-        loss = lsum / total_loss_weights
+        loss = lsum / global_total_loss_weights
         if mode == "loss and bwd":
             loss.backward()
 
@@ -188,12 +189,19 @@ class TxtUnembedding(nn.Module):
 
         total_loss = 0
         total_pplx = 0
-        total_lsum = 0
         total_correct = 0
         predictions = torch.empty_like(targets)
         tok_losses = torch.empty_like(targets, dtype=torch.float32)
         loss_weights = loss_weights * mask
-        total_loss_weights = torch.clamp(loss_weights.sum(), min=1.0)
+
+        # Sum of loss weights across all tokens and devices:
+        global_total_loss_weights = loss_weights.sum()
+        distr.all_reduce(global_total_loss_weights, op=distr.ReduceOp.SUM)
+        global_total_loss_weights = torch.clamp(global_total_loss_weights, min=1.0)
+
+        # How many tokens get a loss, across all devices:
+        global_total_loss_toks = (loss_weights > 0).sum()
+        distr.all_reduce(global_total_loss_toks, op=distr.ReduceOp.SUM)
 
         for chunk_idx in range(self.chunks):
             start = seqlen * chunk_idx // self.chunks
@@ -204,11 +212,10 @@ class TxtUnembedding(nn.Module):
             chunk_loss_weights = loss_weights[..., start:end]
 
             loss, tok_losses_chunk, pred = self._process_chunk(
-                chunk_x, chunk_targets, chunk_loss_weights, total_loss_weights, mode)  # fmt: skip
+                chunk_x, chunk_targets, chunk_loss_weights, global_total_loss_weights, mode)
 
             total_loss += loss
             total_pplx += tok_losses_chunk.sum()
-            total_lsum += (tok_losses_chunk * chunk_loss_weights).sum()
             predictions[..., start:end] = pred
             tok_losses[..., start:end] = tok_losses_chunk
             total_correct += ((pred == chunk_targets) * (chunk_loss_weights > 0)).sum()
@@ -216,14 +223,12 @@ class TxtUnembedding(nn.Module):
         if mode == "loss and bwd":
             x.backward(x_detached.grad)
 
-        micro_acc = total_correct / torch.clamp((loss_weights > 0).sum(), min=1.0)
         extras = {
-            "lsum": total_lsum,
             "pplx": total_pplx,
-            "tokacc/correct": total_correct,
-            "tokacc/micro/acc": micro_acc,
+            "ncorrect": total_correct,
             "predictions": predictions,
             "tok_losses": tok_losses,
+            "global_total_loss_toks": global_total_loss_toks,
         }
 
         return total_loss, extras

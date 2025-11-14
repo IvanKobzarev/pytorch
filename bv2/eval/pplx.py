@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 
 import bv2.simple_data as simple_data
@@ -8,7 +9,7 @@ def run(predict_fn, ds, iter, **comms):
     # These are all things we collect PER PROCESS/GPU in the loop.
     # We'll summarize across processes once at the end.
     tokens_seen, examples_seen = 0, 0
-    total_pplx, total_lsum, total_correct = 0, 0, 0
+    total_pplx, total_correct = 0, 0
     total_loss_w, total_loss_toks = 0, 0
 
     for step, data in enumerate(simple_data.data_iter(ds, max_ep=1, **iter, **comms)):
@@ -30,8 +31,7 @@ def run(predict_fn, ds, iter, **comms):
         total_loss_w += data["loss_weights"].sum().item()
         total_loss_toks += (data["loss_weights"] > 0).sum().item()
         total_pplx += extras["pplx"].item()
-        total_lsum += extras["lsum"].item()
-        total_correct += extras["tokacc/correct"].item()
+        total_correct += extras["ncorrect"].item()
 
     # Get all sum/info to rank0. `g` stands for `globally`.
     if g := u.sum_to(
@@ -40,14 +40,11 @@ def run(predict_fn, ds, iter, **comms):
         examples_seen=examples_seen,
         total_loss_w=total_loss_w,
         total_loss_toks=total_loss_toks,
-        total_lsum=total_lsum,
         total_pplx=total_pplx,
         total_correct=total_correct,
     ):
         return {
-            "loss": g["total_lsum"] / g["total_loss_w"],
-            "pplx": g["total_pplx"] / g["examples_seen"],
-            "bits": g["total_pplx"] / g["examples_seen"] / 0.6931471805599453,
+            "pplx": g["total_pplx"] / g["examples_seen"] / np.log(2),
             "tacc": g["total_correct"] / g["total_loss_toks"],
         }
 

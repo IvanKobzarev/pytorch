@@ -190,12 +190,15 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             is_final = step == c.nsteps
             if not is_every_n_steps and not is_final:
                 continue
+            prints0(f"Running evaluator {ev_name}...")
             em = import_module(f"bv2.eval.{ev.type}")
             ds_ev = bv2.simple_data.from_config(ev.data.to_dict())
             args = {k: v for k, v in ev.to_dict().items() if k not in {"type", "data", "steps"}}
             with torch.no_grad():
                 if results := em.run(_fwd, ds_ev, **args, rank=rank, world_size=world_size, device=device):
                     wlogger.log({f"{ev_name}/{k}": v for k, v in results.items()})
+                    for k, v in results.items():
+                        prints0(f"Eval results: {ev_name}/{k}: {v}")
             # TODO: Check how switching train/eval mode (dropout) interacts with compile
 
     if not c.get("skip_initial_eval", False):
@@ -246,27 +249,23 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         all_max_epoch = u.all_gather_object(max(s["ep"] for s in data["state_after"]))
         wlogger.log({"chrono/epoch": max(all_max_epoch)})
 
-        loss, extras = _fwd_and_bwd_step(
+        local_loss_piece, extras = _fwd_and_bwd_step(
             c.wd * sched,
             data["tokens"],
             data["flex_masks"],
             data["loss_weights"],
             data["iseq"],
         )
-        if "pplx" in extras:
-            all_pplx = u.all_gather_object(extras["pplx"].cpu())
-            extras["pplx"] = sum(all_pplx) / num_examples
-            extras["pplx/bits"] = extras["pplx"] / np.log(2)
-        loss = loss.item()  # Causes a transfer.
-        prints0(f"step {step}: loss {loss:.8f}")
-        wlogger.log({"loss/train": loss})
-        wlogger.log({"loss/train/bits": loss / np.log(2)})
-        # log only scalar values
-        wlogger.log(
-            {f"loss/{k}": v.item() for k, v in extras.items() if v.numel() == 1}
-        )
+        all_pplx = sum(u.all_gather_object(extras["pplx"].cpu())).item()
+        all_loss = sum(u.all_gather_object(local_loss_piece.cpu())).item()
+        wlogger.log({"train/pplx": all_pplx / num_examples / np.log(2)})
+        prints0(f"step {step}: loss {all_loss:.8f}")
+        wlogger.log({"train/loss": all_loss})
+        wlogger.log({"train/tokacc": extras["ncorrect"].item() / extras["global_total_loss_toks"].item()})
+        wlogger.log({"train/n_loss_toks": extras["global_total_loss_toks"].item()})
 
         # For dataset mixtures, collect and report per-component stats and loss.
+        # TODO: Update this to be global, or at least check!
         if "src" in data:
             # Count the number of examples of each subset source:
             all_counts = u.all_gather_object(Counter(data["src"]))
