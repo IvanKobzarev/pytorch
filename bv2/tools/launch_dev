@@ -1,0 +1,42 @@
+#!/bin/bash
+# How to run: Just run it. How to set options: PORT=8887 WAIT=no bv2/tools/launch_dev
+
+set -euo pipefail
+
+PORT=${PORT:-8888}
+STATE_FILE="${STATE_FILE:-/tmp/${USER}_jupyter_${PORT}.info}"
+
+[[ -f "$STATE_FILE" ]] && rm "$STATE_FILE"
+
+SRUN_ARGS="--account rigi --qos h100_rigi_high --exclusive --mem 0 --gpus-per-node 8 --time 7-00:00:00"
+
+# Create a wrapper that prints hostname first, then runs the script
+srun $SRUN_ARGS --output="$STATE_FILE" --open-mode=append \
+  bash -c "
+    host=\$(hostname -f)
+    echo \"\$host $PORT\"
+    PORT=$PORT ~/rigi/bv2/tools/launch_dev_inner
+    sleep infinity
+  " &
+SRUN_PID=$!
+
+
+# Wait until the file has the host/port
+until read -r host p 2>/dev/null < "$STATE_FILE"; do sleep 0.5; done
+echo "Job running, you can go there and attach using:"
+echo -e "\033[34mssh $host -t tmux -L inner a\033[0m"
+
+ssh -N -f -L "$PORT:localhost:$PORT" "$host"
+echo "Port $PORT forwarded"
+
+WAIT=${WAIT:-no}
+case "${WAIT,,}" in
+  1|true|yes|y|on) WAIT=1 ;;
+  0|false|no|n|off|'') WAIT=0 ;;
+esac
+
+if [ "$WAIT" -eq 1 ]; then
+  echo "If you Ctrl+C, we'll also kill the slurm job... (run with WAIT=no to disable waiting)"
+  trap "kill $SRUN_PID 2>/dev/null; exit 0" INT TERM
+  wait $SRUN_PID
+fi
