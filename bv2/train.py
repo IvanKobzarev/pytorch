@@ -6,7 +6,7 @@ torchrun --nproc_per_node=gpu -m bv2.train
 import json
 import os
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime
 from functools import partial
 from getpass import getuser
@@ -278,21 +278,19 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             wlogger.log({f"mix_examples_seen/{n}": c for n, c in per_src_examples_seen.items()})
 
             per_src_toks = Counter()
-            per_src_loss = Counter()
-            per_src_loss_denom = Counter()
+            per_src_pplx = defaultdict(list)
             for iseq, src in enumerate(data["src"]):  # This is basically for each example.
                 iseq_mask = (data["iseq"] == iseq)  # Which token is from this example?
-                iseq_weights = data["loss_weights"][:-1] * iseq_mask[:-1]
                 per_src_toks[src] += iseq_mask.sum().cpu()
-                per_src_loss[src] += (extras["tok_losses"] * iseq_weights).sum().cpu()
-                per_src_loss_denom[src] += iseq_weights.sum().cpu()
+                per_src_pplx[src].append((extras["tok_losses"] * iseq_mask[:-1]).sum().cpu())
 
             per_src_tokens_seen = sum(u.all_gather_object(per_src_toks), per_src_tokens_seen)
             wlogger.log({f"mix_tokens_seen/{n}": v.item() for n, v in per_src_tokens_seen.items()})
 
-            per_src_loss = sum(u.all_gather_object(per_src_loss), Counter())
-            per_src_loss_denom = sum(u.all_gather_object(per_src_loss_denom), Counter())
-            wlogger.log({f"mix_loss/{k}": (per_src_loss[k] / max(per_src_loss_denom[k], 1e-8)).item() for k in per_src_loss})
+            all_pplx = u.all_gather_object(per_src_pplx)  # List of dict of list
+            for src in {k for d in all_pplx for k in d}:  # Union of all seen src
+                pplx = np.concat([d.get(src, []) for d in all_pplx]).mean()  # In nats
+                wlogger.log({f"mix_pplx/{src}": pplx / np.log(2)})  # In bits
 
         # Sync for getting accurate "global" timings
         torch.cuda.synchronize()
