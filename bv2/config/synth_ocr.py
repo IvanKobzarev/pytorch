@@ -47,16 +47,16 @@ def get_config():
     c.evals.inference.type = "decode"
     c.evals.inference.steps = 5000
     # Decoding happens with batched, not packed data, so maxtok can be smaller
-    c.evals.inference.iter.max_prefix = 256  # stress test filtering at test time
-    c.evals.inference.iter.seed = 31337  # Defines the "fixed val split".
-    c.evals.inference.iter.batch_size = 32
     c.evals.inference.data.name = "synth_ocr"
     c.evals.inference.data.tokenizer.first_N = lambda: c.data.tokenizer.first_N
     c.evals.inference.data.tiptoi = lambda: c.data.tiptoi
     c.evals.inference.data.add_hw = lambda: c.data.add_hw
     c.evals.inference.data.add_row_sep = lambda: c.data.add_row_sep
-    c.evals.inference.args.max_decode = 128
+    c.evals.inference.decode.max_prefix = 256  # stress test filtering at test time
+    c.evals.inference.decode.seed = 31337  # Defines the "fixed val split".
+    c.evals.inference.decode.batch_size = 32
+    c.evals.inference.decode.max_decode = 128
     # Can't be zero yet (plan: optimize with argmax).
-    c.evals.inference.args.T = 1e-3
+    c.evals.inference.decode.T = 1e-3
 
     return c
