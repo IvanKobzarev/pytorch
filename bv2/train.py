@@ -122,7 +122,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         summary_table(model, stats=c.get("param_stats", False))
 
     # NOTE: Optimizer doesn't alloc here, only allocs on `.step()`.
-    optim = torch.optim.AdamW(model.parameters(), lr=0.0, fused=True)
+    optim = torch.optim.AdamW(model.parameters(), betas=c.get("betas", (0.9, 0.999)), lr=0.0, fused=True)
     decay_params = [p for n, p in model.named_parameters() if is_decay(n)]
 
     @record_function("fwd_and_bwd")
