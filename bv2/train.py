@@ -6,6 +6,8 @@ torchrun --nproc_per_node=gpu -m bv2.train
 import json
 import os
 import re
+import shutil
+import signal
 from collections import Counter, defaultdict
 from datetime import datetime
 from functools import partial
@@ -46,6 +48,9 @@ torch.use_deterministic_algorithms(True)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 torch.set_deterministic_debug_mode("error")  # raises error on non-determinism
+
+
+ABOUT_TO_GET_KILLED = False
 
 
 def main(c, rank, local_rank, world_size):  # noqa: C901
@@ -145,8 +150,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     resumed_ep, resumed_i, extras = 0, 0, {}
 
     ckpt_path = c.get("fork")
-    if is_resuming := os.path.exists(pjoin(workdir, "latest")):
-        ckpt_path = pjoin(workdir, "latest")
+    if is_resuming := os.path.exists(pjoin(workdir, "ckpt-latest")):
+        ckpt_path = pjoin(workdir, "ckpt-latest")
 
     if ckpt_path:
         extras = load_ckpt(ckpt_path, model, optim)
@@ -169,7 +174,6 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     prints0(model)
     wlogger.log({f"pnorm/{n}": global_reduce(p, "norm") for n, p in model.named_parameters()})
 
-    ckpt_future = None
     peak_mems = []
     train_times = []
     t0 = t_step_start = t_prev_step_end = perf_counter()
@@ -188,7 +192,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         for ev_name in c.get("evals", {}):
             ev = c.evals[ev_name]
             is_step = (step % ev.steps == 0) if isinstance(ev.steps, int) else step in ev.steps
-            if not (is_step or step == c.nsteps):  # Always run on last step.
+            if ABOUT_TO_GET_KILLED or not (is_step or step == c.nsteps):  # Always run on last step.
                 continue
             tev0 = perf_counter()
             prints0(f"Running evaluator {ev_name}...")
@@ -200,6 +204,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                     wlogger.log({f"{ev_name}/{k}": v for k, v in results.items()})
                     for k, v in results.items():
                         prints0(f"Eval results: {ev_name}/{k}: {v}")
+            distr.barrier()  # For accurate timing and avoiding ABOUT_TO_GET_KILLED-related divergence.
             wlogger.log({f"chrono/evals/{ev_name}": perf_counter() - tev0})
 
     if not c.get("skip_initial_eval", False):
@@ -313,13 +318,16 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         step += 1
 
         # Checkpoint, but note this is *after* `step`'s update, so +1.
-        ckpt_future = maybe_save_ckpt(
-            step, model, optim, workdir, last_future=ckpt_future, extras={
+        maybe_save_ckpt(
+            step, model, optim, workdir, extras={
                 "data": data["state_after"][-1],
                 "tokens_seen": tokens_seen,
                 "examples_seen": examples_seen,
                 "metrics": wlogger.save_ckpt(),
             })  # fmt: skip
+
+        if ABOUT_TO_GET_KILLED:  # We checkpointed, yay, quick, byebye.
+            break
 
         if c.nsteps > 50 and step == 2:
             # dumping first 3 iterations from init are enough to include optim states.
@@ -351,17 +359,17 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     prints(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
     prints(f"Step times (med: {np.median(train_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in train_times)}")  # fmt: skip
 
-    if ckpt_future:
-        ckpt_future.result()
-
-    with open(pjoin(workdir, "DONE"), "w+") as f:
-        f.write("All good!")
-    print(f"Done. Workdir: {workdir}")
+    if ABOUT_TO_GET_KILLED:
+        print(f"Finished {perf_counter() - ABOUT_TO_GET_KILLED}s after getting the pre-emption call!")
+    else:
+        with open(pjoin(workdir, "DONE"), "w+") as f:
+            f.write("All good!")
+        print(f"Done. Workdir: {workdir}")
 
     torch._dynamo.reset()  # Avoid hang: https://x.com/main_horse/status/1937900381574717940
     distr.destroy_process_group()
     wlogger.finish()
-    prints("Destroyed group")
+    prints("Destroyed group. All done for real.")
 
 
 ###############
@@ -503,29 +511,17 @@ class OptimState(dcp.stateful.Stateful):
 
 @suppress_warnings(".*version 2.5 of PyTorch, `overwrite` will default to False.*")
 @suppress_warnings(".*TypedStorage is deprecated", UserWarning)
-def maybe_save_ckpt(step, model, optim, workdir, extras=None, last_future=None):
-    # TODO: lots of logic about which step, last step, etc. and configurable.
-    if step % 1000 != 0:
-        return last_future
+def maybe_save_ckpt(step, model, optim, workdir, extras=None):
+    if not ABOUT_TO_GET_KILLED and step % 1000 != 0:
+        return
 
-    if last_future is not None:  # Wait for last one to finish.
-        last_future.result()
-
-    path = pjoin(workdir, "latest")
+    path = pjoin(workdir, f"ckpt-{step:06d}")
     print(f"Checkpointing to {path}")
 
     # This is funny, but the `async_save` below interacts with `distr` in some way such
     # that if we do the `gather_object` after it, it would deadlock. Unless we barrier,
     # which defeats the point of async. So, gather_object first.
     all_extras = u.gather_object_to(rank=0, obj={"step": step, **extras})
-
-    last_future = dcp.async_save(
-        state_dict={
-            "model": ModelState(model),
-            "optim": OptimState(model, optim),
-        },
-        storage_writer=dcp.FileSystemWriter(path, overwrite=True),
-    )
 
     # TODO: For some reason async checkpoint cases non-deterministic failures.
     #
@@ -534,14 +530,32 @@ def maybe_save_ckpt(step, model, optim, workdir, extras=None, last_future=None):
     #         op.preamble.length <= op.nbytes. 6232 vs 4
     #
     # We should fix it, for now just make code synchronous.
-    last_future.result()
+    dcp.save(
+        state_dict={
+            "model": ModelState(model),
+            "optim": OptimState(model, optim),
+        },
+        storage_writer=dcp.FileSystemWriter(path, overwrite=True),
+    )
 
-    if all_extras:  # means we have extras *and* we are rank0
-        # TODO: Networked filesystems (probably blobfile?)
+    if distr.get_rank() == 0:
         with open(pjoin(path, "extras.json"), "w+") as f:
             json.dump(all_extras, f)
 
-    return last_future
+        # Now do a rename/link/delete dance, so that `ckpt-latest` always points to
+        # the latest one, and we either keep, or delete, the previous one, while not
+        # losing any data if we get killed/pre-empted in the middle of this dance.
+        try:
+            prev_ckpt = os.readlink(pjoin(workdir, "ckpt-latest"))
+        except FileNotFoundError:
+            prev_ckpt = None
+
+        os.symlink(path, pjoin(workdir, "ckpt-tmp"))
+        os.replace(pjoin(workdir, "ckpt-tmp"), pjoin(workdir, "ckpt-latest"))  # Atomic
+
+        # Change this 999_999 to whatever you want to keep ckpts (TODO: configurable).
+        if prev_ckpt and int(prev_ckpt.rsplit("-")[-1]) % 999_999 != 0:
+            shutil.rmtree(prev_ckpt)
 
 
 def load_ckpt(path, model, optim):
@@ -602,11 +616,24 @@ def get_config():
 
 
 if __name__ == "__main__":
-    sws.run(
-        partial(
-            main,
-            rank=int(os.environ["RANK"]),
-            local_rank=int(os.environ.get("LOCAL_RANK", os.environ["RANK"])),
-            world_size=int(os.environ["WORLD_SIZE"]),
-        ),
-    )
+    if "RANK" in os.environ:  # Launched via bv2/tools/local_run or torchrun
+        rank = int(os.environ["RANK"])
+        local_rank = int(os.environ.get("LOCAL_RANK", os.environ["RANK"]))
+        world_size = int(os.environ["WORLD_SIZE"])
+    elif "SLURM_PROCID" in os.environ:  # Launched via srun directly.
+        rank = int(os.environ["SLURM_PROCID"])
+        local_rank = int(os.environ["SLURM_LOCALID"])
+        world_size = int(os.environ["SLURM_NTASKS"])
+    else:
+        print("Local run on single-gpu")
+        rank = local_rank = 0
+        world_size = 1
+
+    def handler(signum, frame):
+        global ABOUT_TO_GET_KILLED
+        ABOUT_TO_GET_KILLED = perf_counter()
+        print(f"[{rank}] Got termination signal {signum}, checkpointing and quitting ASAP! ({ABOUT_TO_GET_KILLED})")
+    signal.signal(signal.SIGTERM, handler)
+
+
+    sws.run(partial(main, rank=rank, local_rank=local_rank, world_size=world_size))

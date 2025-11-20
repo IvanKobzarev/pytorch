@@ -1,0 +1,43 @@
+#!/bin/bash
+
+set -euo pipefail
+
+pids=()
+
+forward_sig() {
+  local sig=$1
+  for pid in "${pids[@]:-}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -s "$sig" "$pid" 2>/dev/null || true
+    fi
+  done
+}
+
+# The Ctrl+C is sent to everyone by default. In the launcher though, we want to wait for all
+# the launched processes to exit naturally upon this, so we just print and that's it.
+trap 'echo "Got SIGINT, hard-killing all kids immediately"; kill -9 -- -$$' INT
+
+# The SIGTERM on the other hand, we want to propagate to all children.
+# It's also the signal SLURM sends before hard-killing you. So we forward, and wait.
+trap 'echo "Got SIGTERM, forwarding to children"; forward_sig TERM; wait' TERM
+
+# Optional: quiet NCCL a bit
+export NCCL_DEBUG=WARN
+
+if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  NGPUS=$(( $(tr -cd ',' <<<"$CUDA_VISIBLE_DEVICES" | wc -c) + 1 ))
+else
+  NGPUS=$(nvidia-smi -L | wc -l)
+fi
+
+export MASTER_ADDR=127.0.0.1
+export MASTER_PORT=12355
+export WORLD_SIZE=$NGPUS
+
+for (( local_rank=0; local_rank<NGPUS; local_rank++ )); do
+  RANK=$local_rank LOCAL_RANK=$local_rank python -u "$@" &
+  pids+=($!)
+done
+
+# This waits for ALL child-processes to have exited.
+wait
