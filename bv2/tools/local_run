@@ -34,10 +34,14 @@ export MASTER_ADDR=127.0.0.1
 export MASTER_PORT=12355
 export WORLD_SIZE=$NGPUS
 
-for (( local_rank=0; local_rank<NGPUS; local_rank++ )); do
+# Run all processes in the background, except rank 0...
+for (( local_rank=1; local_rank<NGPUS; local_rank++ )); do
   RANK=$local_rank LOCAL_RANK=$local_rank python -u "$@" &
   pids+=($!)
 done
-
-# This waits for ALL child-processes to have exited.
-wait
+# ...which we start while staying attached. This way our pdb works, and...
+if RANK=0 LOCAL_RANK=0 python -u "$@"; then
+  wait  # Wait for all processes if exit was successful, or...
+else
+  kill -9 -- -$$  # Hard kill everyone right away if there was an error, avoids spam.
+fi

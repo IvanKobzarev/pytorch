@@ -18,7 +18,7 @@ tmux -L inner send-keys -t "$SESS:0.2" "nvidia-smi" C-m
 
 
 tmux -L inner new-window -t "$SESS:1"
-tmux -L inner send-keys -t "$SESS:1" "torchrun --nproc_per_node=gpu -m bv2.train --config bv2/config/finevision.py nsteps:=18"
+tmux -L inner send-keys -t "$SESS:1" "bv2/tools/local_run -m bv2.train --config bv2/config/finevision.py nsteps:=18"
 
 echo "Tmux session '$SESS' created with socket 'inner'"
 echo "To attach: tmux -L inner attach-session -t $SESS"
