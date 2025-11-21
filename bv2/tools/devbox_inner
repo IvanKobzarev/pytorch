@@ -1,0 +1,24 @@
+#!/bin/bash
+cd ~/rigi || exit 1
+
+PORT1=${PORT1:-8888}
+PORT2=${PORT2:-8889}
+
+SESS="bv2"
+tmux -L inner new-session -d -s "$SESS"
+
+# Three-way split:
+tmux -L inner split-window -v -t "$SESS:0" \; \
+              split-window -v -t "$SESS:0" \; \
+              select-layout -t "$SESS:0" even-vertical
+
+tmux -L inner send-keys -t "$SESS:0.0" "cd ~/rigi-fb; jupyter lab --no-browser --port=$PORT1 --NotebookApp.token='' --NotebookApp.password=''" C-m
+tmux -L inner send-keys -t "$SESS:0.1" "jupyter lab --no-browser --port=$PORT2 --NotebookApp.token='' --NotebookApp.password=''" C-m
+tmux -L inner send-keys -t "$SESS:0.2" "nvidia-smi" C-m
+
+
+tmux -L inner new-window -t "$SESS:1"
+tmux -L inner send-keys -t "$SESS:1" "torchrun --nproc_per_node=gpu -m bv2.train --config bv2/config/finevision.py nsteps:=18"
+
+echo "Tmux session '$SESS' created with socket 'inner'"
+echo "To attach: tmux -L inner attach-session -t $SESS"

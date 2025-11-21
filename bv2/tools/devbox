@@ -1,10 +1,11 @@
 #!/bin/bash
-# How to run: Just run it. How to set options: PORT=8887 WAIT=no bv2/tools/launch_dev
+# How to run: Just run it. Just `bv2/tools/launch_dev` you don't need to set options.
 
 set -euo pipefail
 
-PORT=${PORT:-8888}
-STATE_FILE="${STATE_FILE:-/tmp/${USER}_jupyter_${PORT}.info}"
+PORT1=${PORT1:-8888}
+PORT2=${PORT2:-8889}
+STATE_FILE="${STATE_FILE:-/tmp/${USER}_jupyter_${PORT1}_${PORT2}.info}"
 
 [[ -f "$STATE_FILE" ]] && rm "$STATE_FILE"
 
@@ -13,21 +14,20 @@ SRUN_ARGS="--account rigi --qos h100_rigi_high --exclusive --mem 0 --gpus-per-no
 # Create a wrapper that prints hostname first, then runs the script
 srun $SRUN_ARGS --output="$STATE_FILE" --open-mode=append \
   bash -c "
-    host=\$(hostname -f)
-    echo \"\$host $PORT\"
-    PORT=$PORT ~/rigi/bv2/tools/launch_dev_inner
+    echo \$(hostname -f)
+    PORT1=$PORT1 PORT2=$PORT2 ~/rigi/bv2/tools/devbox_inner
     sleep infinity
   " &
 SRUN_PID=$!
 
 
 # Wait until the file has the host/port
-until read -r host p 2>/dev/null < "$STATE_FILE"; do sleep 0.5; done
+until read -r host 2>/dev/null < "$STATE_FILE"; do sleep 0.5; done
 echo "Job running, you can go there and attach using:"
 echo -e "\033[34mssh $host -t tmux -L inner a\033[0m"
 
-ssh -N -f -L "$PORT:localhost:$PORT" "$host"
-echo "Port $PORT forwarded"
+ssh -N -f -L "$PORT1:localhost:$PORT1" -L "$PORT2:localhost:$PORT2" "$host"
+echo "Port $PORT1 and $PORT2 forwarded"
 
 WAIT=${WAIT:-no}
 case "${WAIT,,}" in
