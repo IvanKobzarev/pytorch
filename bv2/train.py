@@ -260,19 +260,21 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         if step <= 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
             wlogger.log({f"pnorm/{n}": global_reduce(p, "norm") for n, p in model.named_parameters()})
 
-        local_loss_piece, extras = _fwd_and_bwd_step(
+        local_loss, extras = _fwd_and_bwd_step(
             c.wd * sched,
             data["tokens"],
             data["flex_masks"],
             data["loss_weights"],
             data["iseq"],
         )
-        all_pplx = sum(u.all_gather_object(extras["pplx"].cpu())).item()
-        all_loss = sum(u.all_gather_object(local_loss_piece.cpu())).item()
-        wlogger.log({"train/pplx": all_pplx / num_examples / np.log(2)})
-        prints0(f"step {step}: loss {all_loss:.8f}")
-        wlogger.log({"train/loss": all_loss})
-        wlogger.log({"train/tokacc": extras["ncorrect"].item() / extras["global_total_loss_toks"].item()})
+
+        global_loss, global_pplx, global_ncorrect = sum(u.all_gather_object(
+            np.r_[local_loss.cpu(), extras["pplx"].cpu(), extras["ncorrect"].cpu()]))
+
+        prints0(f"step {step}: loss {global_loss.item():.8f}")
+        wlogger.log({"train/pplx": global_pplx.item() / num_examples})
+        wlogger.log({"train/loss": global_loss.item()})  # loss used for bwd, so already normalized by a global weight
+        wlogger.log({"train/tokacc": global_ncorrect.item() / extras["global_total_loss_toks"].item()})
         wlogger.log({"train/n_loss_toks": extras["global_total_loss_toks"].item()})
 
         # For dataset mixtures, collect and report per-component stats and loss.

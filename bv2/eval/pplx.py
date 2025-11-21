@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 
 import bv2.simple_data as simple_data
@@ -44,7 +43,7 @@ def run(predict_fn, ds, iter, **comms):
         total_correct=total_correct,
     ):
         return {
-            "pplx": g["total_pplx"] / g["examples_seen"] / np.log(2),
+            "pplx": g["total_pplx"] / g["examples_seen"],
             "tacc": g["total_correct"] / g["total_loss_toks"],
         }
 
