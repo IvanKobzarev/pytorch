@@ -276,6 +276,9 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         wlogger.log({"train/loss": global_loss.item()})  # loss used for bwd, so already normalized by a global weight
         wlogger.log({"train/tokacc": global_ncorrect.item() / extras["global_total_loss_toks"].item()})
         wlogger.log({"train/n_loss_toks": extras["global_total_loss_toks"].item()})
+        for i, blk_extras in extras["blk"].items():
+            max_logit = max(u.all_gather_object(blk_extras["attn"]["max_logit"].cpu())).item()
+            wlogger.log({f"attn_max_logit/blk{i}": max_logit})
 
         # For dataset mixtures, collect and report per-component stats and loss.
         # TODO: Update this to be global, or at least check!

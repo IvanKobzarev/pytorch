@@ -6,7 +6,7 @@ import torch.distributed as distr
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
-from torch.nn.attention.flex_attention import flex_attention
+from torch.nn.attention.flex_attention import AuxRequest, flex_attention
 from torch.profiler import record_function
 from torch.utils.checkpoint import checkpoint
 
@@ -41,14 +41,15 @@ class Attention(nn.Module):
         v = rearrange(self.v(x), "... T (V D) -> (...) V T D", V=self.n_kv_heads)
 
         # fmt: off
-        x = cflex_attention(
+        x, aux = cflex_attention(
             q, k, v,
             block_mask=flex_mask,  # NB: scaled by 1/sqrt if scale=None, the default
             enable_gqa=self.n_q_heads != self.n_kv_heads,
+            return_aux=AuxRequest(max_scores=True),
         )
         # fmt: on
         o = self.o(rearrange(x, "... Q T D -> ... T (Q D)"))
-        return o.reshape(*batch_dims, *o.shape[-2:])
+        return o.reshape(*batch_dims, *o.shape[-2:]), {"max_logit": aux.max_scores.max()}
 
     def init_weights(self, rng):
         # TODO: more careful: qk such that dot-var is 1, and care about o.
@@ -71,7 +72,7 @@ class MLP(nn.Module):
         x = self.l1(x)
         x = F.gelu(x, approximate="tanh")
         x = self.l2(x)
-        return x
+        return x, {}
 
     def init_weights(self, rng):
         nn.init.trunc_normal_(self.l1.weight, mean=0.0, std=1/np.sqrt(self.dim * self.grow / 2), generator=rng)  # fmt: skip
@@ -101,9 +102,12 @@ class Block(nn.Module):
             att_ln_fn = partial(checkpoint, att_ln_fn, use_reentrant=False)
             mlp_ln_fn = partial(checkpoint, mlp_ln_fn, use_reentrant=False)
 
-        x = x + att_ln_fn(x, flex_mask)
-        x = x + mlp_ln_fn(x)
-        return x
+        extras = {}
+        y, extras["attn"] = att_ln_fn(x, flex_mask)
+        x = x + y
+        z, extras["mlp"] = mlp_ln_fn(x)
+        x = x + z
+        return x, extras
 
     def init_weights(self, rng):
         self.att.init_weights(rng)
@@ -138,7 +142,7 @@ class TxtEmbedding(nn.Module):
             x[..., 1::2] += torch.cos(positions[..., :, None] * freqs[None, :]) * self.pe_scale
             # fmt: on
 
-        return x * mask[..., None]
+        return x * mask[..., None], {}
 
     def init_weights(self, rng):
         nn.init.trunc_normal_(self.emb.weight, 0, 1 / self.dim, generator=rng)
@@ -308,7 +312,7 @@ class ImgEmbedding(nn.Module):
         if self.ape is not None:
             x += self.ape_ln(self.ape(positions).to(x.dtype))
 
-        return x * mask[..., None]  # Set non-patch token embeddings back to 0.
+        return x * mask[..., None], {}  # Set non-patch token embeddings back to 0.
 
     def init_weights(self, rng):
         # This is Kaiming fan-in, preserves var in fwd. Not sure if best, but reasonable
@@ -330,9 +334,9 @@ class RegEmbedding(nn.Module):
     def forward(self, data):
         if self.nreg:
             regs, mask = dpack.unpack_as_reg(data, self.mod_id)
-            return self.emb(regs) * mask[..., None]
+            return self.emb(regs) * mask[..., None], {}
         else:
-            return 0
+            return 0, {}
 
     def init_weights(self, rng, init_zeros=False):
         if self.nreg:
@@ -377,10 +381,11 @@ class SimpleTransformer(nn.Module):
     def forward(self, tokens, flex_masks, loss_weights, seqids, mode, **mode_kw):
         assert mode in ("loss and bwd", "loss", "logits"), f"Invalid mode {mode}"
 
-        xtxt = self.txt_emb(tokens)
-        xreg = self.reg_emb(tokens)
-        xsep = self.sep_emb(tokens)
-        ximg = checkpoint(self.img_emb, tokens, use_reentrant=False)
+        extras = {}
+        xtxt, extras["txt_emb"] = self.txt_emb(tokens)
+        xreg, extras["reg_emb"] = self.reg_emb(tokens)
+        xsep, extras["sep_emb"] = self.sep_emb(tokens)
+        ximg, extras["img_emb"] = checkpoint(self.img_emb, tokens, use_reentrant=False)
 
         # Embeddings of non-relevant tokens are 0
         x = xtxt + xreg + ximg + xsep  # ...so the addition really just combines them!
@@ -388,13 +393,13 @@ class SimpleTransformer(nn.Module):
         if self.glope is not None:
             x += self.glope(_seqids_to_pos(seqids))
 
-        for blk, fm_name in zip(self.blocks, self.flex_masks):
-            x = blk(x, flex_masks[fm_name])
+        for i, (blk, fm_name) in enumerate(zip(self.blocks, self.flex_masks)):
+            x, extras.setdefault("blk", {})[i] = blk(x, flex_masks[fm_name])
         x = self.ln(x)
 
         # We do the slicing here (and waste 1 token fwd pass) so we don't need to
         # adjust the `flex_mask` above according to slicing. Simplifies code overall.
-        return self.txt_unemb(
+        loss, extras_txt_unemb = self.txt_unemb(
             x[..., :-1, :],
             tokens[..., 1:, :],
             loss_weights[..., 1:] if loss_weights is not None else None,
@@ -402,6 +407,9 @@ class SimpleTransformer(nn.Module):
             mode,
             **mode_kw,
         )
+        extras.update(extras_txt_unemb)
+
+        return loss, extras
 
     def init_weights(self, rng):
         self.img_emb.init_weights(rng)
