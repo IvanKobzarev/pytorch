@@ -56,9 +56,6 @@ ABOUT_TO_GET_KILLED = False
 def main(c, rank, local_rank, world_size):  # noqa: C901
     name = c.get("name", f"{getuser()}-{datetime.now():%y%m%d-%H%M%S}")
 
-    prints = partial(print_stamped, rank=rank)
-    prints0 = prints if rank == 0 else lambda *args, **kwargs: None
-
     prints0(f"Running with arguments:\n{c}")
 
     # start from the beginning to track every gpu memory allocation
@@ -324,7 +321,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
         # Checkpoint, but note this is *after* `step`'s update, so +1.
         maybe_save_ckpt(
-            step, model, optim, workdir, extras={
+            step, save_steps=c.get("ckpt_steps", 1000), keep_steps=c.get('ckpt_keep_steps', ()),
+            model=model, optim=optim, workdir=workdir, extras={
                 "data": data["state_after"][-1],
                 "tokens_seen": tokens_seen,
                 "examples_seen": examples_seen,
@@ -365,11 +363,11 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     prints(f"Step times (med: {np.median(train_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in train_times)}")  # fmt: skip
 
     if ABOUT_TO_GET_KILLED:
-        print(f"Finished {perf_counter() - ABOUT_TO_GET_KILLED}s after getting the pre-emption call!")
+        prints(f"Finished {perf_counter() - ABOUT_TO_GET_KILLED}s after getting the pre-emption call!")
     else:
         with open(pjoin(workdir, "DONE"), "w+") as f:
             f.write("All good!")
-        print(f"Done. Workdir: {workdir}")
+        prints0(f"Done. Workdir: {workdir}")
 
     torch._dynamo.reset()  # Avoid hang: https://x.com/main_horse/status/1937900381574717940
     distr.destroy_process_group()
@@ -516,12 +514,14 @@ class OptimState(dcp.stateful.Stateful):
 
 @suppress_warnings(".*version 2.5 of PyTorch, `overwrite` will default to False.*")
 @suppress_warnings(".*TypedStorage is deprecated", UserWarning)
-def maybe_save_ckpt(step, model, optim, workdir, extras=None):
-    if not ABOUT_TO_GET_KILLED and step % 1000 != 0:
+def maybe_save_ckpt(step, save_steps, keep_steps, model, optim, workdir, extras=None):
+
+    should_save = (step % save_steps == 0) if isinstance(save_steps, int) else step in save_steps
+    if not (ABOUT_TO_GET_KILLED or should_save):
         return
 
     path = pjoin(workdir, f"ckpt-{step:06d}")
-    print(f"Checkpointing to {path}")
+    prints0(f"Checkpointing to {path}")
 
     # This is funny, but the `async_save` below interacts with `distr` in some way such
     # that if we do the `gather_object` after it, it would deadlock. Unless we barrier,
@@ -558,16 +558,17 @@ def maybe_save_ckpt(step, model, optim, workdir, extras=None):
         os.symlink(path, pjoin(workdir, "ckpt-tmp"))
         os.replace(pjoin(workdir, "ckpt-tmp"), pjoin(workdir, "ckpt-latest"))  # Atomic
 
-        # Change this 999_999 to whatever you want to keep ckpts (TODO: configurable).
-        if prev_ckpt and int(prev_ckpt.rsplit("-")[-1]) % 999_999 != 0:
-            shutil.rmtree(prev_ckpt)
+        if prev_ckpt is not None:
+            prev_step = int(prev_ckpt.rsplit("-")[-1])
+            if (prev_step % keep_steps != 0) if isinstance(keep_steps, int) else prev_step not in keep_steps:
+                shutil.rmtree(prev_ckpt)
 
 
 def load_ckpt(path, model, optim):
     if not os.path.exists(path):
         raise ValueError(f"Checkpoint path was not found: {path}")
 
-    print(f"Resuming from {path}")
+    prints0(f"Resuming from {path}")
 
     # We `allow_partial_load` because...
     dcp.load(
@@ -633,6 +634,9 @@ if __name__ == "__main__":
         print("Local run on single-gpu")
         rank = local_rank = 0
         world_size = 1
+
+    prints = partial(print_stamped, rank=rank)
+    prints0 = prints if rank == 0 else lambda *args, **kwargs: None
 
     def handler(signum, frame):
         global ABOUT_TO_GET_KILLED
