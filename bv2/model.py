@@ -187,9 +187,9 @@ class TxtUnembedding(nn.Module):
             if logits_tok_idx is not None:
                 assert x.ndim == 3, "Only works with 1D batch dimension."
                 batch_indices = torch.arange(x.shape[0], device=x.device)
-                return self.head(x[batch_indices, logits_tok_idx, :])
+                return self.head(x[batch_indices, logits_tok_idx, :]), {}
             else:
-                return self.head(x)
+                return self.head(x), {}
 
         targets, _, mask = dpack.unpack_as_text(targets)
         x_detached = x.detach().requires_grad_() if mode == "loss and bwd" else x

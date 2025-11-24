@@ -76,7 +76,7 @@ def decode_batch(predict_fn, batch, *, decode_idx, rng,
             break
 
         logits_tok_idx = torch.from_numpy(decode_idx - 1).to(device)
-        logits = predict_fn(tokens, flex_masks, None, torch.zeros(tokens.shape[:2], dtype=torch.int64), mode="logits", logits_tok_idx=logits_tok_idx)
+        logits, _ = predict_fn(tokens, flex_masks, None, torch.zeros(tokens.shape[:2], dtype=torch.int64), mode="logits", logits_tok_idx=logits_tok_idx)
 
         # TODO: add support for T=0
         probs = torch.softmax(logits / T, dim=-1)
