@@ -9,7 +9,7 @@ from functools import cache
 from itertools import count
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 import bv2.data.dpack as d
 import bv2.utils as u
@@ -30,8 +30,14 @@ def font(size=18):
     return font, info
 
 
-def render(seed, *, min_h=224, min_w=224, max_h=288, max_w=288, ps=16, fs=18, unique=False, draw_img=True):  # fmt: skip
+def render(seed, *, min_h=256, min_w=256, max_h=768, max_w=768, ps=16,
+           fs=24, random_pad=16, random_angle=20, fs_jitter=8,
+           unique=False, draw_img=True):
+
+    if fs_jitter:
+        fs += u.rng(seed, "fs_jitter").integers(-fs_jitter, fs_jitter+1, ()).item()
     ft, info = font(fs)
+
     line_h, space_w = info["line_h"], info["space_w"]
 
     # Note we add ps to make sure size_max is inclusive
@@ -63,11 +69,22 @@ def render(seed, *, min_h=224, min_w=224, max_h=288, max_w=288, ps=16, fs=18, un
                 break
             cur_line, cur_width = "", 0.0
 
+    if random_angle:
+        angle = u.rng(seed, "rotate").integers(-random_angle, random_angle + 1)
+        # resample=2 means bilinear
+        rotated = img.rotate(angle, expand=True, fillcolor=(255, 255, 255), resample=2)
+        img = rotated.resize(img.size, resample=Image.LANCZOS)
+
+    if random_pad:
+        pad_vals = u.rng(seed, "pad").integers(0, random_pad+1, (4,))
+        padded = ImageOps.expand(img, border=tuple(pad_vals), fill=(255, 255, 255))
+        img = padded.resize(img.size, resample=Image.LANCZOS)
+
     return img, all_text, all_words
 
 
 class Dataset:
-    def __init__(self, add_row_sep=False, add_hw=False, tiptoi=0, fs=18, ps=16, tokenizer=None, seed=0, **kw):
+    def __init__(self, add_row_sep=False, add_hw=False, tiptoi=0, ps=16, tokenizer=None, seed=0, **kw):
         self.ps = ps
         self.add_row_sep = add_row_sep
         self.add_hw = add_hw
@@ -76,7 +93,12 @@ class Dataset:
         self.ttkw = tokenizer or {}
 
     def make_exids(self, *a, **kw):
-        return infinite_random_exids(*a, **kw)
+        return infinite_random_exids(*a, epoch_size=128, **kw)
+
+    def ground_truth(self, exid):
+        img, txt, _ = render((exid, "render"), ps=self.ps, **self.render_kw)
+        # VQA format
+        return {"qas": {"0": ("ocr?", [txt])}, "img": img}
 
     def make_example(self, exid, epoch):
         img, txt, _ = render((exid, "render"), ps=self.ps, **self.render_kw)
@@ -102,8 +124,9 @@ class Dataset:
 
         return sanity_check({
             "tokens": tokens,
-            "loss_weights": np.r_[[0] * npre, [0] * nimg, [1] * nsuf],
-            "attn_regions": np.r_[[1] * npre, [1] * nimg, [0] * nsuf],
+            #                     Prefix      Image       Sep  Suffix
+            "loss_weights": np.r_[[0] * npre, [0] * nimg, [0], [1] * (nsuf - 1)],
+            "attn_regions": np.r_[[1] * npre, [1] * nimg, [1], [0] * (nsuf - 1)],
             # NOTE: for attn_regions, 0 = AR, >0 = dense region ID.
             "id": exid,
         })  # fmt: skip
