@@ -1,4 +1,3 @@
-from pkgutil import get_data
 import sws
 
 
