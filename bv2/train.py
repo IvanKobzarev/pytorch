@@ -162,7 +162,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             del extras["metrics"]
 
     wlogger = WandbLogger(
-        c.to_dict(), rank, name, workdir, project="bv2" if c.nsteps > 50 else "bv2-dev",
+        c.to_dict(), rank, name, workdir, project="bv2" if c.nsteps >= 50 else "bv2-dev",
         resume=extras.get("metrics"), first_step=first_step,
     )
     # Log once more here for two reasons: (1) track in wandb and (2) after ckpt resume.
@@ -174,7 +174,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     peak_mems = []
     train_times = []
     t0 = t_step_start = t_prev_step_end = perf_counter()
-    prof = c.nsteps > 50 and profile(
+    prof = c.nsteps >= 50 and profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         record_shapes=True,
         profile_memory=False,  # Done with torch.cuda functions instead.
@@ -254,7 +254,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         wlogger.log({"chrono/epoch": max(all_max_epoch)})
 
         # Need to log param norms at this step before the update
-        if step <= 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
+        if step < 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
             wlogger.log({f"pnorm/{n}": global_reduce(p, "norm") for n, p in model.named_parameters()})
 
         local_loss, extras = _fwd_and_bwd_step(
@@ -312,7 +312,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         wlogger.log({"chrono/datawait": t_step_start - t_prev_step_end})
 
         # And grad-norms are for this step, but we only get them after the update ran, i.e. here.
-        if step <= 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
+        if step < 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
             wlogger.log({f"gnorm/{n}": global_reduce(p.grad, "norm") for n, p in model.named_parameters()})
 
         # After the update is done, we are at the step+1
@@ -332,7 +332,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         if ABOUT_TO_GET_KILLED:  # We checkpointed, yay, quick, byebye.
             break
 
-        if c.nsteps > 50 and step == 2:
+        if c.nsteps >= 50 and step == 2:
             # dumping first 3 iterations from init are enough to include optim states.
             # Otherwise the .pkl becomes too big and freezes chrome.
             # Drag .pkl file to https://docs.pytorch.org/memory_viz
@@ -359,8 +359,9 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         distr.barrier()  # Sync to get accurate datawait timing.
         t_prev_step_end = perf_counter()
 
-    prints(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
-    prints(f"Step times (med: {np.median(train_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in train_times)}")  # fmt: skip
+    if c.nsteps < 50:
+        prints(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
+        prints(f"Step times (med: {np.median(train_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in train_times)}")  # fmt: skip
 
     if ABOUT_TO_GET_KILLED:
         prints(f"Finished {perf_counter() - ABOUT_TO_GET_KILLED}s after getting the pre-emption call!")
