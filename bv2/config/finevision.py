@@ -38,36 +38,37 @@ def get_config():
     c.model.stages = lambda: "half" if c.model.reg.nreg > 0 else "single"
     c.model.txt_unemb.chunks = 8
 
-    def pplx_eval(split, greyout=0.0):
+    def pplx_eval(split, blind=False):
         k = sws.Config()
         k.type = "pplx"
-        k.steps = 2000
+        k.steps = 5000 if blind else 2500
         k.data.name = "vqa"
         k.data.split = split
         k.data.max_patches = lambda: c.data.max_patches
         k.data.nreg = lambda: c.model.reg.nreg
-        k.data.greyout_frac = greyout
+        k.data.greyout_frac = 1.0 if blind else 0.0
         k.iter.maxtok = lambda: c.maxtok
         return k
 
     c.evals["docvqa/pplx"] = pplx_eval("docvqa/val")
-    c.evals["docvqa/pplx_blind"] = pplx_eval("docvqa/val", greyout=1.0)
+    c.evals["docvqa/pplx_blind"] = pplx_eval("docvqa/val", blind=True)
     c.evals["infovqa/pplx"] = pplx_eval("infovqa/val")
-    c.evals["infovqa/pplx_blind"] = pplx_eval("infovqa/val", greyout=1.0)
+    c.evals["infovqa/pplx_blind"] = pplx_eval("infovqa/val", blind=True)
     c.evals["stvqa/pplx"] = pplx_eval("stvqa/val")
-    c.evals["stvqa/pplx_blind"] = pplx_eval("stvqa/val", greyout=1.0)
+    c.evals["stvqa/pplx_blind"] = pplx_eval("stvqa/val", blind=True)
     c.evals["textvqa/pplx"] = pplx_eval("textvqa/val")
-    c.evals["textvqa/pplx_blind"] = pplx_eval("textvqa/val", greyout=1.0)
+    c.evals["textvqa/pplx_blind"] = pplx_eval("textvqa/val", blind=True)
 
     special_tokens = 64 # rough estimate of special tokens count: bos, eos, sep, image line sep.
-    def vqa_eval(split, max_q, max_a):
+    def vqa_eval(split, max_q, max_a, blind=False):
         k = sws.Config()
         k.type = "vqa"
-        k.steps = lambda: range(5000, c.nsteps, 5000)  # Skip first, then every 5k
+        k.steps = lambda: range(5000, c.nsteps, 20_000 if blind else 5000)  # Skip first, then every 5k
         k.data.name = "vqa"
         k.data.split = split
         k.data.max_patches = lambda: c.data.max_patches
         k.data.nreg = lambda: c.model.reg.nreg
+        k.data.greyout_frac = 1.0 if blind else 0.0
         k.decode.max_prefix = lambda: c.data.max_patches + special_tokens + max_q
         k.decode.batch_size = 32
         k.decode.max_decode = 1 + max_a
@@ -76,19 +77,22 @@ def get_config():
         return k
 
     c.evals['docvqa/vqa'] = vqa_eval("docvqa_flat/val", max_q=25, max_a=16)    # covers 99% ; do 40, 33 for all
+    c.evals['docvqa/vqa_blind'] = vqa_eval("docvqa_flat/val", max_q=25, max_a=16, blind=True)
     c.evals['infovqa/vqa'] = vqa_eval("infovqa_flat/val", max_q=28, max_a=11)  # covers 99% ; do 38, 11 for all
+    c.evals['infovqa/vqa_blind'] = vqa_eval("infovqa_flat/val", max_q=28, max_a=11, blind=True)
     c.evals['stvqa/vqa'] = vqa_eval("stvqa_flat/val", max_q=18, max_a=11)      # covers 99% ; do 27, 23 for all
+    c.evals['stvqa/vqa_blind'] = vqa_eval("stvqa_flat/val", max_q=18, max_a=11, blind=True)
 
     # Nice to visualize predictions in W&B periodically
-    c.evals.decode_info_vqa.type = "decode"
-    c.evals.decode_info_vqa.steps = lambda: range(5000, c.nsteps, 5000)
-    c.evals.decode_info_vqa.data.name = "vqa"
-    c.evals.decode_info_vqa.data.split = "infovqa_flat/val"
-    c.evals.decode_info_vqa.data.max_patches = lambda: c.data.max_patches
-    c.evals.decode_info_vqa.data.nreg = lambda: c.model.reg.nreg
-    c.evals.decode_info_vqa.decode.max_prefix = lambda: c.data.max_patches + special_tokens + 28
-    c.evals.decode_info_vqa.decode.batch_size = 32
-    c.evals.decode_info_vqa.decode.max_decode = 8  # For visualization/qualitative purposes only, so intentially extra short.
-    c.evals.decode_info_vqa.decode.T = 0.01
+    c.evals.decode_doc_vqa.type = "decode"
+    c.evals.decode_doc_vqa.steps = lambda: range(5000, c.nsteps, 20_000)
+    c.evals.decode_doc_vqa.data.name = "vqa"
+    c.evals.decode_doc_vqa.data.split = "docvqa_flat/val"
+    c.evals.decode_doc_vqa.data.max_patches = lambda: c.data.max_patches
+    c.evals.decode_doc_vqa.data.nreg = lambda: c.model.reg.nreg
+    c.evals.decode_doc_vqa.decode.max_prefix = lambda: c.data.max_patches + special_tokens + 28
+    c.evals.decode_doc_vqa.decode.batch_size = 32
+    c.evals.decode_doc_vqa.decode.max_decode = 8  # For visualization/qualitative purposes only, so intentially extra short.
+    c.evals.decode_doc_vqa.decode.T = 0.01
 
     return c
