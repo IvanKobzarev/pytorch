@@ -70,6 +70,14 @@ if __name__ == "__main__":
 
     xid = datetime.now().strftime('%m%d_%H%M%S')
 
+    # Allow explicitly overriding xid sws-style, to enable resuming in-place when launching
+    # again with same-name same-xid as a previous job.
+    if candidates := [m.group(2) for a in sws_args if (m := re.fullmatch("(c.)?xid:=(.*)", a))]:
+        xid = candidates[-1]
+        print(f"{RED}WARNING:{RESET} manually overriding XID to {RED}{xid}{RESET}."
+            " This will re-run in-place in that folder. Make sure you use the same name as you originally used."
+            " Some files could get overwritten, and this might confuse some tools.")
+
     # Construct the common part of the launch command:
     slurm = ["sbatch", *slurm_args, "--job-name", xid, "bv2/tools/launch_fair_srun"]
     torch = ["-m", "bv2.train", "--config", conf_file]
