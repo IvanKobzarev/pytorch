@@ -296,7 +296,7 @@ class ImgEmbedding(nn.Module):
         if data.shape[-1] < dpack.nbytes_image_with_extras(
             *self.ps, tiptoi=self.tiptoi
         ):
-            return 0
+            return 0, {}
 
         patches, positions, sincos, mask = dpack.unpack_as_image(
             data, *self.ps, tiptoi=self.tiptoi, keep_flat=True
