@@ -1,9 +1,22 @@
 import hashlib
-from functools import cache
+import warnings
+from functools import cache, update_wrapper
 
 import numpy as np
 import torch
 import torch.distributed as distr
+
+
+def suppress_warnings(message, category=Warning):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=message, category=category)
+                return func(*args, **kwargs)
+        update_wrapper(wrapper, func)
+        return wrapper
+
+    return decorator
 
 #    ____
 #   / ___|___  _ __ ___  _ __ ___  ___

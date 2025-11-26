@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
 
+import bv2.utils as u
 from bv2.simple_input import iter_packed_examples, parallel_prefetch, to_len
 
 # Current high-level description of input pipeline:
@@ -33,6 +34,7 @@ from bv2.simple_input import iter_packed_examples, parallel_prefetch, to_len
 #    Ideally we prefetch this one step too, but that didn't work so far.
 
 
+@u.suppress_warnings(".*`isinstance(treespec, LeafSpec)` is deprecated.*", FutureWarning)
 def data_iter(ds, *, maxtok, device, seed=0, eagerness=16,
               rank=0, world_size=1, resumed_ep=0,
               resumed_i=0, max_ep=None):

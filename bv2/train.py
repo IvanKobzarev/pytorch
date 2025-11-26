@@ -128,6 +128,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     decay_params = [p for n, p in model.named_parameters() if is_decay(n)]
 
     @record_function("fwd_and_bwd")
+    @u.suppress_warnings(".*`isinstance(treespec, LeafSpec)` is deprecated.*", FutureWarning)
     @torch.compile
     def _fwd_and_bwd_step(weight_decay, *a, **kw):
         loss, extras = model(*a, mode="loss and bwd", **kw)
@@ -474,20 +475,6 @@ def summary_table(model, stats=True):
 # ---- CHECKPOINTING ----
 
 
-def suppress_warnings(message, category=Warning):
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            import warnings
-
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", message=message, category=category)
-                return func(*args, **kwargs)
-
-        return wrapper
-
-    return decorator
-
-
 class ModelState(dcp.stateful.Stateful):
     def __init__(self, model):
         self.model = model
@@ -513,8 +500,8 @@ class OptimState(dcp.stateful.Stateful):
         dcpsd.set_optimizer_state_dict(self.model, self.optim, sd)
 
 
-@suppress_warnings(".*version 2.5 of PyTorch, `overwrite` will default to False.*")
-@suppress_warnings(".*TypedStorage is deprecated", UserWarning)
+@u.suppress_warnings(".*version 2.5 of PyTorch, `overwrite` will default to False.*")
+@u.suppress_warnings(".*TypedStorage is deprecated", UserWarning)
 def maybe_save_ckpt(step, save_steps, keep_steps, model, optim, workdir, extras=None):
 
     should_save = (step % save_steps == 0) if isinstance(save_steps, int) else step in save_steps
