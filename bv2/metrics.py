@@ -97,15 +97,15 @@ class WandbLogger:
 
 
 def remove_invalid_json_(measurements):
-    def _is_jsonable(x):
-        if isinstance(x, wandb.sdk.data_types.table.Table):
-            return False
-        else:
-            return True
-
     for k, v in list(measurements.items()):
-        if not _is_jsonable(v):
+        if isinstance(v, wandb.sdk.data_types.table.Table):
             del measurements[k]
+        elif isinstance(v, (int, float, str, list, tuple, dict)) or v is None:
+            # In our Python json dialect, None becomes "null", which works.
+            # We sometimes get it for example for gradnorms of unused params.
+            continue
+        else:
+            raise ValueError(f"Not json'able and not ignored: {k} ({type(v)}): {v}")
     return measurements
 
 
