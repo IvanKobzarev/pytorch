@@ -36,7 +36,7 @@ def get_config():
     special_tokens = 64 # rough estimate of special tokens count: bos, eos, sep, image line sep.
 
     for s, frac in [("", 0.0), ("_blind", 1.0)]:
-        data = lambda max_patches: dict(
+        data = lambda max_patches, frac=frac: dict(
             name = "vqa",
             split = "infovqa_flat/val",
             max_patches = max_patches,
@@ -67,7 +67,7 @@ def get_config():
     c.evals.decode.data.nreg = lambda: c.model.reg.nreg
     c.evals.decode.decode.max_prefix = lambda: c.decode_max_patches + special_tokens + 28
     c.evals.decode.decode.batch_size = lambda: c.decode_batch_size
-    c.evals.decode.decode.max_decode = 8  # For visualization/qualitative purposes only, so intentially extra short.
+    c.evals.decode.decode.max_decode = 8  # For visualization/qualitative purposes only, so intentionally extra short.
     c.evals.decode.decode.T = 0.01
 
     return c
