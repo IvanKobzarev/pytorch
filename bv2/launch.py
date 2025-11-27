@@ -72,11 +72,17 @@ if __name__ == "__main__":
 
     # Allow explicitly overriding xid sws-style, to enable resuming in-place when launching
     # again with same-name same-xid as a previous job.
-    if candidates := [m.group(2) for a in sws_args if (m := re.fullmatch("(c.)?xid:=(.*)", a))]:
-        xid = candidates[-1]
-        print(f"{RED}WARNING:{RESET} manually overriding XID to {RED}{xid}{RESET}."
+    if candidates := [m for a in sws_args if (m := re.fullmatch('(?:c.)?xid:="?(.*)"?', a))]:
+        match = candidates[-1]
+        xid = match.group(1)
+        sws_args.remove(match.group(0))  # Need to remove it from sws args, because we pass it ourselves below.
+        print(f"{RED}WARNING: manually overriding XID to {xid}{RESET}."
             " This will re-run in-place in that folder. Make sure you use the same name as you originally used."
             " Some files could get overwritten, and this might confuse some tools.")
+        for i in range(9):
+            print(f"\rGiving you {9-i} more seconds to reconsider...", flush=True, end="")
+            time.sleep(1)
+        print("")
 
     # Construct the common part of the launch command:
     slurm = ["sbatch", *slurm_args, "--job-name", xid, "bv2/tools/launch_fair_srun"]
@@ -92,6 +98,7 @@ if __name__ == "__main__":
     # The reason is that slurm doesn't checkpoint the code at launch-time. If a job from this sweep
     # later gets pre-empted and resumed, it will run whatever is in the code folder at that point,
     # which might already be very different as we continue working on the code while sweeps run!
+    # TODO: If `code_dst` exists, add a `.1` next, then `.2` etc.
     code_dst = f"/checkpoint/rigi/bv2/srcdirs/{xid}"
     excludes = [f"--exclude={p}" for p in (".git/", "__pycache__/")]
     print(f"Copying the code from pwd to {BLUE}{code_dst}{RESET} ...", flush=True)
