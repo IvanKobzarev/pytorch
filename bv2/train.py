@@ -129,7 +129,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     @record_function("fwd_and_bwd")
     @u.suppress_warnings(".*`isinstance(treespec, LeafSpec)` is deprecated.*", FutureWarning)
-    @torch.compile
+    @partial(torch.compile, dynamic=False)
     def _fwd_and_bwd_step(weight_decay, *a, **kw):
         loss, extras = model(*a, mode="loss and bwd", **kw)
         optim.step()
@@ -139,7 +139,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                     param.mul_(1.0 - weight_decay)
         return loss, extras
 
-    @torch.compile
+    @partial(torch.compile, dynamic=False)
     def _fwd(*a, mode="loss", **kw):
         return model(*a, mode=mode, **kw)
 

@@ -16,7 +16,7 @@ import bv2.data.dpack as dpack  # usort: skip
 # https://github.com/pytorch/pytorch/issues/147879#issuecomment-3041193259
 # 2: max-autotune-no-cudagraphs takes a long time, but did 1039ms->1028ms on 4k seqlen.
 # cflex_attention = torch.compile(flex_attention, mode="max-autotune-no-cudagraphs")
-cflex_attention = torch.compile(flex_attention)
+cflex_attention = torch.compile(flex_attention, dynamic=False)
 
 
 class Attention(nn.Module):
