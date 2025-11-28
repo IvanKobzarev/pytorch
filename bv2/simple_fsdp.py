@@ -125,6 +125,9 @@ def _distribute_dtensor(
     )
 
 
+_FSDP_TYPE_CACHE = {}
+
+
 def _register_parametrization(
     module: nn.Module, param_name_to_parametrization: Mapping[str, nn.Module],
 ):
@@ -139,11 +142,16 @@ def _register_parametrization(
         pname: property(lambda self, pn=pname, pp=ppar: pp(self._parameters[pn]))
         for pname, ppar in param_name_to_parametrization.items()
     }
-    module_cls = type(
-        f"FSDP{module.__class__.__name__}",
-        (module.__class__,),
-        param_name_to_property,
-    )
+
+    cache_key = (module.__class__, *((n, p._cache_key()) for n, p in param_name_to_parametrization.items()))
+    if cache_key in _FSDP_TYPE_CACHE:
+        module_cls = _FSDP_TYPE_CACHE[cache_key]
+    else:
+        module_cls = _FSDP_TYPE_CACHE[cache_key] = type(
+            f"FSDP{module.__class__.__name__}",
+            (module.__class__,),
+            param_name_to_property,
+        )
     module.__class__ = module_cls
 
 
@@ -242,6 +250,9 @@ class ReplicateComputation(torch.nn.Module):
             output = self.replicate_compute(x)
 
         return output
+
+    def _cache_key(self):
+        return f"{self.checkpoint},{self.param_dtype},{self.reduce_dtype},{self.param_sharding}"
 
 
 def data_parallel(
