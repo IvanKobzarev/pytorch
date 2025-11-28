@@ -143,10 +143,17 @@ def _register_parametrization(
         for pname, ppar in param_name_to_parametrization.items()
     }
 
-    cache_key = (module.__class__, *((n, p._cache_key()) for n, p in param_name_to_parametrization.items()))
+    # We are creating a new type for the module on-the-fly, which overrides the sharded param properties.
+    # However, torch.compile also has a guard on id(type(self)), which would mean every single instance
+    # of module would fail this. Instead, let's re-use the new module type whenever possible.
+    #
+    # Interestingly, at the time of testing, this didn't make any difference in terms of speed or memory,
+    # but it's still cleaner and more future-proof.
+    cache_key = (module.__class__, *sorted((n, p._cache_key()) for n, p in param_name_to_parametrization.items()))
     if cache_key in _FSDP_TYPE_CACHE:
         module_cls = _FSDP_TYPE_CACHE[cache_key]
     else:
+        # Creates a new type, subclass of original module, replacing the sharded param attribs.
         module_cls = _FSDP_TYPE_CACHE[cache_key] = type(
             f"FSDP{module.__class__.__name__}",
             (module.__class__,),
@@ -252,7 +259,7 @@ class ReplicateComputation(torch.nn.Module):
         return output
 
     def _cache_key(self):
-        return f"{self.checkpoint},{self.param_dtype},{self.reduce_dtype},{self.param_sharding}"
+        return (str(self.checkpoint), str(self.param_dtype), str(self.reduce_dtype), str(self.param_sharding))
 
 
 def data_parallel(
