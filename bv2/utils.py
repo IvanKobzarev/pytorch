@@ -1,4 +1,5 @@
 import hashlib
+import re
 import warnings
 from functools import cache, update_wrapper
 
@@ -7,11 +8,12 @@ import torch
 import torch.distributed as distr
 
 
-def suppress_warnings(message, category=Warning):
+def suppress_warnings(message, category=Warning, regex=False):
+    pattern = message if regex else f".*{re.escape(message)}.*"
     def decorator(func):
         def wrapper(*args, **kwargs):
             with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", message=message, category=category)
+                warnings.filterwarnings("ignore", message=pattern, category=category)
                 return func(*args, **kwargs)
         update_wrapper(wrapper, func)
         return wrapper
