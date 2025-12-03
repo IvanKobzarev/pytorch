@@ -1,2 +1,2 @@
 -r requirements.txt
--r requirements-torch-nightly-cu126.txt
+-r requirements-torch-gpu.txt
