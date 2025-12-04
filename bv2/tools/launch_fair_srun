@@ -13,6 +13,7 @@
 #SBATCH --mem-per-gpu=255000
 #SBATCH --time=7-0:0:0
 #SBATCH --output=/checkpoint/rigi/bv2/slurm_out/%u/%j.txt
+#SBATCH --open-mode=append
 set -x
 
 # We pick who's master and what port to use.
