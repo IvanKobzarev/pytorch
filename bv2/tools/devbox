@@ -5,7 +5,8 @@ set -euo pipefail
 
 PORT1=${PORT1:-8888}
 PORT2=${PORT2:-8889}
-STATE_FILE="${STATE_FILE:-/tmp/${USER}_jupyter_${PORT1}_${PORT2}.info}"
+PORT3=${PORT3:-1337}
+STATE_FILE="${STATE_FILE:-/tmp/${USER}_jupyter_${PORT1}_${PORT2}_${PORT3}.info}"
 
 [[ -f "$STATE_FILE" ]] && rm "$STATE_FILE"
 
@@ -15,7 +16,7 @@ SRUN_ARGS="--account rigi --qos h100_rigi_high --exclusive --mem 0 --gpus-per-no
 srun $SRUN_ARGS --output="$STATE_FILE" --open-mode=append \
   bash -c "
     echo \$(hostname -f)
-    PORT1=$PORT1 PORT2=$PORT2 ~/rigi/bv2/tools/devbox_inner
+    PORT1=$PORT1 PORT2=$PORT2 PORT3=$PORT3 ~/rigi/bv2/tools/devbox_inner
     sleep infinity
   " &
 SRUN_PID=$!
@@ -26,8 +27,9 @@ until read -r host 2>/dev/null < "$STATE_FILE"; do sleep 0.5; done
 echo "Job running, you can go there and attach using:"
 echo -e "\033[34mssh $host -t tmux -L inner a\033[0m"
 
-ssh -N -f -L "$PORT1:localhost:$PORT1" -L "$PORT2:localhost:$PORT2" "$host"
-echo "Port $PORT1 and $PORT2 forwarded"
+ssh -N -f -L ":$PORT1:localhost:$PORT1" -L ":$PORT2:localhost:$PORT2" -L ":$PORT3:localhost:$PORT3" "$host"
+echo "Port $PORT1 and $PORT2 and $PORT3 forwarded. If you need to forward to laptop, run:"
+echo "ssh -N -f -L :$PORT1:localhost:$PORT1 -L :$PORT2:localhost:$PORT2 -L :$PORT3:localhost:$PORT3 fair-sc-3"
 
 WAIT=${WAIT:-no}
 case "${WAIT,,}" in
