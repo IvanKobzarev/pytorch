@@ -1,5 +1,5 @@
 #!/bin/bash
-# How to run: Just run it. Just `bv2/tools/launch_dev` you don't need to set options.
+# How to run: Just run it. Just `bv2/tools/devbox` you don't need to set options.
 
 set -euo pipefail
 
