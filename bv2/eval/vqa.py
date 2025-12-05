@@ -14,9 +14,11 @@ def run(predict_fn, ds, decode, **comms):
 
     anls, acc, acc_any, preds = [], [], [], {}
     for ex in decoding_iterator(predict_fn, ds, **decode, **comms):
-
         if all(u.all_gather_object(obj=ex["done"])):
             break
+
+        if u.about_to_get_killed():
+            return  # Do not yield any metrics, we didn't finish!
 
         pred = ds.tt.decode(ex["suffix"])
         preds[f"{ex["id"].item()}/suffix"] = pred
@@ -31,6 +33,7 @@ def run(predict_fn, ds, decode, **comms):
         acc.append(min(1.0, num_match / 3.0))
         acc_any.append(min(1.0, float(num_match)))
         anls.append(max([anls_metric(ans, pred) for ans in answers]))
+        print(".", end="", flush=True)
 
     if res := u.gather_object_to(rank=0, obj=(acc, acc_any, anls, preds)):
         acc, acc_any, anls, preds = zip(*res)

@@ -7,7 +7,6 @@ import json
 import os
 import re
 import shutil
-import signal
 from collections import Counter, defaultdict
 from datetime import datetime
 from functools import partial
@@ -48,9 +47,6 @@ torch.use_deterministic_algorithms(True)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 torch.set_deterministic_debug_mode("error")  # raises error on non-determinism
-
-
-ABOUT_TO_GET_KILLED = False
 
 
 def main(c, rank, local_rank, world_size):  # noqa: C901
@@ -191,19 +187,20 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         for ev_name in c.get("evals", {}):
             ev = c.evals[ev_name]
             is_step = (step % ev.steps == 0) if isinstance(ev.steps, int) else step in ev.steps
-            if ABOUT_TO_GET_KILLED or not (is_step or step == c.nsteps):  # Always run on last step.
+            if u.about_to_get_killed() or not (is_step or step == c.nsteps):  # Always run on last step.
                 continue
             tev0 = perf_counter()
-            prints0(f"Running evaluator {ev_name}...")
+            prints0(f"Running evaluator {ev_name}", end="", flush=True)
             em = import_module(f"bv2.eval.{ev.type}")
             ds_ev = bv2.simple_data.from_config(ev.data.to_dict())
             args = {k: v for k, v in ev.to_dict().items() if k not in {"type", "data", "steps"}}
             with torch.no_grad():
                 if results := em.run(_fwd, ds_ev, **args, rank=rank, world_size=world_size, device=device):
                     wlogger.log({f"{ev_name}/{k}": v for k, v in results.items()})
+                    print0("")  # End the line we did not end above.
                     for k, v in results.items():
                         prints0(f"Eval results: {ev_name}/{k}: {v}")
-            distr.barrier()  # For accurate timing and avoiding ABOUT_TO_GET_KILLED-related divergence.
+            distr.barrier()  # For accurate timing and avoiding u.about_to_get_killed-related divergence.
             wlogger.log({f"chrono/evals/{ev_name}": perf_counter() - tev0})
 
     if not c.get("skip_initial_eval", False):
@@ -331,7 +328,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                 "metrics": wlogger.save_ckpt(),
             })  # fmt: skip
 
-        if ABOUT_TO_GET_KILLED:  # We checkpointed, yay, quick, byebye.
+        if u.about_to_get_killed():  # We checkpointed, yay, quick, byebye.
             break
 
         if c.nsteps >= 50 and step == 2:
@@ -365,8 +362,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         prints(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
         prints(f"Step times (med: {np.median(train_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in train_times)}")  # fmt: skip
 
-    if ABOUT_TO_GET_KILLED:
-        prints(f"Finished {perf_counter() - ABOUT_TO_GET_KILLED}s after getting the pre-emption call!")
+    if u.about_to_get_killed():
+        prints(f"Finished {perf_counter() - u.about_to_get_killed()}s after getting the pre-emption call!")
     else:
         with open(pjoin(workdir, "DONE"), "w+") as f:
             f.write("All good!")
@@ -506,7 +503,7 @@ class OptimState(dcp.stateful.Stateful):
 def maybe_save_ckpt(step, save_steps, keep_steps, model, optim, workdir, extras=None):
 
     should_save = (step % save_steps == 0) if isinstance(save_steps, int) else step in save_steps
-    if not (ABOUT_TO_GET_KILLED or should_save):
+    if not (u.about_to_get_killed() or should_save):
         return
 
     path = pjoin(workdir, f"ckpt-{step:06d}")
@@ -625,13 +622,8 @@ if __name__ == "__main__":
         world_size = 1
 
     prints = partial(print_stamped, rank=rank)
+    print0 = print if rank == 0 else lambda *args, **kwargs: None
     prints0 = prints if rank == 0 else lambda *args, **kwargs: None
 
-    def handler(signum, frame):
-        global ABOUT_TO_GET_KILLED
-        ABOUT_TO_GET_KILLED = perf_counter()
-        print(f"[{rank}] Got termination signal {signum}, checkpointing and quitting ASAP! ({ABOUT_TO_GET_KILLED})")
-    signal.signal(signal.SIGTERM, handler)
-
-
+    u.install_preemption_handler()
     sws.run(partial(main, rank=rank, local_rank=local_rank, world_size=world_size))

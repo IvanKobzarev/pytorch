@@ -22,9 +22,11 @@ def run(predict_fn, ds, ps=16, num_ex_to_vis=32, decode={}, **comms):
     all_preds = {}
     vis_ex_to_wandb = []
     for ex in pred_iter:
-
         if all(u.all_gather_object(obj=ex["done"])):
             break
+
+        if u.about_to_get_killed():
+            return  # Do not yield any metrics, we didn't finish!
 
         if not ex["done"]:
 
@@ -39,6 +41,7 @@ def run(predict_fn, ds, ps=16, num_ex_to_vis=32, decode={}, **comms):
                 images = [wandb.Image(img) for img in images]
                 vis_ex_to_wandb.append((ex["id"], prefix, images, suffix))
                 num_ex_to_vis -= 1
+        print(".", end="", flush=True)
 
     if all_preds := u.gather_object_to(rank=0, obj=all_preds):
         all_preds = functools.reduce(lambda x, y: x | y, all_preds, {})

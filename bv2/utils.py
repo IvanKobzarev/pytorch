@@ -1,7 +1,9 @@
 import hashlib
 import re
+import signal
 import warnings
 from functools import cache, update_wrapper
+from time import perf_counter
 
 import numpy as np
 import torch
@@ -66,6 +68,31 @@ def broadcast_object_from(rank, obj, world_size=None, my_rank=None):
     objlist = [obj] if my_rank == rank else [None]
     distr.broadcast_object_list(objlist, src=rank, group=gloo_group())
     return objlist[0]
+
+
+#                                            _   _
+#  _ __  _ __ ___        ___ _ __ ___  _ __ | |_(_) ___  _ __  ___
+# | '_ \| '__/ _ \_____ / _ \ '_ ` _ \| '_ \| __| |/ _ \| '_ \/ __|
+# | |_) | | |  __/_____|  __/ | | | | | |_) | |_| | (_) | | | \__ \
+# | .__/|_|  \___|      \___|_| |_| |_| .__/ \__|_|\___/|_| |_|___/
+# |_|                                 |_|
+#
+
+
+_ABOUT_TO_GET_KILLED = False
+
+
+def install_preemption_handler(signals=(signal.SIGTERM,)):
+    def handler(signum, frame):
+        global _ABOUT_TO_GET_KILLED
+        _ABOUT_TO_GET_KILLED = perf_counter()
+        print(f"[{distr.get_rank()}] Got termination signal {signum}, checkpointing and quitting ASAP! ({_ABOUT_TO_GET_KILLED})")
+    for s in signals:
+        signal.signal(s, handler)
+
+
+def about_to_get_killed():
+    return _ABOUT_TO_GET_KILLED
 
 
 #   ____                 _                   _   _                 _
