@@ -147,4 +147,5 @@ if __name__ == "__main__":
     p.write_text(" ".join(sys.argv), encoding="utf-8")
 
     print(f"{RESET}To kill all these jobs: {BLUE}scancel -n {xid}{RESET}")
-    print(f"To see status of all these jobs (triple-click to select line):\n{BLUE}squeue -n {xid}{RESET} -O JobId:7,Name:20,UserName:5,State:10,TimeUsed:9,NumCPUs:5,QOS:9,NumNodes:6,GRES:14,RestartCnt:4,Reason")
+    print(f"To see status of all these jobs (triple-click to select line):\n"
+          f"{BLUE}squeue -n {xid}{RESET} -O JobId:9,Name:20,UserName:5,State:10,TimeUsed:11,NumCPUs:5,NumNodes:6,GRES:14,RestartCnt:4,QOS:9,Reason")
