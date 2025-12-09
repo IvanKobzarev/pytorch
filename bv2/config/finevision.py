@@ -29,12 +29,13 @@ def get_config():
     # 16384 patches: 13m examples / 100k steps
     c.nsteps = 100_000
     c.warmup_nsteps = 1000
-    c.lr = 1e-4
+    c.lr = 3e-4
     c.wd = lambda: c.lr * 0.1
+    c.beta2 = 0.99
 
     c.model.dim = 2048
     c.model.depth = 12
-    c.model.reg.nreg = 10
+    c.model.reg.nreg = 0
     c.model.stages = lambda: "half" if c.model.reg.nreg > 0 else "single"
     c.model.txt_unemb.chunks = 8
 
