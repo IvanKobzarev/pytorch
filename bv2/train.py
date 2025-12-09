@@ -326,6 +326,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                 "tokens_seen": tokens_seen,
                 "examples_seen": examples_seen,
                 "metrics": wlogger.save_ckpt(),
+                "jid": c.get("jid", "n/a"),  # Just for future archeologs.
             })  # fmt: skip
 
         if u.about_to_get_killed():  # We checkpointed, yay, quick, byebye.

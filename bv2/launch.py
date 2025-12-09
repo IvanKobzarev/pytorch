@@ -47,7 +47,7 @@ RESET = '\033[0m'
 LIGHT = '\033[90m'
 
 
-if __name__ == "__main__":
+def main():
     # First, get the sweep function out of the config file.
     conf_file = sys.argv[1]
     assert conf_file.endswith(".py"), "First argument of sweep needs to be config file."
@@ -76,6 +76,7 @@ if __name__ == "__main__":
         match = candidates[-1]
         xid = match.group(1)
         sws_args.remove(match.group(0))  # Need to remove it from sws args, because we pass it ourselves below.
+        sws_args.append("is_manual_rerun:=True")  # At least leave one trace about this fiddling!
         print(f"{RED}WARNING: manually overriding XID to {xid}{RESET}."
             " This will re-run in-place in that folder. Make sure you use the same name as you originally used."
             " Some files could get overwritten, and this might confuse some tools.")
@@ -99,7 +100,7 @@ if __name__ == "__main__":
     # later gets pre-empted and resumed, it will run whatever is in the code folder at that point,
     # which might already be very different as we continue working on the code while sweeps run!
     # TODO: If `code_dst` exists, add a `.1` next, then `.2` etc.
-    code_dst = f"/checkpoint/rigi/bv2/srcdirs/{xid}"
+    code_dst = next_free(f"/checkpoint/rigi/bv2/srcdirs/{xid}")
     excludes = [f"--exclude={p}" for p in (".git/", "__pycache__/")]
     print(f"Copying the code from pwd to {BLUE}{code_dst}{RESET} ...", flush=True)
     subprocess.run(["rsync", "-az", "--mkpath", "--info=progress2", *excludes, "./", code_dst], check=True)
@@ -149,3 +150,15 @@ if __name__ == "__main__":
     print(f"{RESET}To kill all these jobs: {BLUE}scancel -n {xid}{RESET}")
     print(f"To see status of all these jobs (triple-click to select line):\n"
           f"{BLUE}squeue -n {xid}{RESET} -O JobId:9,Name:20,UserName:5,State:10,TimeUsed:11,NumCPUs:5,NumNodes:6,GRES:14,RestartCnt:4,QOS:9,Reason")
+
+
+def next_free(path):
+    curr_path = path = Path(path)
+    i = 0
+    while curr_path.exists():
+        i += 1
+        curr_path = path.with_suffix(f".{i}")
+    return curr_path
+
+if __name__ == "__main__":
+    main()
