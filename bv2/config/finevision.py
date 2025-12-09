@@ -128,8 +128,6 @@ def get_config():
         c.evals[f"stvqa_fmt/{max_p}/vqa"] = vqa_eval("stvqa_flat/val", max_q=20, max_a=11, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["stvqa"])      # covers 99% ; do 30, 23 for all
         c.evals[f"stvqa_fmt/{max_p}/blind/vqa"] = vqa_eval("stvqa_flat/val", max_q=20, max_a=11, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["stvqa"], blind=True)
 
-    del c["evals"]
-
     # Nice to visualize predictions in W&B periodically. Very small/short decode for sanity-check only.
     # Single resolution to avoid bugginess.
     c.evals["decode_docvqa_fmt"].type = "decode"
