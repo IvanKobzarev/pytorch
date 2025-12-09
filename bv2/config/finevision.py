@@ -74,6 +74,7 @@ def get_config():
         k.decode.max_decode = 1 + max_a
         k.decode.T = 0.01
         k.decode.omit_eos = True
+        k.lower = True
         return k
 
     c.evals['docvqa/vqa'] = vqa_eval("docvqa_flat/val", max_q=25, max_a=16)    # covers 99% ; do 40, 33 for all

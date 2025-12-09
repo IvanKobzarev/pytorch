@@ -9,7 +9,7 @@ import bv2.utils as u
 from bv2.eval.decode_lib import decoding_iterator
 
 
-def run(predict_fn, ds, decode, **comms):
+def run(predict_fn, ds, decode, lower=False, **comms):
     """VQA evaluator."""
 
     anls, acc, acc_any, preds = [], [], [], {}
@@ -21,12 +21,14 @@ def run(predict_fn, ds, decode, **comms):
             return  # Do not yield any metrics, we didn't finish!
 
         pred = ds.tt.decode(ex["suffix"])
+        pred = pred.lower() if lower else pred
         preds[f"{ex["id"].item()}/suffix"] = pred
 
         gt = ds.ground_truth(ex["id"])
 
         assert len(gt['qas']) == 1
         question, answers = list(gt['qas'].values())[0]
+        answers = [a.lower() if lower else a for a in answers]
         preds[f"{ex["id"].item()}/question"] = question
         preds[f"{ex["id"].item()}/answers"] = answers
         num_match = sum([ans == pred for ans in answers])
