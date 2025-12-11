@@ -30,6 +30,7 @@ If there is no sweep function in the config, it just launches the single job.
 
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -64,7 +65,7 @@ def main():
         slurm_args = sys.argv[2:sys.argv.index("--")]
         sws_args = sys.argv[sys.argv.index("--") + 1:]
     else:
-        _is_sws = lambda a: "=" in a and "--" not in a
+        _is_sws = lambda a: "=" in a and not a.startswith("--")
         slurm_args = [a for a in sys.argv[2:] if not _is_sws(a)]
         sws_args = [a for a in sys.argv[2:] if _is_sws(a)]
 
@@ -110,6 +111,12 @@ def main():
         time.sleep(1)
     print("Let's gooooo!")
 
+    # Storing the exact launch command into the XID folder, this is useful for resuming
+    # individual jobs that failed in the future, for example.
+    wd = Path(f"/checkpoint/rigi/bv2/workdirs/{xid}")
+    wd.mkdir(parents=True, exist_ok=True)
+    (wd / "launchinfo.txt").write_text(shlex.join(sys.argv), encoding="utf-8")
+
     try:
         for wid, work_unit_args in enumerate(all_jobs):
             if isinstance(work_unit_args, str):  # Normalize single-arg sweep.
@@ -122,9 +129,12 @@ def main():
 
             print(f"{log_xwid} | {log_args}", end="", flush=True)
 
-            ret = subprocess.run(
-                [*slurm, *torch, *work_unit_args, f"xid:=\"{xid}\"", f"wid:={wid}", *sws_args],
-                capture_output=True, text=True, shell=False)
+            command_words = [*slurm, *torch, *work_unit_args, f"xid:=\"{xid}\"", f"wid:={wid}", *sws_args]
+            ret = subprocess.run(command_words, capture_output=True, text=True, shell=False)
+
+            # Write the exact launch command into a shell file that can be used to re-launch:
+            (wd / f"launch_{wid}.sh").write_text(f"#!/bin/bash\ncd {code_dst}\n" + shlex.join(command_words) + "\n", encoding="utf-8")
+            (wd / f"launch_{wid}.sh").chmod(0o755)
 
             if ret.returncode == 0:
                 if match := re.search(r"Submitted batch job (\d+)", ret.stdout):
@@ -140,12 +150,6 @@ def main():
                 print(ret.stdout)
     except KeyboardInterrupt:
         print(f"\n{RED}{BOLD}Launch interrupted. See command below to kill launched jobs.{RESET}")
-
-    # Storing the exact launch command into the XID folder, this is useful for resuming
-    # individual jobs that failed in the future, for example.
-    p = Path(f"/checkpoint/rigi/bv2/workdirs/{xid}/launchinfo.txt")
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(" ".join(sys.argv), encoding="utf-8")
 
     print(f"{RESET}To kill all these jobs: {BLUE}scancel -n {xid}{RESET}")
     print(f"To see status of all these jobs (triple-click to select line):\n"
