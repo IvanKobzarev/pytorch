@@ -578,7 +578,7 @@ def get_config():
     c = sws.Config()
     c.seed = 0
 
-    c.maxtok = 8 * 4096
+    c.maxtok = 8 * 4096 + 1
 
     c.data.name = "random_nouns"
     c.data.min_nouns = 128

@@ -7,7 +7,7 @@ def get_config():
     c = sws.Config()
     c.seed = 0
 
-    c.maxtok = 32_768
+    c.maxtok = 32_768 + 1
 
     c.data.name = "finevision"
     c.data.max_patches = 784  # (448/16)^2 = 784; (2048/16)^2 = 16_384

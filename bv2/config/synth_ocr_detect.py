@@ -5,7 +5,7 @@ def get_config():
     c = sws.Config()
     c.seed = 0
 
-    c.maxtok = 2048
+    c.maxtok = 2048 + 1
 
     c.data.name = "synth_ocr_detect"
     c.data.mode = "ltwh"
