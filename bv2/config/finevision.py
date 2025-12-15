@@ -37,7 +37,7 @@ def get_config():
     c.model.depth = 12
     c.model.reg.nreg = 0
     c.model.stages = lambda: "half" if c.model.reg.nreg > 0 else "single"
-    c.model.txt_unemb.chunks = 8
+    c.model.txt_unemb.chunksz = 4096
 
     def pplx_eval(split, blind=False):
         k = sws.Config()

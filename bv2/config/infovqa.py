@@ -27,7 +27,7 @@ def get_config():
     c.model.depth = 12
     c.model.reg.nreg = 10
     c.model.stages = lambda: "half" if c.model.reg.nreg > 0 else "single"
-    c.model.txt_unemb.chunks = 8
+    c.model.txt_unemb.chunksz = 4096
 
     # These are defined here so they are easy to set on commandline or sweep. Just an example.
     c.decode_max_patches = lambda: c.data.max_patches

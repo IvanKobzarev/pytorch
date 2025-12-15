@@ -4,6 +4,7 @@ import signal
 import warnings
 from functools import cache, update_wrapper
 from time import perf_counter
+from types import FunctionType
 
 import numpy as np
 import torch
@@ -21,6 +22,25 @@ def suppress_warnings(message, category=Warning, regex=False):
         return wrapper
 
     return decorator
+
+
+def clone_function(f, name_suffix=""):
+    """Return a copy of `f` so that it has a separate torch.compile cache."""
+    g = FunctionType(
+        f.__code__.replace(),
+        f.__globals__,
+        f.__name__ + name_suffix,
+        argdefs=f.__defaults__,
+        closure=f.__closure__
+    )
+    g.__kwdefaults__ = f.__kwdefaults__
+    # g.__dict__.update(f.__dict__)  # Ignore attributes; torch dynamo adds some.
+    g.__annotations__ = getattr(f, "__annotations__", {}).copy()
+    g.__doc__ = f.__doc__
+    g.__module__ = f.__module__
+    g.__qualname__ = f.__qualname__
+    return g
+
 
 #    ____
 #   / ___|___  _ __ ___  _ __ ___  ___

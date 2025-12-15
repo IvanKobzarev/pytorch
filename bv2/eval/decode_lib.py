@@ -18,9 +18,13 @@ from bv2.simple_input import parallel_prefetch, to_len
 
 # lazy global variable, so we avoid compiling on import
 @functools.cache
-def get_cbm():
-    # TODO: figure out where to compile (including `partial` compile downstream)
-    return torch.compile(create_block_mask)
+def get_cbm(key):
+    # We have to use dynamic shapes with the current code organization, because the same
+    # function is shared across all evaluators, which may have different data shapes!
+    fn = torch.compile(u.clone_function(create_block_mask, name_suffix=key), dynamic=True)
+    fn = u.suppress_warnings("`isinstance(treespec, LeafSpec)` is deprecated", FutureWarning)(fn)
+    fn = u.suppress_warnings("`isinstance(treespec, TreeSpec)` is deprecated", FutureWarning)(fn)
+    return fn
 
 
 def _make_ex(_id, ds, max_prefix, max_decode):
@@ -64,9 +68,9 @@ def decode_batch(predict_fn, batch, *, decode_idx, rng,
 
     flex_masks = {}
     for k in (k for k in batch if k.startswith("attn_regions")):
-        flex_masks[k] = get_cbm()(functools.partial(mask_mod, mask_key=k),
-                                  Q_LEN=max_prefix + max_decode, KV_LEN=max_prefix + max_decode,
-                                  B=batch_size, H=None, device=device)
+        flex_masks[k] = get_cbm(k)(functools.partial(mask_mod, mask_key=k),
+                                   Q_LEN=max_prefix + max_decode, KV_LEN=max_prefix + max_decode,
+                                   B=batch_size, H=None, device=device)
 
     reached_eos = np.zeros(len(decode_idx), dtype=np.bool_)
     for step in range(max_decode):

@@ -128,7 +128,7 @@ def _distribute_dtensor(
 _FSDP_TYPE_CACHE = {}
 
 
-def _register_parametrization(
+def _register_parametrization_(
     module: nn.Module, param_name_to_parametrization: Mapping[str, nn.Module],
 ):
     """
@@ -138,10 +138,6 @@ def _register_parametrization(
     TODO: In checkpoint saving/loading, avoid parametrization calls when calling
     get_model_state_dict func in torchtitan's torchtitan/components/checkpoint.py.
     """
-    param_name_to_property = {
-        pname: property(lambda self, pn=pname, pp=ppar: pp(self._parameters[pn]))
-        for pname, ppar in param_name_to_parametrization.items()
-    }
 
     # We are creating a new type for the module on-the-fly, which overrides the sharded param properties.
     # However, torch.compile also has a guard on id(type(self)), which would mean every single instance
@@ -150,15 +146,21 @@ def _register_parametrization(
     # Interestingly, at the time of testing, this didn't make any difference in terms of speed or memory,
     # but it's still cleaner and more future-proof.
     cache_key = (module.__class__, *sorted((n, p._cache_key()) for n, p in param_name_to_parametrization.items()))
-    if cache_key in _FSDP_TYPE_CACHE:
-        module_cls = _FSDP_TYPE_CACHE[cache_key]
-    else:
-        # Creates a new type, subclass of original module, replacing the sharded param attribs.
-        module_cls = _FSDP_TYPE_CACHE[cache_key] = type(
-            f"FSDP{module.__class__.__name__}",
-            (module.__class__,),
-            param_name_to_property,
-        )
+    if (klass := _FSDP_TYPE_CACHE.get(cache_key)) is not None:
+        module.__class__ = klass
+        return
+
+    param_name_to_property = {
+        pname: property(lambda self, pn=pname, pp=ppar: pp(self._parameters[pn]))
+        for pname, ppar in param_name_to_parametrization.items()
+    }
+
+    # Creates a new type, subclass of original module, replacing the sharded param attribs.
+    module_cls = _FSDP_TYPE_CACHE[cache_key] = type(
+        f"FSDP{module.__class__.__name__}",
+        (module.__class__,),
+        param_name_to_property,
+    )
     module.__class__ = module_cls
 
 
@@ -311,7 +313,9 @@ def data_parallel(
                 mp_policy=mp_policy,
                 tp_mesh=tp_mesh,
             )
-        # to be compatible with DCP, we use a customized _register_parametrization
-        # instead of nn.utils.parametrize.register_parametrization here
-        _register_parametrization(mod, param_computes)
+
+        if param_computes:
+            # to be compatible with DCP, we use a customized _register_parametrization_
+            # instead of nn.utils.parametrize.register_parametrization here
+            _register_parametrization_(mod, param_computes)
     return model

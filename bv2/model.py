@@ -7,7 +7,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from torch.nn.attention.flex_attention import AuxRequest, flex_attention
-from torch.profiler import record_function
 from torch.utils.checkpoint import checkpoint
 
 import bv2.data.dpack as dpack  # usort: skip
@@ -16,7 +15,7 @@ import bv2.data.dpack as dpack  # usort: skip
 # https://github.com/pytorch/pytorch/issues/147879#issuecomment-3041193259
 # 2: max-autotune-no-cudagraphs takes a long time, but did 1039ms->1028ms on 4k seqlen.
 # cflex_attention = torch.compile(flex_attention, mode="max-autotune-no-cudagraphs")
-cflex_attention = torch.compile(flex_attention, dynamic=False)
+cflex_attention = torch.compile(flex_attention, dynamic=False, fullgraph=True)
 
 
 class Attention(nn.Module):
@@ -33,7 +32,6 @@ class Attention(nn.Module):
         self.v = nn.Linear(dim, self.n_kv_heads * head_dim, bias=False)
         self.o = nn.Linear(dim, dim, bias=False)
 
-    @record_function("Attention")
     def forward(self, x, flex_mask):
         batch_dims = x.size()[:-2]
         q = rearrange(self.q(x), "... T (Q D) -> (...) Q T D", Q=self.n_q_heads)
@@ -67,7 +65,6 @@ class MLP(nn.Module):
         self.l1 = nn.Linear(dim, int(grow * dim))
         self.l2 = nn.Linear(int(grow * dim), dim)
 
-    @record_function("MLP")
     def forward(self, x):
         x = self.l1(x)
         x = F.gelu(x, approximate="tanh")
@@ -90,7 +87,6 @@ class Block(nn.Module):
         self.mlp = MLP(dim, grow)
         self.remat = remat
 
-    @record_function("Block")
     def forward(self, x, flex_mask):
         def att_ln_fn(y, fm):
             return self.att(self.att_ln(y), fm)
@@ -153,11 +149,11 @@ class TxtEmbedding(nn.Module):
 
 
 class TxtUnembedding(nn.Module):
-    def __init__(self, dim, vocab, chunks=1, init_std=0.0):
+    def __init__(self, dim, vocab, chunksz=None, init_std=0.0):
         super().__init__()
         # TODO: Should we move the pre-head LN to the unembeddings, maybe?
         self.head = nn.Linear(dim, vocab, bias=True)
-        self.chunks = chunks
+        self.chunksz = chunksz
         self.init_std = init_std
 
     def _process_chunk(self, x, targets, loss_weights, global_total_loss_weights, mode):
@@ -212,9 +208,11 @@ class TxtUnembedding(nn.Module):
         global_total_loss_toks = (loss_weights > 0).sum()
         distr.all_reduce(global_total_loss_toks, op=distr.ReduceOp.SUM)
 
-        for chunk_idx in range(self.chunks):
-            start = seqlen * chunk_idx // self.chunks
-            end = seqlen * (chunk_idx + 1) // self.chunks
+        # NOTE: This is the case because of our choice to do static compiles without recompiles.
+        # In principle we could relax it and compile two variants, or leave chunk dim dynamic.
+        assert seqlen % self.chunksz == 0, f"{seqlen=} has to be chunkable by {self.chunksz=}"
+        for start in range(0, seqlen, self.chunksz):
+            end = start + self.chunksz
 
             chunk_x = x_detached[..., start:end, :]
             chunk_targets = targets[..., start:end]
@@ -229,7 +227,7 @@ class TxtUnembedding(nn.Module):
             tok_losses[..., start:end] = tok_losses_chunk
             total_correct += ((pred == chunk_targets) * (chunk_loss_weights > 0)).sum()
 
-        if mode == "loss and bwd":
+        if mode == "loss and bwd":  # Yes, this graph-breaks. It's ok.
             x.backward(x_detached.grad)
 
         extras = {
@@ -377,7 +375,6 @@ class SimpleTransformer(nn.Module):
         # Just to avoid silly mistakes making `zip` skip layers in `forward`.
         assert len(self.flex_masks) == depth
 
-    @record_function("Transformer")
     def forward(self, tokens, flex_masks, loss_weights, seqids, mode, **mode_kw):
         assert mode in ("loss and bwd", "loss", "logits"), f"Invalid mode {mode}"
 

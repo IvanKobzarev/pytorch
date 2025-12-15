@@ -9,7 +9,7 @@ import re
 import shutil
 from collections import Counter, defaultdict
 from datetime import datetime
-from functools import partial
+from functools import cache, partial
 from getpass import getuser
 from importlib import import_module
 from itertools import chain
@@ -37,7 +37,9 @@ torch.backends.fp32_precision = "tf32"
 torch.backends.cuda.matmul.allow_tf32 = True
 
 # Reduce limit to make the issue appear faster
-# torch._dynamo.config.recompile_limit = 1
+torch._dynamo.config.recompile_limit = 1
+torch._dynamo.config.fail_on_recompile_limit_hit = True
+torch._dynamo.config.accumulated_recompile_limit = 10_000_000  # Basically inf.
 
 
 # This section configures pytorch to be fully deterministic.
@@ -120,25 +122,21 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         summary_table(model, stats=c.get("param_stats", False))
 
     # NOTE: Optimizer doesn't alloc here, only allocs on `.step()`.
-    optim = torch.optim.AdamW(model.parameters(), betas=(c.get("beta1", 0.9), c.get("beta2", 0.999)), lr=0.0, fused=True)
+    optim = torch.optim.AdamW(model.parameters(), betas=(c.get("beta1", 0.9), c.get("beta2", 0.999)), lr=torch.tensor(0.0), fused=True)
     decay_params = [p for n, p in model.named_parameters() if is_decay(n)]
 
-    @record_function("fwd_and_bwd")
+    @record_function("fwd_and_bwd_step")
     @u.suppress_warnings("`isinstance(treespec, LeafSpec)` is deprecated", FutureWarning)
-    @partial(torch.compile, dynamic=False)
+    @u.suppress_warnings("`isinstance(treespec, TreeSpec)` is deprecated", FutureWarning)
+    @torch.compile(dynamic=False)
     def _fwd_and_bwd_step(weight_decay, *a, **kw):
         loss, extras = model(*a, mode="loss and bwd", **kw)
         optim.step()
-        if weight_decay:
+        if weight_decay is not None:
             with torch.no_grad():
                 for param in decay_params:
                     param.mul_(1.0 - weight_decay)
         return loss, extras
-
-    @u.suppress_warnings("`isinstance(treespec, LeafSpec)` is deprecated", FutureWarning)
-    @partial(torch.compile, dynamic=False)
-    def _fwd(*a, mode="loss", **kw):
-        return model(*a, mode=mode, **kw)
 
     # Potentially resume/fork from a checkpoint, if not, init stuff.
     first_step, tokens_seen, examples_seen = 0, 0, 0
@@ -181,6 +179,20 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         with_modules=True,
     )
 
+    # We have a factory here, so that we get independent compiles and compile-limit
+    # counters for individual evals. For example, we run different evals at varying
+    # resolutions, batch-sizes, max-tokens, and don't want them to affect each other.
+    @cache
+    def get_fwd(eval_key):
+        def _fwd(*a, **kw):
+            return model(*a, **kw)
+
+        fn = torch.compile(u.clone_function(_fwd, name_suffix=eval_key), dynamic=False)
+        fn = u.suppress_warnings("`isinstance(treespec, LeafSpec)` is deprecated", FutureWarning)(fn)
+        fn = u.suppress_warnings("`isinstance(treespec, TreeSpec)` is deprecated", FutureWarning)(fn)
+        fn = record_function(f"eval_fwd_{eval_key}")(fn)
+        return fn
+
     # Eval loop is reused, so we wrap it as a function
     def run_evals(step):
         """Run evaluations for a given step if conditions are met."""
@@ -195,7 +207,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             ds_ev = bv2.simple_data.from_config(ev.data.to_dict())
             args = {k: v for k, v in ev.to_dict().items() if k not in {"type", "data", "steps"}}
             with torch.no_grad():
-                if results := em.run(_fwd, ds_ev, **args, rank=rank, world_size=world_size, device=device):
+                if results := em.run(get_fwd(ev_name), ds_ev, **args, rank=rank, world_size=world_size, device=device):
                     wlogger.log({f"{ev_name}/{k}": v for k, v in results.items()})
                     print0("")  # End the line we did not end above.
                     for k, v in results.items():
@@ -257,7 +269,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             wlogger.log({f"pnorm/{n}": global_reduce(p, "norm") for n, p in model.named_parameters()})
 
         local_loss, extras = _fwd_and_bwd_step(
-            c.wd * sched,
+            torch.tensor(c.wd * sched) if c.wd else None,
             data["tokens"],
             data["flex_masks"],
             data["loss_weights"],
@@ -387,6 +399,7 @@ def global_schedule(*, step, total_steps, warmup_steps=1):
 
 
 def set_lr_(optimizer, lr):
+    lr = torch.tensor(lr)  # For torch.compile, else it's a compile-time constant!
     for param_group in optimizer.param_groups:
         param_group["lr"] = lr
 
@@ -595,7 +608,7 @@ def get_config():
 
     c.model.dim = 4096
     c.model.depth = 4
-    c.model.txt_unemb.chunks = 8
+    c.model.txt_unemb.chunksz = 4096
 
     c.evals.pplx_val.type = "pplx"
     c.evals.pplx_val.steps = 10

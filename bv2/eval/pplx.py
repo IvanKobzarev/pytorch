@@ -20,7 +20,7 @@ def run(predict_fn, ds, iter, **comms):
             break
 
         _, extras = predict_fn(
-            data["tokens"], data["flex_masks"], data["loss_weights"], data["iseq"])
+            data["tokens"], data["flex_masks"], data["loss_weights"], data["iseq"], mode="loss")
 
         num_tokens = sum(data["lens"])
         num_examples = len(data["lens"])

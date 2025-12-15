@@ -35,6 +35,7 @@ from bv2.simple_input import iter_packed_examples, parallel_prefetch, to_len
 
 
 @u.suppress_warnings("`isinstance(treespec, LeafSpec)` is deprecated", FutureWarning)
+@u.suppress_warnings("`isinstance(treespec, TreeSpec)` is deprecated", FutureWarning)
 def data_iter(ds, *, maxtok, device, seed=0, eagerness=16,
               rank=0, world_size=1, resumed_ep=0,
               resumed_i=0, max_ep=None):
@@ -96,6 +97,7 @@ create_block_mask = torch.compile(partial(create_block_mask, B=None, H=None))
 
 
 @u.suppress_warnings("`isinstance(treespec, LeafSpec)` is deprecated", FutureWarning)
+@u.suppress_warnings("`isinstance(treespec, TreeSpec)` is deprecated", FutureWarning)
 def make_mask(ntoks, attn_regions, document_ids, device):
     def mask_mod(b, h, q_idx, kv_idx):
         causal = q_idx >= kv_idx
@@ -108,7 +110,8 @@ def make_mask(ntoks, attn_regions, document_ids, device):
     # TODO: This is only reasonably efficient up to a reasonable but not huge
     #       seqlen (about 1M). See the file tools/batched_vmap_slow.py for more.
     #       There are plans to fix this, reach out to qkv@ to discuss.
-    return create_block_mask(mask_mod, Q_LEN=ntoks, KV_LEN=ntoks, device=device)
+    with torch.no_grad():
+        return create_block_mask(mask_mod, Q_LEN=ntoks, KV_LEN=ntoks, device=device)
 
 
 def to_gpu_and_mask(seq, device, maxtok):
