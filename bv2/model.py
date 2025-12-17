@@ -210,9 +210,10 @@ class TxtUnembedding(nn.Module):
 
         # NOTE: This is the case because of our choice to do static compiles without recompiles.
         # In principle we could relax it and compile two variants, or leave chunk dim dynamic.
-        assert seqlen % self.chunksz == 0, f"{seqlen=} has to be chunkable by {self.chunksz=}"
-        for start in range(0, seqlen, self.chunksz):
-            end = start + self.chunksz
+        chunksz = self.chunksz or seqlen
+        assert seqlen % chunksz == 0, f"{seqlen=} has to be chunkable by {chunksz=}"
+        for start in range(0, seqlen, chunksz):
+            end = start + chunksz
 
             chunk_x = x_detached[..., start:end, :]
             chunk_targets = targets[..., start:end]
