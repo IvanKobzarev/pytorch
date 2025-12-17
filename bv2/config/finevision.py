@@ -61,7 +61,7 @@ def get_config():
     c.evals["textvqa/pplx_blind"] = pplx_eval("textvqa/val", blind=True)
 
     special_tokens = 64 # rough estimate of special tokens count: bos, eos, sep, image line sep.
-    def vqa_eval(split, max_q, max_a, blind=False):
+    def vqa_eval(split, max_q, max_a, blind=False, suffix=""):
         k = sws.Config()
         k.type = "vqa"
         k.steps = lambda: range(5000, c.nsteps, 20_000 if blind else 5000)  # Skip first, then every 5k
@@ -70,6 +70,7 @@ def get_config():
         k.data.max_patches = lambda: c.data.max_patches
         k.data.nreg = lambda: c.model.reg.nreg
         k.data.greyout_frac = 1.0 if blind else 0.0
+        k.data.question_suffix = suffix
         k.decode.max_prefix = lambda: c.data.max_patches + special_tokens + max_q
         k.decode.batch_size = 32
         k.decode.max_decode = 1 + max_a
@@ -78,10 +79,10 @@ def get_config():
         k.lower = True
         return k
 
-    c.evals['docvqa/vqa'] = vqa_eval("docvqa_flat/val", max_q=25, max_a=16)    # covers 99% ; do 40, 33 for all
-    c.evals['docvqa/vqa_blind'] = vqa_eval("docvqa_flat/val", max_q=25, max_a=16, blind=True)
-    c.evals['infovqa/vqa'] = vqa_eval("infovqa_flat/val", max_q=28, max_a=11)  # covers 99% ; do 38, 11 for all
-    c.evals['infovqa/vqa_blind'] = vqa_eval("infovqa_flat/val", max_q=28, max_a=11, blind=True)
+    c.evals['docvqa/vqa'] = vqa_eval("docvqa_flat/val", max_q=25, max_a=16, suffix="\nOffer a terse response.")    # covers 99% ; do 40, 33 for all
+    c.evals['docvqa/vqa_blind'] = vqa_eval("docvqa_flat/val", max_q=25, max_a=16, blind=True, suffix="\nOffer a terse response.")
+    c.evals['infovqa/vqa'] = vqa_eval("infovqa_flat/val", max_q=28, max_a=11, suffix="\nAnswer the question with a short phrase.")  # covers 99% ; do 38, 11 for all
+    c.evals['infovqa/vqa_blind'] = vqa_eval("infovqa_flat/val", max_q=28, max_a=11, blind=True, suffix="\nAnswer the question with a short phrase.")
     c.evals['stvqa/vqa'] = vqa_eval("stvqa_flat/val", max_q=18, max_a=11)      # covers 99% ; do 27, 23 for all
     c.evals['stvqa/vqa_blind'] = vqa_eval("stvqa_flat/val", max_q=18, max_a=11, blind=True)
 

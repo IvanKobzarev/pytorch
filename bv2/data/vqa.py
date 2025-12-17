@@ -19,7 +19,7 @@ PATH = "/checkpoint/rigi/data/{split}.bag"
 
 
 class Dataset:
-    def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, nreg=0, greyout_frac=0.0, tokenizer=None, seed=0):
+    def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, nreg=0, greyout_frac=0.0, tokenizer=None, seed=0, question_suffix=""):
         self.fspec = basepath.format(split=split)
         self.ps = dict(ph=ps, pw=ps)
         self.max_patches = max_patches
@@ -27,6 +27,7 @@ class Dataset:
         self.ttkw = tokenizer or {}
         self.greyout_frac = greyout_frac
         self.seed = seed
+        self.question_suffix = question_suffix
 
     @property  # Not a cached_property because BagzReader is not picklable.
     def reader(self):  # which would make the whole class unpicklable.
@@ -55,6 +56,8 @@ class Dataset:
         question, answers = data["qas"][list(data["qas"])[q_idx]]
         answer = answers[q_cycle % len(answers)]
 
+        if self.question_suffix:
+            question = question + self.question_suffix
         prefix = self.tt.encode(question.lower())
         suffix = self.tt.encode(answer.lower())
 
