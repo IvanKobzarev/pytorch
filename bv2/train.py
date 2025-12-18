@@ -142,20 +142,18 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     first_step, tokens_seen, examples_seen = 0, 0, 0
     resumed_ep, resumed_i, extras = 0, 0, {}
 
-    ckpt_path = c.get("fork")
+    # Checkpoint loading priority: resume > fork > init
+    ckpt_path = c.get("fork") or c.get("init")
     if is_resuming := os.path.exists(pjoin(workdir, "ckpt-latest")):
         ckpt_path = pjoin(workdir, "ckpt-latest")
 
     if ckpt_path:
-        extras = load_ckpt(ckpt_path, model, optim)
-        resumed_ep, resumed_i = (
-            extras["data"]["ep"], extras["data"]["i"])
-        first_step, tokens_seen, examples_seen = (
-            extras["step"], extras["tokens_seen"], extras["examples_seen"])
+        if extras := load_ckpt(ckpt_path, model, optim, weights_only=bool(c.get("init"))):
+            resumed_ep, resumed_i = extras["data"]["ep"], extras["data"]["i"]
+            first_step, tokens_seen, examples_seen = extras["step"], extras["tokens_seen"], extras["examples_seen"]
 
-        # If forking, erase the `metrics` key, so a new W&B instance is created.
-        if not is_resuming:
-            del extras["metrics"]
+            if not is_resuming:
+                del extras["metrics"]  # Create new W&B instance
 
     wlogger = WandbLogger(
         c.to_dict(), rank, name, workdir, project="bv2" if c.nsteps >= 50 else "bv2-dev",
@@ -564,7 +562,7 @@ def maybe_save_ckpt(step, save_steps, keep_steps, model, optim, workdir, extras=
                 shutil.rmtree(prev_ckpt)
 
 
-def load_ckpt(path, model, optim):
+def load_ckpt(path, model, optim, weights_only=False):
     if not os.path.exists(path):
         raise ValueError(f"Checkpoint path was not found: {path}")
 
@@ -572,10 +570,13 @@ def load_ckpt(path, model, optim):
 
     # We `allow_partial_load` because...
     dcp.load(
-        {"model": ModelState(model), "optim": OptimState(model, optim)},
+        {"model": ModelState(model)} | ({} if weights_only else {"optim": OptimState(model, optim)}),
         checkpoint_id=path,
         planner=dcp.default_planner.DefaultLoadPlanner(allow_partial_load=True),
     )
+
+    if weights_only:
+        return {}
 
     with open(pjoin(path, "extras.json"), "r") as f:
         extras = json.load(f)
