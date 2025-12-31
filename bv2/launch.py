@@ -69,7 +69,7 @@ def main():
         slurm_args = [a for a in sys.argv[2:] if not _is_sws(a)]
         sws_args = [a for a in sys.argv[2:] if _is_sws(a)]
 
-    xid = datetime.now().strftime('%m%d_%H%M%S')
+    xid = datetime.now().strftime('%y%m%d_%H%M%S')
 
     # Allow explicitly overriding xid sws-style, to enable resuming in-place when launching
     # again with same-name same-xid as a previous job.
