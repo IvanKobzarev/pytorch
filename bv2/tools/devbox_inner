@@ -16,9 +16,9 @@ tmux -L inner split-window -h -t "$SESS:0.2"
 
 tmux -L inner send-keys -t "$SESS:0.0" "cd ~/rigi-fb; jupyter lab --no-browser --port=$PORT1 --NotebookApp.token='' --NotebookApp.password=''" C-m
 tmux -L inner send-keys -t "$SESS:0.1" "jupyter lab --no-browser --port=$PORT2 --NotebookApp.token='' --NotebookApp.password=''" C-m
-tmux -L inner send-keys -t "$SESS:0.2" "fbi-serve --port $PORT3 --dataset /checkpoint/rigi/fbi/" C-m
+tmux -L inner send-keys -t "$SESS:0.2" "fbi-serve --port $PORT3 --dataset /checkpoint/rigi/plattli/" C-m
 tmux -L inner send-keys -t "$SESS:0.3" "cd /checkpoint/rigi/bv2/workdirs" C-m
-tmux -L inner send-keys -t "$SESS:0.3" "jsonl2fbi -o /checkpoint/rigi/fbi XID XID XID"
+tmux -L inner send-keys -t "$SESS:0.3" "jsonl2plattli -o /checkpoint/rigi/plattli XID XID XID"
 
 
 tmux -L inner new-window -t "$SESS:1"
