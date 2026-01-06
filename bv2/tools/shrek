@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # NOTE both do not end with a slash.
-SRC="${1:-$HOME/rigi}"
-DST="${2:-fair-sc-3:~/rigi}"
+SRC="${1:-$HOME/rigi/bv2}"
+DST="${2:-fair-sc-3:~/rigi/bv2}"
 
 # ENSURE that both do not end with a slash.
 SRC="${SRC%/}"
@@ -17,7 +17,7 @@ EXCLUDES=(
 )
 
 sync_once() {
-  rsync -az --delete "${EXCLUDES[@]}" "$SRC/" "$DST"
+  rsync -az --delete --checksum "${EXCLUDES[@]}" "$SRC/" "$DST"
   echo "Files synchronized at $(date)"
 }
 
