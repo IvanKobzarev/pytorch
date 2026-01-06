@@ -2,7 +2,8 @@ import hashlib
 import re
 import signal
 import warnings
-from functools import cache, update_wrapper
+from contextlib import ContextDecorator
+from functools import cache
 from time import perf_counter
 from types import FunctionType
 
@@ -11,17 +12,21 @@ import torch
 import torch.distributed as distr
 
 
-def suppress_warnings(message, category=Warning, regex=False):
-    pattern = message if regex else f".*{re.escape(message)}.*"
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", message=pattern, category=category)
-                return func(*args, **kwargs)
-        update_wrapper(wrapper, func)
-        return wrapper
-
-    return decorator
+# Can be used both as function annotator, and as with-context.
+class suppress_warnings(ContextDecorator):
+    def __init__(self, message, category=Warning, regex=False):
+        self.category = category
+        self.pattern = message if regex else f".*{re.escape(message)}.*"
+        self._ctx = None  # will hold the catch_warnings context manager
+    def __enter__(self):
+        # Isolate warning filter changes to this scope
+        self._ctx = warnings.catch_warnings()
+        self._ctx.__enter__()
+        warnings.filterwarnings("ignore", message=self.pattern, category=self.category)
+        return self
+    def __exit__(self, exc_type, exc, tb):
+        # Restore previous warnings state
+        return self._ctx.__exit__(exc_type, exc, tb)
 
 
 def clone_function(f, name_suffix=""):
