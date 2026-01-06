@@ -201,7 +201,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         """Run evaluations for a given step if conditions are met."""
         for ev_name in c.get("evals", {}):
             ev = c.evals[ev_name]
-            is_step = (step % ev.steps == 0) if isinstance(ev.steps, int) else step in ev.steps
+            is_step = (step == 2 or (step > 2 and step % ev.steps == 0)) if isinstance(ev.steps, int) else step in ev.steps
             if u.about_to_get_killed() or not (is_step or step == c.nsteps):  # Always run on last step.
                 continue
             tev0 = perf_counter()
@@ -217,11 +217,6 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                         prints0(f"Eval results: {ev_name}/{k}: {v}")
             distr.barrier()  # For accurate timing and avoiding u.about_to_get_killed-related divergence.
             wlogger.log({f"chrono/evals/{ev_name}": perf_counter() - tev0})
-
-    if not c.get("skip_initial_eval", False):
-        prints0("Running initial evals... (pass skip_initial_eval:=True to skip)")
-        run_evals(first_step)
-        prints0("Done!")
 
     per_src_examples_seen, per_src_tokens_seen = Counter(), Counter()
     for step, data in zip(
