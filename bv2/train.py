@@ -357,7 +357,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
         # visualize input tokens
         if c.nsteps >= 50 and step == 8:
-            with open(pjoin(workdir, "data.pt"), "wb") as f:
+            with open(pjoin(workdir, f"data_r{rank}.pt"), "wb") as f:
                 torch.save({k: v for k, v in data.items() if k != "flex_masks"}, f)
             if hasattr(ds, "vis_data_wandb"):
                 wlogger.log({f"vis/data{step}": ds.vis_data_wandb(data)})
