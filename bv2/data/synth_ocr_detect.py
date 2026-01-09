@@ -25,8 +25,8 @@ class Dataset:
         self.tiptoi = tiptoi
         self.ttkw = tokenizer or {}
 
-    def make_exids(self, *a, **kw):
-        return infinite_random_exids(*a, epoch_size=2048, **kw)
+    def make_exids(self, **kw):
+        return infinite_random_exids(epoch_size=2048, **kw)
 
     def make_example(self, exid, epoch):
         # Format is [BOS, prefix, SEP, img, SEP, suffix, EOS].

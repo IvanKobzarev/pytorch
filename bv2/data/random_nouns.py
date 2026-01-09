@@ -23,8 +23,8 @@ class Dataset:
         self.ttkw = tokenizer or {}
         self.render_kw = kw
 
-    def make_exids(self, *a, **kw):
-        return infinite_random_exids(*a, epoch_size=150, **kw)
+    def make_exids(self, **kw):
+        return infinite_random_exids(epoch_size=150, **kw)
 
     def make_example(self, exid, epoch):
         noun_tokens = render((exid, "render"), self.tt, **self.render_kw)

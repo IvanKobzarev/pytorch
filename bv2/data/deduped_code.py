@@ -44,8 +44,8 @@ class Dataset:
             "id": exid,
         })
 
-    def make_exids(self, *a, **kw):
-        return sharded_iota_exids(min(len(self.reader), self.first_N), *a, **kw)
+    def make_exids(self, **kw):
+        return sharded_iota_exids(min(len(self.reader), self.first_N), **kw)
 
     def vocab_size(self):
         return self.tt.n_vocab

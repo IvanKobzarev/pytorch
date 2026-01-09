@@ -92,8 +92,8 @@ class Dataset:
         self.render_kw = kw
         self.ttkw = tokenizer or {}
 
-    def make_exids(self, *a, **kw):
-        return infinite_random_exids(*a, epoch_size=128, **kw)
+    def make_exids(self, **kw):
+        return infinite_random_exids(epoch_size=128, **kw)
 
     def ground_truth(self, exid):
         img, txt, _ = render((exid, "render"), ps=self.ps, **self.render_kw)
