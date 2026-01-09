@@ -86,14 +86,15 @@ class Dataset:
             all_patches.append(patches_flat)
             all_positions.append(positions_flat)
 
-        nimg = sum(map(len, all_patches))
-        nsep = len(images)  # one separator after each image
-        nreg = self.nreg
+        # These are token counts, so they include the corresponding separator tokens too:
+        nimg = sum(map(len, all_patches)) + len(images)  # + 1 separator per image.
+        nreg = self.nreg + (self.nreg > 0)  # plus one separator, if regs are present at all.
 
         nbytes = max(d.nbytes_text(), d.nbytes_image(**self.ps), d.nbytes_reg())
-        tokens = np.zeros((1 + npre + 1 + nimg + nsep + nreg + 1 + nsuf + 1, nbytes), np.uint8)
+        tokens = np.zeros((1 + npre + 1 + nimg + nreg + nsuf + 1, nbytes), np.uint8)
 
-        txtpos = np.arange(1 + npre + 1 + nsep + 1 + nsuf + 1)
+        # The separators are still of text modality and posembs though, so that's len(images) + (nreg > 0) here:
+        txtpos = np.arange(1 + npre + 1 + (len(images) + (self.nreg > 0)) + nsuf + 1)
         d.pack_text([self.tt.bos, prefix, self.tt.sep], positions=txtpos[: 1 + npre + 1], out=tokens[: 1 + npre + 1])
 
         pos = 1 + npre + 1
@@ -107,14 +108,17 @@ class Dataset:
 
             # Optional: pack regs after each image here, for cases with multiple images only.
 
-        d.pack_regs(nreg, out=tokens[pos:pos + nreg])
-        d.pack_text([self.tt.sep, suffix, self.tt.eos], positions=txtpos[-(1 + nsuf + 1) :], out=tokens[-(1 + nsuf + 1) :])
+        if nreg:
+            d.pack_regs(nreg - 1, out=tokens[pos:pos + nreg - 1])  # Subtract the separator.
+            d.pack_text([self.tt.sep], positions=txtpos[-(1 + nsuf + 1) : -(nsuf + 1)], out=tokens[pos + nreg - 1 : pos + nreg])
+
+        d.pack_text([suffix, self.tt.eos], positions=txtpos[-(nsuf + 1) :], out=tokens[-(nsuf + 1) :])
 
         return sanity_check({
             "tokens": tokens,
-            "loss_weights":  np.r_[0, [0] * npre, 0,  [0] * (nimg + nsep), [0] * nreg, 0, [1] * nsuf, 1].astype(np.int64),
-            "attn_regions":  np.r_[1, [1] * npre, 1,  [1] * (nimg + nsep), [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
-            "attn_regions2": np.r_[1, [1] * npre, 1, [-1] * (nimg + nsep), [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
+            "loss_weights":  np.r_[0, [0] * npre, 0,  [0] * nimg, [0] * nreg, [1] * nsuf, 1].astype(np.int64),
+            "attn_regions":  np.r_[1, [1] * npre, 1,  [1] * nimg, [1] * nreg, [0] * nsuf, 0].astype(np.int64),
+            "attn_regions2": np.r_[1, [1] * npre, 1, [-1] * nimg, [1] * nreg, [0] * nsuf, 0].astype(np.int64),
             "src": data["source"][0],
             "id": exid,
         })
