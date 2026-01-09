@@ -63,6 +63,8 @@ def iter_packed_examples(
 
         # Concat all arrays, potentially repeat all non-arrays.
         for k in set().union(*exs) - {"lens", "iseq"}:
+            # TODO: What if `k` does not exist in some example? Currently, we raise,
+            #       but conceivably we could also treat as non-array and use `None`?
             if any(isinstance(ex[k], np.ndarray) for ex in exs):
                 seq[k] = np.concatenate([ex[k] for ex in exs])
             else:
