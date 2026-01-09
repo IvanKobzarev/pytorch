@@ -71,12 +71,12 @@ def get_config():
         k.data.nreg = lambda: c.model.reg.nreg
         k.data.greyout_frac = 1.0 if blind else 0.0
         k.data.question_suffix = suffix
+        k.lower_a = True
         k.decode.max_prefix = lambda: c.data.max_patches + special_tokens + max_q
         k.decode.batch_size = 32
         k.decode.max_decode = 1 + max_a
         k.decode.T = 0.01
         k.decode.omit_eos = True
-        k.lower = True
         return k
 
     c.evals['docvqa/vqa'] = vqa_eval("docvqa_flat/val", max_q=25, max_a=16, suffix="\nOffer a terse response.")    # covers 99% ; do 40, 33 for all
