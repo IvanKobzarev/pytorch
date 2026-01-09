@@ -145,7 +145,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     # Potentially resume/fork from a checkpoint, if not, init stuff.
     first_step, tokens_seen, examples_seen = 0, 0, 0
-    resumed_ep, resumed_i, extras = 0, 0, {}
+    resumed_ep, resumed_i, resume_wandb = 0, 0, None
 
     # Checkpoint loading priority: resume > fork > init
     ckpt_path = c.get("fork") or c.get("init")
@@ -156,13 +156,12 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         if extras := load_ckpt(ckpt_path, model, optim, weights_only=bool(c.get("init"))):
             resumed_ep, resumed_i = extras["data"]["ep"], extras["data"]["i"]
             first_step, tokens_seen, examples_seen = extras["step"], extras["tokens_seen"], extras["examples_seen"]
-
-            if not is_resuming:
-                del extras["metrics"]  # Create new W&B instance
+            if is_resuming:
+                resume_wandb = extras["metrics"]
 
     wlogger = WandbLogger(
         c.to_dict(), rank, name, workdir, project="bv2" if c.nsteps >= 50 else "bv2-dev",
-        resume=extras.get("metrics"), first_step=first_step,
+        resume=resume_wandb, first_step=first_step,
     )
     # Log once more here for two reasons: (1) track in wandb and (2) after ckpt resume.
     if rank == 0:
