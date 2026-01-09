@@ -1,7 +1,5 @@
 from functools import partial
 from importlib import import_module
-from itertools import count as icount
-from itertools import islice
 
 import numpy as np
 import torch
@@ -12,47 +10,34 @@ from bv2.simple_input import iter_packed_examples, parallel_prefetch, to_len
 
 # Current high-level description of input pipeline:
 # 0. A dataset module `ds` defines two functions: `make_exids` and `make_example`.
-# 1. The `make_exids` function returns something that iterates over the
-#    deterministically shuffled example IDs (exids) for a given epoch number.
-#    An exid can be anything, it's up to the dataset.
-# 2. The `make_example` function generates one example for the given exid and epoch.
-#    Again, the dataset decides what exactly this means across epochs; for example
-#    a VQA dataset might define exid to be the image and cycle through questions
-#    over epochs, and/or randomly (but deterministically) augment the image, or...
+# 1. The `make_exids` yields pairs of (exid, state_after), where:
+#    - `exid` is a dict such that `make_example(**exid)` generates a specific example
+#    - `state_after` is a dict such that make_exids(**state_after) generates the next `exid`.
+#    These dictionaries can be anything, it's up to the dataset implementation to decide.
+# 2. The `make_example` function generates one example for the given exid.
+#    Again, the dataset decides what exactly an example is, and even what an epoch is.
 #
-# As for the input pipeline itself, the flow is as follows:
-# 1. `ex_id_gen` iterates over example IDs, potentially for an infinite number
-#    of epochs. It yields the ID coupled with checkpointing-state.
-# 2. `ds.make_example` is wrapped with `_with_state`, so that it's only called
-#    with the actual exid and epoch, and the state is then merged into the example.
-# 3. `parallel_prefetch` is a generic util which is similar to `map`, calling the
-#    passed function on every item of the passed iterable (our infinite example
-#    generator), but does prefetch the next ones in background processes.
-# 5. `iter_packed_examples` eagerly packs as many examples into a single sequence
-#    as possible, and then pads it.
-# 6. `to_gpu_and_mask` computes flex-attention masks, and shifts tensors to GPU.
-#    Ideally we prefetch this one step too, but that didn't work so far.
+# As for the input pipeline itself, the flow is now straightforward:
+# 1. `ex_gen` iterates exids, and uses `_exid2example` to yield examples one by one,
+#    where the `state_after` is also put into the example.
+# 2. `parallel_prefetch` is a generic util which is similar to `map`, with bg prefetch.
+# 3. `iter_packed_examples` then eagerly packs as many examples into a single sequence
+#    as possible. Once full, we pad the sequence to a fixed length with `seq_padder`.
+# 4. When exhausted, we (optionally) continue yielding padding examples infinitely.
+#    this is inevitable; to avoid different-iterations edge-cases in multiprocessing.
+# 5. `to_gpu_and_mask` computes flex-attention masks, and shifts tensors to GPU.
+#    Ideally we prefetch this one step too, but that didn't work with multiprocessing.
 
 
 @u.suppress_warnings("`isinstance(treespec, LeafSpec)` is deprecated", FutureWarning)
 @u.suppress_warnings("`isinstance(treespec, TreeSpec)` is deprecated", FutureWarning)
 def data_iter(ds, *, maxtok, device, seed=0, eagerness=16,
-              rank=0, world_size=1, resumed_ep=0,
-              resumed_i=0, max_ep=None):
-    make_exids = partial(ds.make_exids, seed=seed, rank=rank, world_size=world_size)
-
-    # Generator that yields a tuple of (save states, example IDs)
-    def ex_id_gen(resumed_i=resumed_i):  # arg instead of capture because =0 below.
-        for epoch in count(start=resumed_ep, end=max_ep):
-            ex_id_iter = enumerate(make_exids(epoch=epoch))
-            ex_id_iter = islice(ex_id_iter, resumed_i, None)
-            for i, ex_id in ex_id_iter:
-                yield ({"ep": epoch, "i": i + 1}, ex_id, epoch)  # Yes, correct.
-            resumed_i = 0
+              rank=0, world_size=1, resume={}, pad_after=True):
+    make_exids = partial(ds.make_exids, seed=seed, rank=rank, world_size=world_size, **resume)
 
     def cpu_data_gen():
-        make_example = partial(_with_state, make_example=ds.make_example)
-        ex_gen = parallel_prefetch(ex_id_gen(), make_example, eagerness)
+        make_example = partial(_exid2example, make_example=ds.make_example)
+        ex_gen = parallel_prefetch(make_exids(), make_example, eagerness)
 
         seq_padder = lambda seq: to_len(seq, to_len=maxtok, pad_values={
             # Only pad these fields, keep unmentioned fields unpadded.
@@ -64,12 +49,10 @@ def data_iter(ds, *, maxtok, device, seed=0, eagerness=16,
 
         yield from map(seq_padder, iter_packed_examples(ex_gen, max_seqlen=maxtok))
 
-        # After epochs are exhausted, we generate pad-only seqs forever.
-        if max_ep:
+        if pad_after:
             # But we need to know the content/shape/dtype of sequence entries!
             # So we make one example, that we then truncate, pad, and reuse forever.
-            dummy_id = next(iter(ds.make_exids(seed=0, epoch=0)))
-            dummy_ex = ds.make_example(dummy_id, epoch=0)
+            dummy_ex = _exid2example(next(make_exids()), ds.make_example)
             dummy_ex["loss_weights"] = dummy_ex["loss_weights"][:0]
             dummy_ex["tokens"] = dummy_ex["tokens"][:0]
             # Usually added by the packer, so we need to manually add it here:
@@ -87,10 +70,10 @@ def data_iter(ds, *, maxtok, device, seed=0, eagerness=16,
     yield from map(fn, cpu_data_gen())
 
 
-# This needs to be global for pickle-ability.
-def _with_state(things, make_example):
-    state_after, ex_id, epoch = things
-    return {**make_example(ex_id, epoch), "state_after": state_after}
+# This needs to be global for pickle-ability. Should just be a lambda...
+def _exid2example(exid_and_state_after, make_example):
+    make_example_kw, state_after = exid_and_state_after
+    return {**make_example(**make_example_kw), "state_after": state_after}
 
 
 create_block_mask = torch.compile(partial(create_block_mask, B=None, H=None))
@@ -144,11 +127,3 @@ def to_gpu_and_mask(seq, device, maxtok):
 def from_config(data_config):
     ds = import_module(f"bv2.data.{data_config['name']}")
     return ds.Dataset(**{k: v for k, v in data_config.items() if k != "name"})
-
-
-
-def count(start, *, end=None, step=1):
-    if end is None:
-        yield from icount(start, step)
-    else:
-        yield from range(start, end, step)

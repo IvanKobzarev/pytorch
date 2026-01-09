@@ -99,7 +99,7 @@ class Dataset:
         })  # fmt: skip
 
     def make_exids(self, **kw):
-        return sharded_iota_exids(len(self.reader), **kw)
+        yield from sharded_iota_exids(len(self.reader), **kw)
 
     def vocab_size(self):
         return self.tt.n_vocab

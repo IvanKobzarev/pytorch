@@ -46,6 +46,7 @@ def get_config():
         k.data.name = "vqa"
         k.data.split = split
         k.data.max_patches = lambda: c.data.max_patches
+        k.data.epochs = 1
         k.data.nreg = lambda: c.model.reg.nreg
         k.data.greyout_frac = 1.0 if blind else 0.0
         k.iter.maxtok = lambda: c.maxtok
@@ -68,6 +69,7 @@ def get_config():
         k.data.name = "vqa"
         k.data.split = split
         k.data.max_patches = lambda: c.data.max_patches
+        k.data.epochs = 1
         k.data.nreg = lambda: c.model.reg.nreg
         k.data.greyout_frac = 1.0 if blind else 0.0
         k.data.question_suffix = suffix

@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 import bv2.data.dpack as d
 import bv2.utils as u
-from bv2.data.common import infinite_random_exids, vis_image_text_wandb
+from bv2.data.common import random_exids, vis_image_text_wandb
 from bv2.data.noun_vocab import VOCAB
 from bv2.data.pp import patchify, sanity_check
 from bv2.data.tokenizer import get_tiktoken
@@ -84,23 +84,24 @@ def render(seed, *, min_h=256, min_w=256, max_h=768, max_w=768, ps=16,
 
 
 class Dataset:
-    def __init__(self, add_row_sep=False, add_hw=False, tiptoi=0, ps=16, tokenizer=None, seed=0, **kw):
+    def __init__(self, add_row_sep=False, add_hw=False, tiptoi=0, ps=16, tokenizer=None, seed=0, n=None, **kw):
         self.ps = ps
         self.add_row_sep = add_row_sep
         self.add_hw = add_hw
         self.tiptoi = tiptoi
         self.render_kw = kw
         self.ttkw = tokenizer or {}
+        self.n = n
 
     def make_exids(self, **kw):
-        return infinite_random_exids(epoch_size=128, **kw)
+        yield from random_exids(n=self.n, **kw)
 
     def ground_truth(self, exid):
         img, txt, _ = render((exid, "render"), ps=self.ps, **self.render_kw)
         # VQA format
         return {"qas": {"0": ("ocr?", [txt])}, "img": img}
 
-    def make_example(self, exid, epoch):
+    def make_example(self, exid):
         img, txt, _ = render((exid, "render"), ps=self.ps, **self.render_kw)
 
         prefix = np.array(self.tt.encode("ocr"))

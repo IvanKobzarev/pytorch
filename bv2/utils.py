@@ -4,6 +4,7 @@ import signal
 import warnings
 from contextlib import ContextDecorator
 from functools import cache
+from itertools import count as icount
 from time import perf_counter
 from types import FunctionType
 
@@ -45,6 +46,13 @@ def clone_function(f, name_suffix=""):
     g.__module__ = f.__module__
     g.__qualname__ = f.__qualname__
     return g
+
+
+def count(start, *, end=None, step=1):
+    if end is None:
+        yield from icount(start, step)
+    else:
+        yield from range(start, end, step)
 
 
 #    ____

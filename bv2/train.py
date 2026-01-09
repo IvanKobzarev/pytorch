@@ -145,7 +145,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     # Potentially resume/fork from a checkpoint, if not, init stuff.
     first_step, tokens_seen, examples_seen = 0, 0, 0
-    resumed_ep, resumed_i, resume_wandb = 0, 0, None
+    resume_data, resume_wandb = {}, None
 
     # Checkpoint loading priority: resume > fork > init
     ckpt_path = c.get("fork") or c.get("init")
@@ -154,8 +154,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     if ckpt_path:
         if extras := load_ckpt(ckpt_path, model, optim, weights_only=bool(c.get("init"))):
-            resumed_ep, resumed_i = extras["data"]["ep"], extras["data"]["i"]
-            first_step, tokens_seen, examples_seen = extras["step"], extras["tokens_seen"], extras["examples_seen"]
+            first_step, resume_data = extras["step"], extras["data"]
+            tokens_seen, examples_seen = extras["tokens_seen"], extras["examples_seen"]
             if is_resuming:
                 resume_wandb = extras["metrics"]
 
@@ -222,8 +222,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         range(first_step, c.nsteps),
         bv2.simple_data.data_iter(
             ds, seed=(c.seed, "data_iter"),
-            device=device, rank=rank, world_size=world_size,
-            resumed_ep=resumed_ep, resumed_i=resumed_i,
+            device=device, rank=rank, world_size=world_size, resume=resume_data,
             **c.iter.to_dict(),
         ),
     ):
@@ -258,8 +257,6 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         wlogger.log({"chrono/num_tokens": num_tokens})
         wlogger.log({"chrono/num_examples": num_examples})
         wlogger.log({"chrono/percent": (step + 1) / c.nsteps})
-        all_max_epoch = u.all_gather_object(max(s["ep"] for s in data["state_after"]))
-        wlogger.log({"chrono/epoch": max(all_max_epoch)})
 
         # Need to log param norms at this step before the update
         if step < 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
@@ -331,7 +328,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         maybe_save_ckpt(
             step, save_steps=c.get("ckpt_steps", 1000), keep_steps=c.get('ckpt_keep_steps', ()),
             model=model, optim=optim, workdir=workdir, extras={
-                "data": data["state_after"][-1],
+                "data": data["state_after"][-1],  # NOTE: This differs per process(!)
                 "tokens_seen": tokens_seen,
                 "examples_seen": examples_seen,
                 "metrics": wlogger.save_ckpt(),

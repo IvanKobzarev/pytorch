@@ -8,20 +8,27 @@ import bv2.utils as u
 from bv2.data.pp import unpatchify
 
 
-def infinite_random_exids(seed, epoch=0, rank=0, world_size=1, epoch_size=1024):
-    # Infinite data. It's implemented as an infinite number of epochs, for two reasons:
-    # 1. evaluators run for one epoch, so `epoch_size` is eval set size.
-    # 2. for checkpointing: epoch boundary allows "fast-forward jump" upon resuming.
-    extra = rank < (epoch_size % world_size)
-    num_examples = epoch_size // world_size + extra  # For this rank.
-    return (u.rng(seed, epoch, rank, i).integers(2**32) for i in range(num_examples))
+def random_exids(seed, n=None, start_offset=0, rank=0, world_size=1):
+    if rank_n := n:  # Turn global `n` into `n` for this rank
+        extra = rank < (n % world_size)
+        rank_n = n // world_size + extra
+    for i in u.count(start=start_offset, end=rank_n):  # Infinite if rank_n is None btw.
+        yield {"exid": u.rng(seed, rank, i).integers(2**32)}, {"start_offset": i + 1}
 
 
-def sharded_iota_exids(n, seed, epoch=0, rank=0, world_size=1):
+def sharded_iota_exids(n, seed, epochs=None, start_epoch=0, start_offset=0, rank=0, world_size=1):
     split_size = n / world_size
     start = round(rank * split_size)
     end = round((rank + 1) * split_size)
-    return u.rng(seed, epoch, rank).permutation(np.arange(start, end))
+
+    for ep in u.count(start=start_epoch, end=epochs):
+        exids = u.rng(seed, ep, rank).permutation(np.arange(start, end))
+
+        # For each exid, yielding (kwargs for make_example, kwargs for self next step)
+        for i, exid in enumerate(map(int, exids[start_offset:-1])):
+            yield {"exid": exid, "epoch": ep}, {"start_epoch": ep, "start_offset": start_offset + i + 1}
+        yield {"exid": exids[-1], "epoch": ep}, {"start_epoch": ep + 1, "start_offset": 0}
+        start_offset = 0
 
 
 @cache

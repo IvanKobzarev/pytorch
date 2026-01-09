@@ -11,7 +11,7 @@ def run(predict_fn, ds, iter, **comms):
     total_pplx, total_correct = 0, 0
     total_loss_w, total_loss_toks = 0, 0
 
-    for step, data in enumerate(simple_data.data_iter(ds, max_ep=1, **iter, **comms)):
+    for step, data in enumerate(simple_data.data_iter(ds, **iter, **comms)):
         # Before making any step, figure out if all ranks are done.
         # Due to example packing, there simply is no way without global comms.
         im_done = (data["iseq"] == -1).all()

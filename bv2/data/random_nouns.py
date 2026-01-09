@@ -1,7 +1,7 @@
 import numpy as np
 
 import bv2.utils as u
-from bv2.data.common import infinite_random_exids
+from bv2.data.common import random_exids
 from bv2.data.dpack import pack_text
 from bv2.data.noun_vocab import VOCAB
 from bv2.data.pp import sanity_check
@@ -19,14 +19,15 @@ def render(seed, tiktoken, *, min_nouns=128, max_nouns=256):
 
 
 class Dataset:
-    def __init__(self, tokenizer=None, seed=0, **kw):
+    def __init__(self, tokenizer=None, seed=0, n=150, **kw):
         self.ttkw = tokenizer or {}
         self.render_kw = kw
+        self.n = n
 
     def make_exids(self, **kw):
-        return infinite_random_exids(epoch_size=150, **kw)
+        yield from random_exids(n=self.n, **kw)
 
-    def make_example(self, exid, epoch):
+    def make_example(self, exid):
         noun_tokens = render((exid, "render"), self.tt, **self.render_kw)
 
         return sanity_check({

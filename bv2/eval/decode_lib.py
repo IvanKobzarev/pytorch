@@ -27,8 +27,9 @@ def get_cbm(key):
     return fn
 
 
-def _make_ex(_id, ds, max_prefix, max_decode):
-    ex = ds.make_example(_id, epoch=0)
+def _make_ex(exid_and_state_after, ds, max_prefix, max_decode):
+    exid, state_after = exid_and_state_after
+    ex = ds.make_example(**exid)
     attn_keys = [k for k in ex.keys() if k.startswith("attn_regions")]
 
     # Prompt ends at the last unsupervised token.
@@ -111,14 +112,12 @@ def decoding_iterator(predict_fn, ds, *, max_prefix, max_decode, device, batch_s
     Performs batching under the hood, but yields flat sequence of examples.
     """
 
-    exid_gen = ds.make_exids(
-        epoch=0, seed=seed, rank=rank, world_size=world_size)
-
+    exid_gen = ds.make_exids(seed=seed, rank=rank, world_size=world_size)
     make_ex = functools.partial(_make_ex, ds=ds, max_prefix=max_prefix, max_decode=max_decode)
     ex_iter = parallel_prefetch(iter(exid_gen), make_ex)
 
-    # Since examples can be filtered out, we iterate until we get a vchhalid example
-    dummy_ex = next(ex for ex in map(make_ex, ds.make_exids(epoch=0, seed=seed)) if ex is not None)
+    # Since examples can be filtered out, we iterate until we get a valid example
+    dummy_ex = next(ex for ex in map(make_ex, ds.make_exids(seed=seed)) if ex is not None)
 
     def _batched_iter():
         """Yields a tuple of (batch, done_indicator). Batch is always padded to `batch_size`."""
