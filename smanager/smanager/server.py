@@ -527,7 +527,7 @@ def get_xid_info(xid: str):
             "qwait": qwait,
             "runtime": hms(elapsed),
             "workdir": str(config.get("workdir", "")),
-            "launch_script": str(Path(config.get("workdir", "")) / f"../launch_{wid}.sh") if config.get("workdir") else "",
+            "launch_script": str(wd_path / f"launch_{wid}.sh"),
         })
 
     result = {
