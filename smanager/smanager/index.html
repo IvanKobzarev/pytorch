@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>sManager</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --text: #333333;
+            --border: #dddddd;
+            --hover: #e6f2ff;
+            --even-row: #f5f5f5;
+            --header-bg: #f7f7f9;
+            --input-bg: #ffffff;
+            --accent: #4bc0c8;
+            --muted: #666666;
+        }
+        [data-theme="dark"] {
+            --bg: #121417;
+            --text: #f0f3f9;
+            --border: rgba(255, 255, 255, 0.08);
+            --hover: rgba(75, 192, 200, 0.15);
+            --even-row: rgba(255, 255, 255, 0.04);
+            --header-bg: rgba(255, 255, 255, 0.06);
+            --input-bg: rgba(255, 255, 255, 0.06);
+            --accent: #4bc0c8;
+            --muted: #9aa4b1;
+        }
+        @media (prefers-color-scheme: dark) {
+            [data-theme="auto"] {
+                --bg: #121417;
+                --text: #f0f3f9;
+                --border: rgba(255, 255, 255, 0.08);
+                --hover: rgba(75, 192, 200, 0.15);
+                --even-row: rgba(255, 255, 255, 0.04);
+                --header-bg: rgba(255, 255, 255, 0.06);
+                --input-bg: rgba(255, 255, 255, 0.06);
+                --accent: #4bc0c8;
+                --muted: #9aa4b1;
+            }
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; }
+        body {
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 13px;
+            background: var(--bg);
+            color: var(--text);
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+        }
+        h1 { font-size: 18px; display: inline; margin-right: 8px; }
+        h2 { font-size: 15px; margin: 16px 0 8px; }
+        .header-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+        .header-row .label { color: #666; font-size: 13px; }
+        .server-list { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+        .server-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            background: var(--header-bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .server-tag .status { width: 8px; height: 8px; border-radius: 50%; padding: 0; margin: 0; }
+        .server-tag .status.ok { background: #22c55e; }
+        .server-tag .status.error { background: #ef4444; }
+        .server-tag .status.loading { background: #eab308; }
+        .server-tag .remove { cursor: pointer; color: #999; }
+        .server-tag .remove:hover { color: #ef4444; }
+        .server-input {
+            padding: 4px 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 12px;
+            width: 140px;
+            background: var(--input-bg);
+            color: var(--text);
+        }
+        .btn {
+            padding: 4px 10px;
+            background: #6b7280;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .btn:hover { background: #4b5563; }
+        .btn-accent { background: var(--accent); }
+        .btn-accent:hover { background: #3aa0a8; }
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 12px;
+            border-bottom: 2px solid var(--border);
+        }
+        .tab {
+            padding: 8px 16px;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 13px;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            color: var(--text);
+        }
+        .tab:hover { background: var(--even-row); }
+        .tab.active { border-bottom-color: #3b82f6; font-weight: 600; }
+        [data-theme="dark"] .tab.active { border-bottom-color: #4bc0c8; }
+        @media (prefers-color-scheme: dark) {
+            [data-theme="auto"] .tab.active { border-bottom-color: #4bc0c8; }
+        }
+        .view { display: none; }
+        .view.active { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+        #overview.active { display: block; }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            table-layout: fixed;
+        }
+        th, td { padding: 2px 3px; text-align: left; }
+        th {
+            background: var(--header-bg);
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+        }
+        tbody tr:nth-child(even) { background: var(--even-row); }
+        tbody tr:hover { background: var(--hover); }
+        .text-right { text-align: right; }
+        .text-center { text-align: center; }
+        .status-run { color: #3b82f6; }
+        .status-pend { color: #eab308; }
+        .status-hold { color: #ef4444; }
+        .status-done { color: #22c55e; }
+        .status-fail { color: #ef4444; }
+        .status-end { color: #22c55e; }
+        .state-bar {
+            display: inline-flex;
+            width: 100px;
+            height: 14px;
+            border-radius: 3px;
+            overflow: hidden;
+            background: var(--border);
+        }
+        .state-bar > span { height: 100%; }
+        .bg-fail { background: #ef4444; }
+        .bg-cancel { background: #9ca3af; }
+        .bg-done { background: #22c55e; }
+        .bg-end { background: #86efac; }
+        .bg-run { background: #3b82f6; }
+        .bg-pend { background: #eab308; }
+        .bg-hold { background: #f97316; }
+        .server-badge {
+            display: inline-block;
+            padding: 1px 5px;
+            background: #e5e7eb;
+            border-radius: 3px;
+            font-size: 10px;
+            margin-right: 4px;
+        }
+        [data-theme="dark"] .server-badge { background: rgba(255, 255, 255, 0.1); }
+        @media (prefers-color-scheme: dark) {
+            [data-theme="auto"] .server-badge { background: rgba(255, 255, 255, 0.1); }
+        }
+        .clickable { cursor: pointer; }
+        .clickable:hover { text-decoration: underline; }
+        .xid-input { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+        .xid-input input {
+            padding: 6px 10px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 13px;
+            width: 180px;
+            background: var(--input-bg);
+            color: var(--text);
+        }
+        .xid-input select {
+            padding: 6px 10px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 13px;
+            background: var(--input-bg);
+            color: var(--text);
+        }
+        .table-container {
+            max-height: 70vh;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+        }
+        .table-container-full {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+        }
+        .footer-row { font-weight: 600; background: var(--header-bg) !important; }
+        .config-args em { color: var(--accent); font-style: normal; }
+        .config-args { font-style: normal; }
+        .progress-bar {
+            position: relative;
+            border-radius: 3px;
+            padding: 1px 4px;
+            background: rgba(0, 0, 0, 0.15);
+        }
+        [data-theme="dark"] .progress-bar { background: rgba(255, 255, 255, 0.1); }
+        @media (prefers-color-scheme: dark) {
+            [data-theme="auto"] .progress-bar { background: rgba(255, 255, 255, 0.1); }
+        }
+        .progress-bar .fill {
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            background: var(--accent);
+            opacity: 0.5;
+            border-radius: 3px;
+        }
+        .loading { text-align: center; padding: 40px; color: #666; }
+        [data-theme="dark"] .loading { color: #9aa4b1; }
+        @media (prefers-color-scheme: dark) {
+            [data-theme="auto"] .loading { color: #9aa4b1; }
+        }
+        .error { color: #ef4444; padding: 12px; background: #fef2f2; border-radius: 4px; margin: 8px 0; }
+        [data-theme="dark"] .error { background: rgba(255, 107, 107, 0.15); color: #ff6b6b; }
+        @media (prefers-color-scheme: dark) {
+            [data-theme="auto"] .error { background: rgba(255, 107, 107, 0.15); color: #ff6b6b; }
+        }
+        a { color: inherit; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .metric-input { margin-left: 16px; }
+        .metric-input label { font-size: 12px; margin-right: 4px; }
+        .metric-input input { width: 120px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px; background: var(--input-bg); color: var(--text); }
+        .summary { margin-top: 16px; padding: 8px 12px; background: var(--header-bg); border-radius: 4px; font-size: 12px; }
+        .mono { font-family: ui-monospace, "SF Mono", Monaco, "Cascadia Mono", monospace; }
+        .copy-btn { cursor: pointer; opacity: 0; margin-left: 4px; }
+        tr:hover .copy-btn { opacity: 0.4; }
+        .copy-btn:hover { opacity: 1 !important; }
+        .stop-btn { cursor: pointer; opacity: 0; margin-left: 4px; }
+        tr:hover .stop-btn { opacity: 0.4; }
+        .stop-btn:hover { opacity: 1 !important; color: #ef4444; }
+        .action-btn { cursor: pointer; }
+        .action-btn:hover { opacity: 0.7; }
+        .fav-btn { cursor: pointer; opacity: 0; }
+        tr:hover .fav-btn { opacity: 0.3; }
+        .fav-btn:hover { opacity: 1 !important; }
+        .fav-btn.active { opacity: 1 !important; color: #ef4444; }
+        .del-btn { cursor: pointer; opacity: 0; }
+        tr:hover .del-btn { opacity: 0.3; }
+        .del-btn:hover { opacity: 1 !important; }
+        .hide-btn { cursor: pointer; opacity: 0; }
+        tr:hover .hide-btn { opacity: 0.3; }
+        .hide-btn:hover { opacity: 1 !important; }
+        .fav-toggle { cursor: pointer; font-size: 16px; opacity: 0.4; }
+        .fav-toggle:hover { opacity: 0.7; }
+        .fav-toggle.active { opacity: 1; color: #ef4444; }
+        .col-fav { width: 1.6em; }
+        .col-del { width: 1.6em; }
+        .col-hide { width: 1.6em; }
+        .col-xid { width: 10.5em; }
+        .col-usr { width: 5em; }
+        .col-states { width: 110px; }
+        .col-wus { width: 45px; }
+        .col-gpu { width: 35px; }
+        .col-gpus { width: 45px; }
+        .col-r { width: 25px; }
+        .col-qos { width: 110px; }
+        .col-config { }
+        .col-server { width: 50px; }
+        .note-text { color: var(--accent); }
+        .name-text { color: var(--text); }
+        .name-note-cell { cursor: pointer; }
+        .name-note-cell:hover { background: #f0f0f0; }
+        .note-input { width: 100%; border: 1px solid var(--accent); padding: 2px 4px; font-size: 13px; font-family: inherit; background: var(--input-bg); color: var(--text); }
+        .current-user { color: var(--accent); font-weight: 500; }
+        [data-theme="dark"] .name-note-cell:hover { background: rgba(255, 255, 255, 0.08); }
+        @media (prefers-color-scheme: dark) {
+            [data-theme="auto"] .name-note-cell:hover { background: rgba(255, 255, 255, 0.08); }
+        }
+        .theme-toggle {
+            display: inline-flex;
+            gap: 4px;
+            margin-left: auto;
+            font-size: 12px;
+        }
+        .theme-toggle button {
+            padding: 3px 8px;
+            border: 1px solid var(--border);
+            background: var(--header-bg);
+            color: var(--text);
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        .theme-toggle button:hover { background: var(--hover); }
+        .theme-toggle button.active { background: #4bc0c8; color: #121417; border-color: #4bc0c8; }
+        [data-theme="light"] .theme-toggle button.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+    </style>
+</head>
+<body>
+    <div class="header-row">
+        <h1><span style="color:var(--accent)">s</span>Manager</h1>
+        <div id="serverList" class="server-list"></div>
+        <input type="text" id="serverUrl" class="server-input" placeholder=":port or host:port" />
+        <button class="btn" onclick="addServer()">Add</button>
+        <button class="btn btn-accent" onclick="refreshAll()">Refresh</button>
+        <div class="theme-toggle">
+            <button onclick="setTheme('light')" id="theme-light">Light</button>
+            <button onclick="setTheme('dark')" id="theme-dark">Dark</button>
+            <button onclick="setTheme('auto')" id="theme-auto">Auto</button>
+        </div>
+    </div>
+
+    <div class="tabs">
+        <button class="tab active" data-view="overview">Overview</button>
+        <button class="tab" data-view="xid-detail">XID Details</button>
+    </div>
+
+    <div id="overview" class="view active">
+        <h2>Active Experiments</h2>
+        <div class="table-container">
+            <table id="hotTable">
+                <thead>
+                    <tr>
+                        <th class="col-fav">♡</th>
+                        <th class="col-xid">XID</th>
+                        <th class="col-usr">User</th>
+                        <th class="col-states">States</th>
+                        <th class="col-wus">WUs</th>
+                        <th class="col-gpus text-right">GPUs</th>
+                        <th class="col-r text-right">R</th>
+                        <th class="col-qos">QoS</th>
+                        <th style="width:33%">Config</th>
+                        <th style="width:66%">Name / <span style="color:var(--accent)">Note</span></th>
+                        <th class="col-server">Server</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+                <tfoot></tfoot>
+            </table>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 12px; margin: 16px 0 8px;">
+            <h2 style="margin: 0;">Inactive Experiments</h2>
+            <input type="text" id="coldFilter" class="server-input" placeholder="xid or username" oninput="filterColdTable()" />
+            <span id="favFilterToggle" class="fav-toggle" onclick="toggleFavFilter()" title="Show only favorites">♡</span>
+            <span id="hiddenFilterToggle" class="fav-toggle" onclick="toggleHiddenFilter()" title="Show hidden">🫥</span>
+        </div>
+        <div class="table-container" style="max-height: none; overflow-y: visible;">
+            <table id="coldTable">
+                <thead>
+                    <tr>
+                        <th class="col-fav">♡</th>
+                        <th class="col-del">🗑</th>
+                        <th class="col-hide">🫥</th>
+                        <th class="col-xid">XID</th>
+                        <th class="col-usr">User</th>
+                        <th style="width:5em">WUs</th>
+                        <th style="width:33%">Config</th>
+                        <th>Name / <span style="color:var(--accent)">Note</span></th>
+                        <th class="col-server">Server</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="xid-detail" class="view">
+        <div class="xid-input">
+            <label>XID:</label>
+            <input type="text" id="xidInput" placeholder="e.g. 1029_160123" />
+            <label>Server:</label>
+            <select id="xidServer"></select>
+            <button class="btn btn-accent" onclick="loadXidDetail()">Refresh</button>
+            <span class="metric-input">
+                <label>Metric:</label>
+                <input type="text" id="metricInput" value="train/loss" />
+            </span>
+        </div>
+        <div id="xidContent">
+            <p class="loading">Enter an XID and select a server to view details</p>
+        </div>
+    </div>
+
+    <script>
+        // Theme handling
+        function setTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('smanager_theme', theme);
+            updateThemeButtons(theme);
+        }
+
+        function updateThemeButtons(theme) {
+            document.getElementById('theme-light').classList.toggle('active', theme === 'light');
+            document.getElementById('theme-dark').classList.toggle('active', theme === 'dark');
+            document.getElementById('theme-auto').classList.toggle('active', theme === 'auto');
+        }
+
+        function initTheme() {
+            const saved = localStorage.getItem('smanager_theme') || 'auto';
+            document.documentElement.setAttribute('data-theme', saved);
+            updateThemeButtons(saved);
+        }
+        initTheme();
+
+        const STATE_ICONS = {
+            RUNNING: { icon: 'Run', cls: 'status-run' },
+            PENDING: { icon: 'Pend', cls: 'status-pend' },
+            REQUEUE_HOLD: { icon: 'Hold', cls: 'status-hold' },
+            COMPLETING: { icon: 'End', cls: 'status-end' },
+            DONE: { icon: 'Done', cls: 'status-done' },
+            FAILED: { icon: 'Fail', cls: 'status-fail' },
+            TIMEOUT: { icon: 'Time', cls: 'status-fail' },
+            CANCELLED: { icon: 'Canc', cls: 'status-hold' },
+            UNKNOWN: { icon: '???', cls: '' },
+            true: { icon: 'Done', cls: 'status-done' },
+            false: { icon: 'Fail', cls: 'status-fail' },
+        };
+
+        const STATE_EMOJIS = {
+            RUNNING: '🏃', PENDING: '⏳', REQUEUE_HOLD: '🚫', COMPLETING: '🌇',
+            DONE: '✅', FAILED: '❌', UNKNOWN: '😕', TIMEOUT: '⏰', CANCELLED: '🛑'
+        };
+
+        let servers = [];
+        let overviewData = {};
+        let favorites = new Set();
+        let showOnlyFavorites = false;
+        let showHidden = false;
+        let serverUsers = {};  // serverIdx -> username
+        let prefsLoaded = false;
+
+        async function loadPrefsFromServers() {
+            // Load favorites from all servers in parallel, merge (union)
+            const results = await Promise.allSettled(servers.map(async (s) => {
+                const resp = await fetch(`${s.url}/api/prefs/favorites`, { signal: AbortSignal.timeout(5000) });
+                const data = resp.ok ? await resp.json() : { favorites: [] };
+                return data.favorites || [];
+            }));
+
+            // Merge all successful results
+            for (const result of results) {
+                if (result.status === 'fulfilled') {
+                    for (const xid of result.value) favorites.add(xid);
+                }
+            }
+
+            prefsLoaded = true;
+            // Sync merged prefs back to all servers
+            await savePrefsToServers();
+        }
+
+        async function savePrefsToServers() {
+            if (!prefsLoaded) return;
+            const favsArray = [...favorites];
+
+            // Save to all servers in parallel (fire and forget)
+            for (const s of servers) {
+                fetch(`${s.url}/api/prefs/favorites`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(favsArray),
+                    signal: AbortSignal.timeout(5000)
+                }).catch(() => {});
+            }
+        }
+
+        async function hideXid(xid) {
+            // Send to all servers (replicate)
+            for (const s of servers) {
+                fetch(`${s.url}/api/prefs/hide/${xid}`, { method: 'POST', signal: AbortSignal.timeout(5000) }).catch(() => {});
+            }
+        }
+
+        async function unhideXid(xid) {
+            // Send to all servers (replicate)
+            for (const s of servers) {
+                fetch(`${s.url}/api/prefs/unhide/${xid}`, { method: 'POST', signal: AbortSignal.timeout(5000) }).catch(() => {});
+            }
+        }
+
+        function toggleHidden(serverIdx, xid, isHidden) {
+            if (isHidden) {
+                unhideXid(xid);
+                // Mark as not hidden in local data and re-render
+                for (const r of allColdRows) {
+                    if (r.xid === xid) r.hidden = false;
+                }
+                filterColdTable();
+            } else {
+                hideXid(xid);
+                // Remove from local data and re-render
+                allColdRows = allColdRows.filter(r => r.xid !== xid);
+                filterColdTable();
+            }
+        }
+
+        function toggleFavorite(xid) {
+            if (favorites.has(xid)) {
+                favorites.delete(xid);
+            } else {
+                favorites.add(xid);
+            }
+            savePrefsToServers();
+            renderOverview();
+        }
+
+        function editNote(cell, serverIdx, xid, currentNote) {
+            // Don't edit if already editing
+            if (cell.querySelector('input')) return;
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'note-input';
+            input.value = currentNote;
+            input.placeholder = 'Add a note...';
+
+            cell.innerHTML = '';
+            cell.appendChild(input);
+            input.focus();
+            input.select();
+
+            let saved = false;
+            const saveNote = async () => {
+                if (saved) return;
+                saved = true;
+                const newNote = input.value.trim();
+                const serverUrl = servers[serverIdx]?.url;
+                if (serverUrl) {
+                    try {
+                        await fetch(`${serverUrl}/api/note/${xid}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ note: newNote }),
+                            signal: AbortSignal.timeout(5000)
+                        });
+                    } catch (e) {
+                        console.error('Failed to save note:', e);
+                    }
+                }
+                // Update local data
+                for (const r of [...hotRows, ...allColdRows]) {
+                    if (r.xid === xid) {
+                        r.note = newNote;
+                    }
+                }
+                // Find the name for this xid to show if note is empty
+                const row = [...hotRows, ...allColdRows].find(r => r.xid === xid);
+                const displayText = newNote || (row?.name || '');
+                const textClass = newNote ? 'note-text' : 'name-text';
+
+                // Update cell directly
+                cell.className = `name-note-cell ${textClass}`;
+                const escapedNote = newNote.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                cell.setAttribute('onclick', `editNote(this, ${serverIdx}, '${xid}', '${escapedNote}')`);
+                cell.innerHTML = displayText || '<span style="opacity:0.3">click to add note</span>';
+            };
+
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    saveNote();
+                } else if (e.key === 'Escape') {
+                    // Restore original without saving
+                    const row = [...hotRows, ...allColdRows].find(r => r.xid === xid);
+                    const displayText = currentNote || (row?.name || '');
+                    const textClass = currentNote ? 'note-text' : 'name-text';
+                    cell.className = `name-note-cell ${textClass}`;
+                    cell.innerHTML = displayText || '<span style="opacity:0.3">click to add note</span>';
+                    saved = true;  // Prevent blur from saving
+                }
+            });
+
+            input.addEventListener('blur', saveNote);
+        }
+
+        let hotRows = [];  // Make hotRows accessible for note editing
+
+        function toggleFavFilter() {
+            showOnlyFavorites = !showOnlyFavorites;
+            const toggle = document.getElementById('favFilterToggle');
+            toggle.textContent = showOnlyFavorites ? '❤︎' : '♡';
+            toggle.classList.toggle('active', showOnlyFavorites);
+            filterColdTable();
+        }
+
+        function toggleHiddenFilter() {
+            showHidden = !showHidden;
+            const toggle = document.getElementById('hiddenFilterToggle');
+            toggle.classList.toggle('active', showHidden);
+            refreshAll();  // Re-fetch with include_hidden flag
+        }
+
+        async function deleteXid(serverUrl, serverIdx, xid) {
+            if (!confirm(`Delete XID ${xid}?\n\nThis will permanently remove:\n- /checkpoint/rigi/bv2/workdirs/${xid}\n- /checkpoint/rigi/bv2/srcdirs/${xid}\n- /checkpoint/rigi/fbi/${xid}`)) return;
+            try {
+                const resp = await fetch(`${serverUrl}/api/action/delete/${xid}`, { method: 'POST' });
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    alert(`Failed to delete XID: ${err.detail || 'Unknown error'}`);
+                    return;
+                }
+                const data = await resp.json();
+                alert(`Deleted: ${data.deleted.join(', ')}`);
+                refreshAll();
+            } catch (e) {
+                alert(`Error deleting XID: ${e.message}`);
+            }
+        }
+
+        function saveServers() {
+            localStorage.setItem('smanager_servers', JSON.stringify(servers));
+        }
+
+        function getServerDisplayName(url) {
+            const parsed = new URL(url);
+            if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+                return ':' + parsed.port;
+            }
+            return parsed.hostname + (parsed.port ? ':' + parsed.port : '');
+        }
+
+        function loadServers() {
+            const saved = localStorage.getItem('smanager_servers');
+            if (saved) {
+                servers = JSON.parse(saved);
+                // Re-compute display names from URLs (in case format changed)
+                for (const s of servers) {
+                    s.name = getServerDisplayName(s.url);
+                }
+            }
+            if (servers.length === 0) {
+                // Auto-detect current server URL, default port 2337
+                const port = window.location.port || '2337';
+                const currentUrl = window.location.origin || `http://localhost:${port}`;
+                const name = getServerDisplayName(currentUrl);
+                servers.push({ url: currentUrl, name, status: 'loading' });
+            }
+            renderServers();
+            updateServerSelect();
+        }
+
+        function renderServers() {
+            const list = document.getElementById('serverList');
+            list.innerHTML = servers.map((s, i) => `
+                <span class="server-tag">
+                    <span class="status ${s.status}"></span>
+                    <span>${s.name}</span>
+                    <span class="remove" onclick="removeServer(${i})">×</span>
+                </span>
+            `).join('');
+        }
+
+        function updateServerSelect() {
+            const select = document.getElementById('xidServer');
+            select.innerHTML = servers.map((s, i) => `<option value="${i}">${s.name}</option>`).join('');
+        }
+
+        function addServer() {
+            const input = document.getElementById('serverUrl');
+            let url = input.value.trim();
+            if (!url) return;
+            // Handle :port shorthand for localhost
+            if (url.match(/^:\d+$/)) {
+                url = 'http://localhost' + url;
+            } else if (!url.startsWith('http')) {
+                url = 'http://' + url;
+            }
+            const name = getServerDisplayName(url);
+            servers.push({ url, name, status: 'loading' });
+            input.value = '';
+            saveServers();
+            renderServers();
+            updateServerSelect();
+            checkServerHealth(servers.length - 1);
+        }
+
+        function removeServer(index) {
+            servers.splice(index, 1);
+            saveServers();
+            renderServers();
+            updateServerSelect();
+            refreshAll();
+        }
+
+        async function checkServerHealth(index) {
+            const server = servers[index];
+            try {
+                const resp = await fetch(`${server.url}/api/health`, { signal: AbortSignal.timeout(5000) });
+                if (resp.ok) {
+                    server.status = 'ok';
+                    const data = await resp.json();
+                    serverUsers[index] = data.user;
+                } else {
+                    server.status = 'error';
+                }
+            } catch {
+                server.status = 'error';
+            }
+            renderServers();
+        }
+
+        async function fetchOverview(serverIndex) {
+            const server = servers[serverIndex];
+            const params = showHidden ? '?include_hidden=true' : '';
+            try {
+                const resp = await fetch(`${server.url}/api/overview${params}`, { signal: AbortSignal.timeout(30000) });
+                if (!resp.ok) throw new Error('Failed to fetch');
+                const data = await resp.json();
+                overviewData[serverIndex] = data;
+                server.status = 'ok';
+            } catch (e) {
+                server.status = 'error';
+                overviewData[serverIndex] = null;
+            }
+            renderServers();
+        }
+
+        async function refreshAll() {
+            overviewData = {};
+            document.querySelector('#hotTable tbody').innerHTML = '<tr><td colspan="11" class="loading">Loading...</td></tr>';
+            document.querySelector('#coldTable tbody').innerHTML = '';
+
+            await Promise.all(servers.map((_, i) => fetchOverview(i)));
+            renderOverview();
+        }
+
+        function formatStates(states) {
+            if (!states) return '';
+            // Order: finished states first, then running, then pending
+            // false = failed WU, true = done WU, CANCELLED, TIMEOUT, FAILED, DONE, COMPLETING, RUNNING, PENDING, REQUEUE_HOLD
+            const order = [
+                { key: false, cls: 'bg-fail', label: 'Fail' },
+                { key: 'FAILED', cls: 'bg-fail', label: 'Failed' },
+                { key: 'TIMEOUT', cls: 'bg-fail', label: 'Timeout' },
+                { key: 'CANCELLED', cls: 'bg-cancel', label: 'Cancelled' },
+                { key: true, cls: 'bg-done', label: 'Done' },
+                { key: 'COMPLETED', cls: 'bg-done', label: 'Completed' },
+                { key: 'COMPLETING', cls: 'bg-end', label: 'Completing' },
+                { key: 'RUNNING', cls: 'bg-run', label: 'Running' },
+                { key: 'PENDING', cls: 'bg-pend', label: 'Pending' },
+                { key: 'REQUEUE_HOLD', cls: 'bg-hold', label: 'Hold' },
+            ];
+
+            // Calculate total
+            let total = 0;
+            const segments = [];
+            for (const { key, cls, label } of order) {
+                const val = states[key] || states[String(key)] || 0;
+                if (val > 0) {
+                    total += val;
+                    segments.push({ cls, label, val });
+                }
+            }
+            // Check for any states not in order
+            for (const [key, val] of Object.entries(states)) {
+                if (val > 0 && !order.some(o => String(o.key) === key)) {
+                    total += val;
+                    segments.push({ cls: 'bg-hold', label: key, val });
+                }
+            }
+
+            if (total === 0) return '';
+
+            // Build tooltip text
+            const tooltip = segments.map(s => `${s.label}: ${s.val}`).join(', ');
+
+            // Build bar segments with min 1px width
+            const BAR_WIDTH = 100;
+            let usedWidth = 0;
+            const barParts = [];
+            for (let i = 0; i < segments.length; i++) {
+                const s = segments[i];
+                let width = Math.round((s.val / total) * BAR_WIDTH);
+                if (width < 1) width = 1;  // Min 1px for non-zero
+                if (i === segments.length - 1) {
+                    width = BAR_WIDTH - usedWidth;  // Last segment takes remaining
+                }
+                usedWidth += width;
+                barParts.push(`<span class="${s.cls}" style="width:${width}px"></span>`);
+            }
+
+            return `<div class="state-bar" title="${tooltip}">${barParts.join('')}</div>`;
+        }
+
+        let allColdRows = [];  // Global for filtering
+
+        function renderOverview() {
+            const hotBody = document.querySelector('#hotTable tbody');
+            const hotFoot = document.querySelector('#hotTable tfoot');
+            const coldBody = document.querySelector('#coldTable tbody');
+
+            hotRows = [];
+            allColdRows = [];
+            let allStates = {};
+            let totalWUs = 0;
+            let totalGPUs = 0;
+
+            for (const [sIdx, data] of Object.entries(overviewData)) {
+                if (!data) continue;
+                const serverName = servers[sIdx].name;
+
+                for (const [xid, info] of Object.entries(data.hot || {})) {
+                    // Compute combined states including wus
+                    const states = { ...info.states };
+                    const wus = info.wus || {};
+                    const nDone = Object.values(wus).filter(v => v === true).length;
+                    const nFail = Object.values(wus).filter(v => v === false).length - (info.states?.RUNNING || 0) - (info.states?.PENDING || 0) - (info.states?.REQUEUE_HOLD || 0) - (info.states?.COMPLETING || 0);
+                    if (nDone > 0) states[true] = nDone;
+                    if (nFail > 0) states[false] = Math.max(0, nFail);
+
+                    // Aggregate
+                    for (const [k, v] of Object.entries(states)) {
+                        allStates[k] = (allStates[k] || 0) + v;
+                    }
+                    totalWUs += Object.keys(wus).length;
+                    totalGPUs += info.total_gpus || 0;
+
+                    hotRows.push({
+                        server: serverName,
+                        serverIdx: sIdx,
+                        xid,
+                        user: info.users || info.user || '',
+                        states,
+                        wus: Object.keys(wus).length,
+                        gpuPerJob: info.gpus_per_job || 0,
+                        totalGpus: info.total_gpus || 0,
+                        restarts: info.max_restarts || 0,
+                        qos: info.qos || '',
+                        config: info.config || '',
+                        name: info.name || '',
+                        note: info.note || '',
+                    });
+                }
+
+                // Add cold (recent) experiments with full info
+                for (const [xid, info] of Object.entries(data.cold || {})) {
+                    const wus = info.wus || {};
+                    const nDone = Object.values(wus).filter(v => v === true).length;
+                    const nFail = Object.values(wus).filter(v => v === false).length;
+                    allColdRows.push({
+                        server: serverName,
+                        serverIdx: sIdx,
+                        xid,
+                        user: info.user || '',
+                        done: nDone,
+                        fail: nFail,
+                        config: info.config || '',
+                        name: info.name || '',
+                        note: info.note || '',
+                        hidden: info.hidden || false,
+                    });
+                }
+
+                // Add frozen (old) experiments - also has full info from _extra_info
+                for (const [xid, info] of Object.entries(data.frozen || {})) {
+                    const wus = info.wus || {};
+                    const nDone = Object.values(wus).filter(v => v === true).length;
+                    const nFail = Object.values(wus).filter(v => v === false).length;
+                    allColdRows.push({
+                        server: serverName,
+                        serverIdx: sIdx,
+                        xid,
+                        user: info.user || '',
+                        done: nDone,
+                        fail: nFail,
+                        config: info.config || '',
+                        name: info.name || '',
+                        note: info.note || '',
+                        hidden: info.hidden || false,
+                    });
+                }
+            }
+
+            // Sort by xid descending
+            hotRows.sort((a, b) => b.xid.localeCompare(a.xid));
+            allColdRows.sort((a, b) => b.xid.localeCompare(a.xid));
+
+            hotBody.innerHTML = hotRows.map((r, idx) => {
+                const displayText = r.note || r.name;
+                const textClass = r.note ? 'note-text' : 'name-text';
+                const escapedNote = (r.note || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                const isCurrentUser = r.user && r.user === serverUsers[r.serverIdx];
+                const userClass = isCurrentUser ? 'current-user' : '';
+                const serverUrl = servers[r.serverIdx]?.url || '';
+                return `
+                <tr>
+                    <td class="text-center"><span class="fav-btn ${favorites.has(r.xid) ? 'active' : ''}" onclick="toggleFavorite('${r.xid}')">${favorites.has(r.xid) ? '❤︎' : '♡'}</span></td>
+                    <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span><span class="stop-btn" onclick="stopXid('${serverUrl}', '${r.xid}')" title="Stop (scancel -n ${r.xid})">⏹</span></td>
+                    <td class="${userClass}">${r.user}</td>
+                    <td>${formatStates(r.states)}</td>
+                    <td class="mono">${r.wus}</td>
+                    <td class="mono text-right">${r.totalGpus}</td>
+                    <td class="mono text-right">${r.restarts}</td>
+                    <td>${r.qos}</td>
+                    <td>${r.config}</td>
+                    <td class="name-note-cell ${textClass}" onclick="editNote(this, ${r.serverIdx}, '${r.xid}', '${escapedNote}')">${displayText || '<span style="opacity:0.3">click to add note</span>'}</td>
+                    <td><span class="server-badge">${r.server}</span></td>
+                </tr>`;
+            }).join('');
+
+            hotFoot.innerHTML = `
+                <tr class="footer-row">
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td>${formatStates(allStates)}</td>
+                    <td class="mono">${totalWUs}</td>
+                    <td class="mono text-right">${totalGPUs}</td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                </tr>
+            `;
+
+            // Render cold table with current filter
+            filterColdTable();
+        }
+
+        function filterColdTable() {
+            const filter = (document.getElementById('coldFilter').value || '').toLowerCase();
+            const coldBody = document.querySelector('#coldTable tbody');
+            let filtered = allColdRows;
+            if (showOnlyFavorites) {
+                filtered = filtered.filter(r => favorites.has(r.xid));
+            }
+            if (filter) {
+                filtered = filtered.filter(r => r.xid.toLowerCase().includes(filter) || r.user.toLowerCase().includes(filter));
+            }
+
+            coldBody.innerHTML = filtered.map(r => {
+                const serverUrl = servers[r.serverIdx]?.url || '';
+                const serverUser = serverUsers[r.serverIdx] || '';
+                const canDelete = r.user && r.user === serverUser;
+                const delBtn = canDelete
+                    ? `<span class="del-btn" onclick="deleteXid('${serverUrl}', ${r.serverIdx}, '${r.xid}')" title="Delete ${r.xid}">🗑</span>`
+                    : '';
+                const hideBtn = `<span class="hide-btn" onclick="toggleHidden(${r.serverIdx}, '${r.xid}', ${r.hidden})" title="${r.hidden ? 'Unhide' : 'Hide'} ${r.xid}">🫥</span>`;
+                const rowClass = r.hidden ? 'style="opacity: 0.5"' : '';
+                const displayText = r.note || r.name;
+                const textClass = r.note ? 'note-text' : 'name-text';
+                const escapedNote = (r.note || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                const isCurrentUser = r.user && r.user === serverUser;
+                const userClass = isCurrentUser ? 'current-user' : '';
+                return `
+                <tr ${rowClass}>
+                    <td class="text-center"><span class="fav-btn ${favorites.has(r.xid) ? 'active' : ''}" onclick="toggleFavorite('${r.xid}')">${favorites.has(r.xid) ? '❤︎' : '♡'}</span></td>
+                    <td class="text-center">${delBtn}</td>
+                    <td class="text-center">${hideBtn}</td>
+                    <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span></td>
+                    <td class="${userClass}">${r.user}</td>
+                    <td class="mono">
+                        ${r.fail ? `<span class="status-fail">${r.fail}</span>` : ''}${r.fail && r.done ? '+' : ''}${r.done ? `<span class="status-done">${r.done}</span>` : ''}
+                    </td>
+                    <td>${r.config}</td>
+                    <td class="name-note-cell ${textClass}" onclick="editNote(this, ${r.serverIdx}, '${r.xid}', '${escapedNote}')">${displayText || '<span style="opacity:0.3">click to add note</span>'}</td>
+                    <td><span class="server-badge">${r.server}</span></td>
+                </tr>`;
+            }).join('');
+        }
+
+        async function stopJob(serverUrl, jid) {
+            if (!confirm(`Stop job ${jid}?`)) return;
+            try {
+                const resp = await fetch(`${serverUrl}/api/action/stop/${jid}`, { method: 'POST' });
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    alert(`Failed to stop job: ${err.detail || 'Unknown error'}`);
+                    return;
+                }
+                loadXidDetail();
+            } catch (e) {
+                alert(`Error stopping job: ${e.message}`);
+            }
+        }
+
+        async function stopXid(serverUrl, xid) {
+            if (!confirm(`Stop all jobs for ${xid}?\n\nThis will run: scancel -n ${xid}\n\nNote: It can take Slurm a little time to actually stop the experiment.`)) return;
+            try {
+                const resp = await fetch(`${serverUrl}/api/action/stop_xid/${xid}`, { method: 'POST' });
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    alert(`Failed to stop XID: ${err.detail || 'Unknown error'}`);
+                    return;
+                }
+                refreshAll();
+            } catch (e) {
+                alert(`Error stopping XID: ${e.message}`);
+            }
+        }
+
+        async function resumeJob(serverUrl, script) {
+            if (!confirm(`Resume job with script:\n${script}?`)) return;
+            try {
+                const resp = await fetch(`${serverUrl}/api/action/resume?script=${encodeURIComponent(script)}`, { method: 'POST' });
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    alert(`Failed to resume job: ${err.detail || 'Unknown error'}`);
+                    return;
+                }
+                const data = await resp.json();
+                alert(`Job submitted: ${data.output || 'OK'}`);
+                loadXidDetail();
+            } catch (e) {
+                alert(`Error resuming job: ${e.message}`);
+            }
+        }
+
+        function viewXid(xid, serverIdx) {
+            document.getElementById('xidInput').value = xid;
+            document.getElementById('xidServer').value = serverIdx;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector('[data-view="xid-detail"]').classList.add('active');
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.getElementById('xid-detail').classList.add('active');
+            // Update URL hash
+            history.replaceState(null, '', '#' + xid);
+            loadXidDetail();
+        }
+
+        async function loadXidFromHash() {
+            const hash = window.location.hash;
+            if (!hash || hash.length < 2) return;
+            const xid = hash.slice(1);
+            if (!xid) return;
+
+            document.getElementById('xidInput').value = xid;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector('[data-view="xid-detail"]').classList.add('active');
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.getElementById('xid-detail').classList.add('active');
+
+            const content = document.getElementById('xidContent');
+            content.innerHTML = '<p class="loading">Auto-discovering server...</p>';
+
+            // Try each server until one succeeds
+            for (let i = 0; i < servers.length; i++) {
+                try {
+                    const resp = await fetch(`${servers[i].url}/api/xid/${xid}`, { signal: AbortSignal.timeout(10000) });
+                    if (resp.ok) {
+                        servers[i].status = 'ok';
+                        renderServers();
+                        document.getElementById('xidServer').value = i;
+                        const data = await resp.json();
+                        const metric = document.getElementById('metricInput').value.trim();
+                        renderXidDetail(data, metric);
+                        return;
+                    }
+                } catch (e) {
+                    console.log(`Server ${i} (${servers[i]?.url}) failed:`, e);
+                    servers[i].status = 'error';
+                    renderServers();
+                }
+            }
+            content.innerHTML = '<p class="error">XID not found on any server</p>';
+        }
+
+        async function loadXidDetail() {
+            const xid = document.getElementById('xidInput').value.trim();
+            const serverIdx = document.getElementById('xidServer').value;
+            const metric = document.getElementById('metricInput').value.trim();
+            const content = document.getElementById('xidContent');
+
+            if (!xid || !servers[serverIdx]) {
+                content.innerHTML = '<p class="error">Please enter an XID and select a server</p>';
+                return;
+            }
+
+            content.innerHTML = '<p class="loading">Loading...</p>';
+            // Update URL hash
+            history.replaceState(null, '', '#' + xid);
+
+            try {
+                const resp = await fetch(`${servers[serverIdx].url}/api/xid/${xid}`, { signal: AbortSignal.timeout(30000) });
+                if (!resp.ok) throw new Error('Failed to fetch');
+                servers[serverIdx].status = 'ok';
+                renderServers();
+                const data = await resp.json();
+                renderXidDetail(data, metric);
+            } catch (e) {
+                servers[serverIdx].status = 'error';
+                renderServers();
+                content.innerHTML = `<p class="error">Error loading XID: ${e.message}</p>`;
+            }
+        }
+
+        function renderXidDetail(data, metricToShow) {
+            const content = document.getElementById('xidContent');
+            const wus = data.wus || [];
+            const serverIdx = document.getElementById('xidServer').value;
+            const serverUrl = servers[serverIdx]?.url || '';
+
+            let html = `<div class="table-container-full"><table>
+                <thead>
+                    <tr>
+                        <th style="width:3em">WID</th>
+                        <th style="width:6em">JID/Logs</th>
+                        <th style="width:2em" title="Restarts">R</th>
+                        <th style="width:2em" title="Status">St</th>
+                        <th style="width:2em">Ac</th>
+                        <th style="width:5.5em">Progress</th>
+                        <th style="width:5em">Step</th>
+                        ${metricToShow ? `<th style="width:5em">Metric</th>` : ''}
+                        <th style="width:40%">Config Args</th>
+                        <th>Name</th>
+                        <th style="width:8em" title="Queue wait">Qwait</th>
+                        <th style="width:6em">Runtime</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+
+            for (const wu of wus) {
+                const statusInfo = STATE_ICONS[wu.status] || { icon: wu.status, cls: '' };
+                const statusEmoji = STATE_EMOJIS[wu.status] || '❓';
+                const configArgs = (wu.config_args || []).map(a => {
+                    const [lhs, rhs] = a.split('=', 2);
+                    return `${lhs}=<em>${rhs}</em>`;
+                }).join(' ');
+
+                let metricVal = 'n/a';
+                if (metricToShow && wu.metrics && wu.metrics[metricToShow] !== undefined) {
+                    const v = wu.metrics[metricToShow];
+                    metricVal = typeof v === 'number' ? v.toPrecision(3) : v;
+                }
+
+                // Parse progress percentage for bar
+                let progressPct = 0;
+                let progressText = wu.progress || 'n/a';
+                if (progressText.endsWith('%')) {
+                    progressPct = parseFloat(progressText);
+                    if (isNaN(progressPct)) progressPct = 0;
+                }
+                const progressBar = progressPct > 0
+                    ? `<div class="progress-bar"><span class="fill" style="width:${progressPct}%"></span>${progressText}</div>`
+                    : progressText;
+
+                // Action button: stop if running/pending/hold, play if stopped/done/failed
+                const isActive = ['RUNNING', 'PENDING', 'REQUEUE_HOLD', 'COMPLETING'].includes(wu.status);
+                let actionBtn = '';
+                if (isActive) {
+                    actionBtn = `<span class="action-btn" onclick="stopJob('${serverUrl}', ${wu.jid})" title="Stop (scancel ${wu.jid})">⏸️</span>`;
+                } else if (wu.status !== 'UNKNOWN' && wu.launch_script) {
+                    const escapedScript = wu.launch_script.replace(/'/g, "\\'");
+                    actionBtn = `<span class="action-btn" onclick="resumeJob('${serverUrl}', '${escapedScript}')" title="Restart">▶️</span>`;
+                }
+
+                html += `
+                    <tr>
+                        <td class="mono text-right">${wu.wid}</td>
+                        <td class="mono"><a href="https://www.internalfb.com/fair_hub/job/FAIR_SC_3/${wu.jid}/details" target="_blank">${wu.jid}</a><span class="copy-btn" onclick="navigator.clipboard.writeText('${wu.jid}')" title="Copy">⎘</span></td>
+                        <td class="mono text-center">${wu.restarts}</td>
+                        <td class="text-center" title="${wu.status} (exit: ${wu.exit_code})">${statusEmoji}</td>
+                        <td class="text-center">${actionBtn}</td>
+                        <td class="mono text-right">${progressBar}</td>
+                        <td class="mono text-right">${wu.step ?? 'n/a'}</td>
+                        ${metricToShow ? `<td class="mono text-right">${metricVal}</td>` : ''}
+                        <td class="config-args">${configArgs}</td>
+                        <td>${wu.name}</td>
+                        <td class="mono text-right">${wu.qwait}</td>
+                        <td class="mono text-right">${wu.runtime}</td>
+                    </tr>`;
+            }
+
+            html += '</tbody></table></div>';
+            content.innerHTML = html;
+        }
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+                document.getElementById(tab.dataset.view).classList.add('active');
+                // Clear hash when switching away from xid-detail
+                if (tab.dataset.view !== 'xid-detail') {
+                    history.replaceState(null, '', window.location.pathname);
+                }
+            });
+        });
+
+        // Handle hash changes (back/forward navigation)
+        window.addEventListener('hashchange', loadXidFromHash);
+
+        // Periodic health checks every 5 seconds
+        setInterval(() => {
+            servers.forEach((_, i) => checkServerHealth(i));
+        }, 5000);
+
+        // Init
+        async function init() {
+            loadServers();
+            servers.forEach((_, i) => checkServerHealth(i));
+
+            // Load prefs from all servers (merges, syncs back)
+            await loadPrefsFromServers();
+
+            // Now refresh with the merged prefs
+            refreshAll();
+            if (window.location.hash.length > 1) {
+                loadXidFromHash();
+            }
+        }
+        init();
+    </script>
+</body>
+</html>

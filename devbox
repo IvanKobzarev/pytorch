@@ -1,12 +1,12 @@
 #!/bin/bash
-# How to run: Just run it. Just `bv2/tools/devbox` you don't need to set options.
+# How to run: Just run it. Just `devbox` you don't need to set options.
 
 set -euo pipefail
 
-PORT1=${PORT1:-8888}
-PORT2=${PORT2:-8889}
-PORT3=${PORT3:-1337}
-STATE_FILE="${STATE_FILE:-/tmp/${USER}_jupyter_${PORT1}_${PORT2}_${PORT3}.info}"
+PORT_NB=${PORT_NB:-8888}
+PORT_FB=${PORT_FB:-1337}
+PORT_SM=${PORT_SM:-2337}
+STATE_FILE="${STATE_FILE:-/tmp/${USER}_jupyter_${PORT_NB}_${PORT_FB}_${PORT_SM}.info}"
 
 [[ -f "$STATE_FILE" ]] && rm "$STATE_FILE"
 
@@ -16,7 +16,7 @@ SRUN_ARGS="--account rigi --qos h100_rigi_high --exclusive --mem 0 --gpus-per-no
 srun $SRUN_ARGS --output="$STATE_FILE" --open-mode=append \
   bash -c "
     echo \$(hostname -f)
-    PORT1=$PORT1 PORT2=$PORT2 PORT3=$PORT3 ~/rigi/bv2/tools/devbox_inner
+    PORT_NB=$PORT_NB PORT_FB=$PORT_FB PORT_SM=$PORT_SM ~/rigi/devbox_inner
     sleep infinity
   " &
 SRUN_PID=$!
@@ -27,9 +27,10 @@ until read -r host 2>/dev/null < "$STATE_FILE"; do sleep 0.5; done
 echo "Job running, you can go there and attach using:"
 echo -e "\033[34mssh $host -t tmux -L inner a\033[0m"
 
-ssh -N -f -L ":$PORT1:localhost:$PORT1" -L ":$PORT2:localhost:$PORT2" -L ":$PORT3:localhost:$PORT3" "$host"
-echo "Port $PORT1 and $PORT2 and $PORT3 forwarded. If you need to forward to laptop, run:"
-echo "ssh -N -f -L :$PORT1:localhost:$PORT1 -L :$PORT2:localhost:$PORT2 -L :$PORT3:localhost:$PORT3 fair-sc-3"
+ssh -N -f -L ":$PORT_NB:localhost:$PORT_NB" -L ":$PORT_FB:localhost:$PORT_FB" -L ":$PORT_SM:localhost:$PORT_SM" "$host"
+echo "Ports $PORT_NB,$PORT_FB,$PORT_SM forwarded. If you need to forward to laptop, run:"
+echo "ssh -N -f -L localhost:$PORT_NB:localhost:$PORT_NB -L localhost:$PORT_FB:localhost:$PORT_FB -L localhost:$PORT_SM:localhost:$PORT_SM fair-sc-3"
+echo "ssh -N -f -L localhost:$((PORT_NB+1)):localhost:$PORT_NB -L localhost:$((PORT_FB+1)):localhost:$PORT_FB -L localhost:$((PORT_SM+1)):localhost:$PORT_SM fair-sc"
 
 WAIT=${WAIT:-no}
 case "${WAIT,,}" in

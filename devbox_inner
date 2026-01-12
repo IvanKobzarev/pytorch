@@ -1,23 +1,25 @@
 #!/bin/bash
 cd ~/rigi || exit 1
 
-PORT1=${PORT1:-8888}
-PORT2=${PORT2:-8889}
-PORT3=${PORT3:-1337}
+# Ports, in order: jupyter in rigi, flattlibrettli, smanager
+PORT_NB=${PORT_NB:-8888}
+PORT_FB=${PORT_FB:-1337}
+PORT_SM=${PORT_SM:-2337}
 
 SESS="bv2"
 tmux -L inner new-session -d -s "$SESS"
 
 # Three-way split:
 tmux -L inner split-window -v -t "$SESS:0" \; \
-              split-window -v -t "$SESS:0" \; \
               select-layout -t "$SESS:0" even-vertical
+tmux -L inner split-window -h -t "$SESS:0.0"
 tmux -L inner split-window -h -t "$SESS:0.2"
 
-tmux -L inner send-keys -t "$SESS:0.0" "cd ~/rigi-fb; jupyter lab --no-browser --port=$PORT1 --NotebookApp.token='' --NotebookApp.password=''" C-m
-tmux -L inner send-keys -t "$SESS:0.1" "jupyter lab --no-browser --port=$PORT2 --NotebookApp.token='' --NotebookApp.password=''" C-m
-tmux -L inner send-keys -t "$SESS:0.2" "fbi-serve --port $PORT3 --dataset /checkpoint/rigi/plattli/" C-m
-tmux -L inner send-keys -t "$SESS:0.3" "cd /checkpoint/rigi/bv2/workdirs" C-m
+ENTER=${ENTER:-C-m}
+tmux -L inner send-keys -t "$SESS:0.0" "jupyter lab --no-browser --port=$PORT_NB --NotebookApp.token='' --NotebookApp.password=''" $ENTER
+tmux -L inner send-keys -t "$SESS:0.1" "smanager --port $PORT_SM" $ENTER
+tmux -L inner send-keys -t "$SESS:0.2" "fbi-serve --port $PORT_FB --dataset /checkpoint/rigi/plattli/" $ENTER
+tmux -L inner send-keys -t "$SESS:0.3" "cd /checkpoint/rigi/bv2/workdirs" $ENTER
 tmux -L inner send-keys -t "$SESS:0.3" "jsonl2plattli -o /checkpoint/rigi/plattli XID XID XID"
 
 

@@ -1,0 +1,4 @@
+jupyterlab
+matplotlib
+git+ssh://git@github.com/lucasb-eyer/flattlibrettli.git@debug-build
+git+ssh://git@github.com/fairinternal/rigi.git#subdirectory=smanager
