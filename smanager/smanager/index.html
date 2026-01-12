@@ -616,9 +616,9 @@
                     alert(`Failed to delete XID: ${err.detail || 'Unknown error'}`);
                     return;
                 }
-                const data = await resp.json();
-                alert(`Deleted: ${data.deleted.join(', ')}`);
-                refreshAll();
+                // Remove from local data and re-render (no full refresh needed)
+                allColdRows = allColdRows.filter(r => r.xid !== xid);
+                filterColdTable();
             } catch (e) {
                 alert(`Error deleting XID: ${e.message}`);
             }

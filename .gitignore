@@ -1,2 +1,3 @@
 .vscode
 *__pycache__*
+smanager/smanager/_version.py
