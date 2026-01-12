@@ -1198,8 +1198,9 @@
                     actionBtn = `<span class="action-btn" onclick="resumeJob('${serverUrl}', '${escapedScript}')" title="Restart">▶️</span>`;
                 }
 
-                // Requeue button: only for active jobs
-                const requeueBtn = isActive
+                // Requeue button: only for running jobs (not pending - can't requeue pending)
+                const canRequeue = ['RUNNING', 'REQUEUE_HOLD', 'COMPLETING'].includes(wu.status);
+                const requeueBtn = canRequeue
                     ? `<span class="rq-btn" onclick="requeueJob('${serverUrl}', ${wu.jid})" title="Requeue (scontrol requeue ${wu.jid})">↶</span>`
                     : '';
 

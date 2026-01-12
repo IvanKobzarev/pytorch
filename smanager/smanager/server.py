@@ -583,18 +583,25 @@ def requeue_job(jid: int):
 
 @app.post("/api/action/requeue_xid/{xid}")
 def requeue_xid(xid: str):
-    """Requeue all jobs for an XID."""
+    """Requeue all non-pending jobs for an XID."""
     if not ACTIONS_ENABLED:
         raise HTTPException(status_code=403, detail="Actions are disabled (--no-actions)")
     log.info("POST /api/action/requeue_xid/%s", xid)
-    # Get all job IDs for this XID
-    result = subprocess.run(["squeue", "-n", xid, "-h", "-o", "%i"], capture_output=True, text=True)
+    # Get all job IDs with state for this XID
+    result = subprocess.run(["squeue", "-n", xid, "-h", "-o", "%i %T"], capture_output=True, text=True)
     if result.returncode != 0:
         log.error("squeue -n %s failed: %s", xid, result.stderr)
         raise HTTPException(status_code=500, detail=f"squeue failed: {result.stderr}")
-    jids = [jid.strip() for jid in result.stdout.strip().split("\n") if jid.strip()]
+    # Parse job IDs and filter out pending jobs (can't requeue pending)
+    jids = []
+    for line in result.stdout.strip().split("\n"):
+        if not line.strip():
+            continue
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] != "PENDING":
+            jids.append(parts[0])
     if not jids:
-        raise HTTPException(status_code=404, detail=f"No jobs found for XID {xid}")
+        raise HTTPException(status_code=404, detail=f"No requeuable jobs found for XID {xid}")
     # Requeue each job
     failed = []
     for jid in jids:
