@@ -19,9 +19,11 @@ from functools import partial
 
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 import uvicorn
+
+from smanager import __version__
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger(__name__)
@@ -223,7 +225,9 @@ def set_note(xid: str, note: str = Body(..., embed=True)):
 @app.get("/")
 def serve_index():
     log.info("GET / (serving index.html)")
-    return FileResponse(SCRIPT_DIR / "index.html")
+    html = (SCRIPT_DIR / "index.html").read_text()
+    html = html.replace("{{VERSION}}", __version__)
+    return Response(content=html, media_type="text/html")
 
 
 @app.get("/api/overview")
@@ -646,6 +650,7 @@ def main():
     global PREFS_DIR, ACTIONS_ENABLED
     import argparse
     parser = argparse.ArgumentParser(description="sManager - Slurm job management web UI")
+    parser.add_argument("--version", action="version", version=f"smanager {__version__}")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=2337)
     parser.add_argument("--prefs-dir", help=f"Directory for preferences files (default: /checkpoint/rigi/USER)")

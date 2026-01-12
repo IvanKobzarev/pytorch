@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "smanager"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Slurm job management web UI"
 requires-python = ">=3.9"
 dependencies = [
@@ -14,3 +14,8 @@ dependencies = [
 
 [project.scripts]
 smanager = "smanager.server:main"
+
+[tool.hatch.version]
+path = "smanager/_version.py"
+
+[tool.hatch.build.hooks.custom]
