@@ -606,6 +606,39 @@ def get_xid_info(xid: str):
     return result
 
 
+@app.get("/api/xid/{xid}/{wid}/config")
+def get_wu_config(xid: str, wid: int):
+    """Get full config.json for a specific work unit."""
+    wd_path = BASEDIR / xid
+    if not wd_path.exists():
+        # Try to find it
+        for d in BASEDIR.iterdir():
+            if d.is_dir() and xid in d.name:
+                wd_path = d
+                break
+        else:
+            raise HTTPException(status_code=404, detail=f"XID {xid} not found")
+
+    # Find the work unit directory by checking each config's wid field
+    for d in wd_path.iterdir():
+        if not d.is_dir():
+            continue
+        config_path = d / "config.json"
+        if not config_path.exists():
+            continue
+        try:
+            config = json.loads(config_path.read_text())
+            if config.get("wid") == wid:
+                return Response(
+                    content=json.dumps(config, indent=2),
+                    media_type="application/json",
+                )
+        except Exception:
+            continue
+
+    raise HTTPException(status_code=404, detail=f"Config not found for WU {wid}")
+
+
 @app.post("/api/action/stop/{jid}")
 def stop_job(jid: int):
     """Stop a job using scancel."""

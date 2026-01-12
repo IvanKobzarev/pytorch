@@ -210,8 +210,9 @@
         .footer-row { font-weight: 600; background: var(--header-bg) !important; }
         .config-args em { color: var(--accent); font-style: normal; }
         .config-args { font-style: normal; }
-        .config-view-btn { cursor: pointer; opacity: 0.5; margin-right: 4px; }
-        .config-view-btn:hover { opacity: 1; }
+        .config-view-btn { cursor: pointer; opacity: 0; margin-left: 4px; }
+        tr:hover .config-view-btn { opacity: 0.4; }
+        .config-view-btn:hover { opacity: 1 !important; }
         .progress-bar {
             position: relative;
             border-radius: 3px;
@@ -1044,11 +1045,8 @@
             }
         }
 
-        function showFullConfig(configArgs) {
-            const text = (configArgs || []).join('\n');
-            const blob = new Blob([text], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            window.open(url, '_blank');
+        function showFullConfig(serverUrl, xid, wid) {
+            window.open(`${serverUrl}/api/xid/${xid}/${wid}/config`, '_blank');
         }
 
         async function resumeJob(serverUrl, script) {
@@ -1224,7 +1222,7 @@
                         <td class="mono text-right">${progressBar}</td>
                         <td class="mono text-right">${wu.step ?? 'n/a'}</td>
                         ${metricToShow ? `<td class="mono text-right">${metricVal}</td>` : ''}
-                        <td class="config-args"><span class="config-view-btn" onclick="showFullConfig(${JSON.stringify(wu.config_args || []).replace(/"/g, '&quot;')})" title="View full config">🔍︎</span>${configArgs}</td>
+                        <td class="config-args">${configArgs}<span class="config-view-btn" onclick="showFullConfig('${serverUrl}', '${data.xid}', ${wu.wid})" title="View full config">🔍︎</span></td>
                         <td>${wu.name}</td>
                         <td class="mono text-right">${wu.qwait}</td>
                         <td class="mono text-right">${wu.runtime}</td>
