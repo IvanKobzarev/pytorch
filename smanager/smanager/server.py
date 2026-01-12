@@ -561,6 +561,48 @@ def stop_xid(xid: str):
     return {"status": "ok", "xid": xid}
 
 
+@app.post("/api/action/requeue/{jid}")
+def requeue_job(jid: int):
+    """Requeue a job using scontrol requeue."""
+    if not ACTIONS_ENABLED:
+        raise HTTPException(status_code=403, detail="Actions are disabled (--no-actions)")
+    log.info("POST /api/action/requeue/%s", jid)
+    result = subprocess.run(["scontrol", "requeue", str(jid)], capture_output=True, text=True)
+    if result.returncode != 0:
+        log.error("scontrol requeue %s failed: %s", jid, result.stderr)
+        raise HTTPException(status_code=500, detail=f"scontrol requeue failed: {result.stderr}")
+    log.info("scontrol requeue %s succeeded", jid)
+    return {"status": "ok", "jid": jid}
+
+
+@app.post("/api/action/requeue_xid/{xid}")
+def requeue_xid(xid: str):
+    """Requeue all jobs for an XID."""
+    if not ACTIONS_ENABLED:
+        raise HTTPException(status_code=403, detail="Actions are disabled (--no-actions)")
+    log.info("POST /api/action/requeue_xid/%s", xid)
+    # Get all job IDs for this XID
+    result = subprocess.run(["squeue", "-n", xid, "-h", "-o", "%i"], capture_output=True, text=True)
+    if result.returncode != 0:
+        log.error("squeue -n %s failed: %s", xid, result.stderr)
+        raise HTTPException(status_code=500, detail=f"squeue failed: {result.stderr}")
+    jids = [jid.strip() for jid in result.stdout.strip().split("\n") if jid.strip()]
+    if not jids:
+        raise HTTPException(status_code=404, detail=f"No jobs found for XID {xid}")
+    # Requeue each job
+    failed = []
+    for jid in jids:
+        r = subprocess.run(["scontrol", "requeue", jid], capture_output=True, text=True)
+        if r.returncode != 0:
+            log.error("scontrol requeue %s failed: %s", jid, r.stderr)
+            failed.append(jid)
+        else:
+            log.info("scontrol requeue %s succeeded", jid)
+    if failed:
+        raise HTTPException(status_code=500, detail=f"Failed to requeue jobs: {failed}")
+    return {"status": "ok", "xid": xid, "requeued": jids}
+
+
 @app.post("/api/action/resume")
 def resume_job(script: str):
     """Resume a job by running its launch script."""
