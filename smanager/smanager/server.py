@@ -17,6 +17,8 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
+import zstandard
+
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
@@ -44,6 +46,71 @@ def shutdown_handler(signum, frame):
 
 signal.signal(signal.SIGINT, shutdown_handler)
 signal.signal(signal.SIGTERM, shutdown_handler)
+
+
+class ZstdMiddleware:
+    """ASGI middleware that compresses responses with zstd when client supports it."""
+
+    def __init__(self, app, level=3, min_size=500):
+        self.app = app
+        self.compressor = zstandard.ZstdCompressor(level=level)
+        self.min_size = min_size
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Check Accept-Encoding header
+        headers = dict(scope.get("headers", []))
+        accept_encoding = headers.get(b"accept-encoding", b"").decode()
+
+        if "zstd" not in accept_encoding:
+            await self.app(scope, receive, send)
+            return
+
+        # Collect response body and headers
+        response_body = []
+        response_headers = []
+        response_status = [200]
+
+        async def collect_send(message):
+            if message["type"] == "http.response.start":
+                response_status[0] = message["status"]
+                response_headers.extend(message.get("headers", []))
+            elif message["type"] == "http.response.body":
+                body = message.get("body", b"")
+                if body:
+                    response_body.append(body)
+
+        await self.app(scope, receive, collect_send)
+
+        # Combine body
+        body = b"".join(response_body)
+
+        # Only compress if body is large enough
+        if len(body) >= self.min_size:
+            body = self.compressor.compress(body)
+            # Update headers: remove Content-Length, add Content-Encoding
+            new_headers = [(k, v) for k, v in response_headers if k.lower() != b"content-length"]
+            new_headers.append((b"content-encoding", b"zstd"))
+            new_headers.append((b"content-length", str(len(body)).encode()))
+        else:
+            new_headers = response_headers
+
+        # Send response
+        await send({
+            "type": "http.response.start",
+            "status": response_status[0],
+            "headers": new_headers,
+        })
+        await send({
+            "type": "http.response.body",
+            "body": body,
+        })
+
+
+app.add_middleware(ZstdMiddleware, level=3, min_size=500)
 
 app.add_middleware(
     CORSMiddleware,
