@@ -829,7 +829,8 @@
                     for (const [k, v] of Object.entries(states)) {
                         allStates[k] = (allStates[k] || 0) + v;
                     }
-                    totalWUs += Object.keys(wus).length;
+                    const wuCount = info.total_wus || Object.keys(wus).length;
+                    totalWUs += wuCount;
                     totalGPUs += info.total_gpus || 0;
 
                     hotRows.push({
@@ -838,7 +839,7 @@
                         xid,
                         user: info.users || info.user || '',
                         states,
-                        wus: Object.keys(wus).length,
+                        wus: wuCount,
                         gpuPerJob: info.gpus_per_job || 0,
                         totalGpus: info.total_gpus || 0,
                         restarts: info.max_restarts || 0,

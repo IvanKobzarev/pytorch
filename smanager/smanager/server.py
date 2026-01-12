@@ -110,6 +110,8 @@ def _extra_info(xid_info):
         info["user"] = wd_path.owner()
     except:
         info["user"] = "?"
+    # Count total WUs from launch scripts (includes pending jobs without workdirs)
+    info["total_wus"] = len(list(wd_path.glob("launch_*.sh")))
     launchinfo = wd_path / 'launchinfo.txt'
     workdir_names = []
     if launchinfo.is_file():
