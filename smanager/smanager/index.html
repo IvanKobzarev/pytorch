@@ -250,6 +250,9 @@
         .copy-btn { cursor: pointer; opacity: 0; margin-left: 4px; }
         tr:hover .copy-btn { opacity: 0.4; }
         .copy-btn:hover { opacity: 1 !important; }
+        .code-btn { cursor: pointer; opacity: 0; margin-left: 4px; }
+        tr:hover .code-btn { opacity: 0.4; }
+        .code-btn:hover { opacity: 1 !important; }
         .stop-btn { cursor: pointer; opacity: 0; margin-left: 4px; }
         tr:hover .stop-btn { opacity: 0.4; }
         .stop-btn:hover { opacity: 1 !important; color: #ef4444; }
@@ -274,7 +277,7 @@
         .col-rq { width: 1.6em; }
         .col-del { width: 1.6em; }
         .col-hide { width: 1.6em; }
-        .col-xid { width: 10.5em; }
+        .col-xid { width: 11.5em; }
         .col-usr { width: 5em; }
         .col-states { width: 110px; }
         .col-wus { width: 45px; }
@@ -920,7 +923,7 @@
                 <tr>
                     <td class="text-center"><span class="fav-btn ${favorites.has(r.xid) ? 'active' : ''}" onclick="toggleFavorite('${r.xid}')">${favorites.has(r.xid) ? '❤︎' : '♡'}</span></td>
                     <td class="text-center"><span class="rq-btn" onclick="requeueXid('${serverUrl}', '${r.xid}')" title="Requeue all jobs">↶</span></td>
-                    <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span><span class="stop-btn" onclick="stopXid('${serverUrl}', '${r.xid}')" title="Stop (scancel -n ${r.xid})">⏹</span></td>
+                    <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="code-btn" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span><span class="stop-btn" onclick="stopXid('${serverUrl}', '${r.xid}')" title="Stop (scancel -n ${r.xid})">⏹</span></td>
                     <td class="${userClass}">${r.user}</td>
                     <td>${formatStates(r.states)}</td>
                     <td class="mono">${r.wus}</td>
@@ -984,7 +987,7 @@
                     <td class="text-center"><span class="fav-btn ${favorites.has(r.xid) ? 'active' : ''}" onclick="toggleFavorite('${r.xid}')">${favorites.has(r.xid) ? '❤︎' : '♡'}</span></td>
                     <td class="text-center">${delBtn}</td>
                     <td class="text-center">${hideBtn}</td>
-                    <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span></td>
+                    <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="code-btn" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span></td>
                     <td class="${userClass}">${r.user}</td>
                     <td class="mono">
                         ${r.fail ? `<span class="status-fail">${r.fail}</span>` : ''}${r.fail && r.done ? '+' : ''}${r.done ? `<span class="status-done">${r.done}</span>` : ''}

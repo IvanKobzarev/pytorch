@@ -639,6 +639,91 @@ def get_wu_config(xid: str, wid: int):
     raise HTTPException(status_code=404, detail=f"Config not found for WU {wid}")
 
 
+def _get_srcdir(xid: str) -> Path:
+    """Get and validate the source directory for an XID."""
+    src_path = SRCDIR / xid
+    if not src_path.exists():
+        raise HTTPException(status_code=404, detail=f"Source directory not found for XID {xid}")
+    return src_path
+
+
+def _safe_path(base: Path, user_path: str) -> Path:
+    """Safely resolve a user-provided path within a base directory."""
+    # Resolve the full path and ensure it's within the base
+    try:
+        full_path = (base / user_path).resolve()
+        base_resolved = base.resolve()
+        if not str(full_path).startswith(str(base_resolved) + "/") and full_path != base_resolved:
+            raise HTTPException(status_code=403, detail="Access denied: path outside source directory")
+        return full_path
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {e}")
+
+
+def _build_tree(path: Path, base: Path) -> list:
+    """Recursively build a file tree structure."""
+    items = []
+    try:
+        for entry in sorted(path.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
+            rel_path = str(entry.relative_to(base))
+            if entry.is_dir():
+                items.append({
+                    "name": entry.name,
+                    "path": rel_path,
+                    "type": "dir",
+                    "children": _build_tree(entry, base)
+                })
+            else:
+                items.append({
+                    "name": entry.name,
+                    "path": rel_path,
+                    "type": "file",
+                    "size": entry.stat().st_size
+                })
+    except PermissionError:
+        pass
+    return items
+
+
+@app.get("/api/xid/{xid}/code/tree")
+def get_code_tree(xid: str):
+    """Get the file tree for an XID's source directory."""
+    src_path = _get_srcdir(xid)
+    return {"xid": xid, "tree": _build_tree(src_path, src_path)}
+
+
+@app.get("/api/xid/{xid}/code/file/{file_path:path}")
+def get_code_file(xid: str, file_path: str):
+    """Get the content of a file from an XID's source directory."""
+    src_path = _get_srcdir(xid)
+    full_path = _safe_path(src_path, file_path)
+
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+
+    if not full_path.is_file():
+        raise HTTPException(status_code=400, detail=f"Not a file: {file_path}")
+
+    # Read file content (with size limit for safety)
+    max_size = 10 * 1024 * 1024  # 10MB
+    if full_path.stat().st_size > max_size:
+        raise HTTPException(status_code=400, detail=f"File too large (max {max_size // 1024 // 1024}MB)")
+
+    try:
+        content = full_path.read_text(errors="replace")
+        return Response(content=content, media_type="text/plain; charset=utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read file: {e}")
+
+
+@app.get("/code/{xid}")
+def code_browser_page(xid: str):
+    """Serve the code browser page for an XID."""
+    # Verify the source directory exists
+    _get_srcdir(xid)
+    return FileResponse(SCRIPT_DIR / "code.html")
+
+
 @app.post("/api/action/stop/{jid}")
 def stop_job(jid: int):
     """Stop a job using scancel."""

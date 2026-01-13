@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Source Code Browser</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --text: #333333;
+            --border: #dddddd;
+            --hover: #e6f2ff;
+            --tree-bg: #f7f7f9;
+            --accent: #4bc0c8;
+            --muted: #666666;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #121417;
+                --text: #f0f3f9;
+                --border: rgba(255, 255, 255, 0.08);
+                --hover: rgba(75, 192, 200, 0.15);
+                --tree-bg: #1a1d21;
+                --accent: #4bc0c8;
+                --muted: #9aa4b1;
+            }
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; }
+        body {
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 13px;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            padding: 8px 16px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .header h1 {
+            font-size: 16px;
+            font-weight: 600;
+        }
+        .header .xid {
+            color: var(--accent);
+            font-family: ui-monospace, monospace;
+        }
+        .header .path {
+            color: var(--muted);
+            font-family: ui-monospace, monospace;
+            font-size: 12px;
+        }
+        .container {
+            display: flex;
+            flex: 1;
+            min-height: 0;
+        }
+        .tree-panel {
+            width: 280px;
+            min-width: 200px;
+            max-width: 500px;
+            background: var(--tree-bg);
+            border-right: 1px solid var(--border);
+            overflow: auto;
+            padding: 8px 0;
+            resize: horizontal;
+        }
+        .content-panel {
+            flex: 1;
+            overflow: auto;
+            padding: 0;
+        }
+        .tree-item {
+            display: flex;
+            align-items: center;
+            padding: 3px 8px 3px 0;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .tree-item:hover {
+            background: var(--hover);
+        }
+        .tree-item.selected {
+            background: var(--hover);
+            font-weight: 500;
+        }
+        .tree-icon {
+            width: 16px;
+            text-align: center;
+            margin-right: 4px;
+            flex-shrink: 0;
+        }
+        .tree-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .tree-children {
+            display: none;
+        }
+        .tree-children.expanded {
+            display: block;
+        }
+        .code-view {
+            font-family: ui-monospace, "SF Mono", Monaco, "Cascadia Mono", monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            white-space: pre;
+            padding: 8px 0;
+            min-width: fit-content;
+        }
+        .code-line {
+            display: flex;
+            padding: 0 12px;
+        }
+        .code-line:hover {
+            background: var(--hover);
+        }
+        .line-num {
+            color: var(--muted);
+            text-align: right;
+            padding-right: 16px;
+            min-width: 50px;
+            user-select: none;
+            flex-shrink: 0;
+        }
+        .line-content {
+            flex: 1;
+        }
+        .loading {
+            padding: 40px;
+            color: var(--muted);
+            text-align: center;
+        }
+        .error {
+            padding: 20px;
+            color: #ef4444;
+        }
+        .empty-state {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--muted);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Source: <span class="xid" id="xidDisplay"></span></h1>
+        <span class="path" id="pathDisplay"></span>
+    </div>
+    <div class="container">
+        <div class="tree-panel" id="treePanel">
+            <div class="loading">Loading file tree...</div>
+        </div>
+        <div class="content-panel" id="contentPanel">
+            <div class="empty-state">Select a file to view its contents</div>
+        </div>
+    </div>
+
+    <script>
+        // Extract XID from URL path (e.g., /code/123456_123456)
+        const pathParts = window.location.pathname.split('/');
+        const xid = pathParts[pathParts.length - 1] || pathParts[pathParts.length - 2];
+        document.getElementById('xidDisplay').textContent = xid;
+        document.title = `Source: ${xid}`;
+
+        let selectedPath = null;
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function renderTree(items, depth = 0) {
+            let html = '';
+            for (const item of items) {
+                const indent = depth * 16 + 8;
+                const icon = item.type === 'dir' ? '📁' : '📄';
+                const expandIcon = item.type === 'dir' ? '<span class="expand-icon">▶</span>' : '';
+
+                html += `<div class="tree-item" style="padding-left: ${indent}px" data-path="${escapeHtml(item.path)}" data-type="${item.type}">`;
+                if (item.type === 'dir') {
+                    html += `<span class="tree-icon expand-icon">▶</span>`;
+                } else {
+                    html += `<span class="tree-icon">&nbsp;</span>`;
+                }
+                html += `<span class="tree-icon">${icon}</span>`;
+                html += `<span class="tree-name">${escapeHtml(item.name)}</span>`;
+                html += `</div>`;
+
+                if (item.type === 'dir' && item.children) {
+                    html += `<div class="tree-children" data-parent="${escapeHtml(item.path)}">`;
+                    html += renderTree(item.children, depth + 1);
+                    html += `</div>`;
+                }
+            }
+            return html;
+        }
+
+        async function loadTree() {
+            try {
+                const resp = await fetch(`/api/xid/${xid}/code/tree`);
+                if (!resp.ok) throw new Error('Failed to load tree');
+                const data = await resp.json();
+
+                const panel = document.getElementById('treePanel');
+                panel.innerHTML = renderTree(data.tree);
+
+                // Add click handlers
+                panel.addEventListener('click', (e) => {
+                    const item = e.target.closest('.tree-item');
+                    if (!item) return;
+
+                    const path = item.dataset.path;
+                    const type = item.dataset.type;
+
+                    if (type === 'dir') {
+                        // Toggle directory
+                        const children = panel.querySelector(`.tree-children[data-parent="${path}"]`);
+                        const expandIcon = item.querySelector('.expand-icon');
+                        if (children) {
+                            children.classList.toggle('expanded');
+                            if (expandIcon) {
+                                expandIcon.textContent = children.classList.contains('expanded') ? '▼' : '▶';
+                            }
+                        }
+                    } else {
+                        // Load file
+                        loadFile(path);
+                        // Update selection
+                        panel.querySelectorAll('.tree-item').forEach(i => i.classList.remove('selected'));
+                        item.classList.add('selected');
+                    }
+                });
+            } catch (e) {
+                document.getElementById('treePanel').innerHTML = `<div class="error">Error: ${e.message}</div>`;
+            }
+        }
+
+        async function loadFile(path) {
+            selectedPath = path;
+            document.getElementById('pathDisplay').textContent = path;
+            const panel = document.getElementById('contentPanel');
+            panel.innerHTML = '<div class="loading">Loading...</div>';
+
+            try {
+                const resp = await fetch(`/api/xid/${xid}/code/file/${encodeURIComponent(path)}`);
+                if (!resp.ok) throw new Error('Failed to load file');
+                const content = await resp.text();
+
+                const lines = content.split('\n');
+                let html = '<div class="code-view">';
+                for (let i = 0; i < lines.length; i++) {
+                    html += `<div class="code-line">`;
+                    html += `<span class="line-num">${i + 1}</span>`;
+                    html += `<span class="line-content">${escapeHtml(lines[i])}</span>`;
+                    html += `</div>`;
+                }
+                html += '</div>';
+                panel.innerHTML = html;
+            } catch (e) {
+                panel.innerHTML = `<div class="error">Error: ${e.message}</div>`;
+            }
+        }
+
+        loadTree();
+    </script>
+</body>
+</html>
