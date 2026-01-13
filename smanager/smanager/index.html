@@ -449,7 +449,10 @@
         let serverUsers = {};  // serverIdx -> username
         let prefsLoaded = false;
 
-        async function loadPrefsFromServers() {
+        async function loadPrefsFromServers(syncBack = true) {
+            // Clear existing favorites before reloading
+            favorites.clear();
+
             // Load favorites from all servers in parallel, merge (union)
             const results = await Promise.allSettled(servers.map(async (s) => {
                 const resp = await fetch(`${s.url}/api/prefs/favorites`, { signal: AbortSignal.timeout(5000) });
@@ -465,8 +468,10 @@
             }
 
             prefsLoaded = true;
-            // Sync merged prefs back to all servers
-            await savePrefsToServers();
+            // Sync merged prefs back to all servers (only on initial load)
+            if (syncBack) {
+                await savePrefsToServers();
+            }
         }
 
         async function savePrefsToServers() {
@@ -740,7 +745,11 @@
             document.querySelector('#hotTable tbody').innerHTML = '<tr><td colspan="11" class="loading">Loading...</td></tr>';
             document.querySelector('#coldTable tbody').innerHTML = '';
 
-            await Promise.all(servers.map((_, i) => fetchOverview(i)));
+            // Fetch prefs and overview in parallel (no sync-back on refresh)
+            await Promise.all([
+                loadPrefsFromServers(false),
+                ...servers.map((_, i) => fetchOverview(i))
+            ]);
             renderOverview();
         }
 
