@@ -158,6 +158,7 @@
         .bg-fail { background: #ef4444; }
         .bg-cancel { background: #9ca3af; }
         .bg-done { background: #22c55e; }
+        .bg-done-ish { background: #14b8a6; }
         .bg-end { background: #86efac; }
         .bg-run { background: #3b82f6; }
         .bg-pend { background: #eab308; }
@@ -440,7 +441,7 @@
 
         const STATE_EMOJIS = {
             RUNNING: '🏃', PENDING: '⏳', REQUEUE_HOLD: '🚫', COMPLETING: '🌇',
-            DONE: '✅', FAILED: '❌', UNKNOWN: '😕', TIMEOUT: '⏰', CANCELLED: '🛑'
+            DONE: '✅', DONE_ISH: '🌄', FAILED: '❌', UNKNOWN: '😕', TIMEOUT: '⏰', CANCELLED: '🛑'
         };
 
         let servers = [];
@@ -772,6 +773,7 @@
                 { key: true, cls: 'bg-done', label: 'Done' },
                 { key: 'COMPLETED', cls: 'bg-done', label: 'Completed' },
                 { key: 'COMPLETING', cls: 'bg-end', label: 'Completing' },
+                { key: 'DONE_ISH', cls: 'bg-done-ish', label: 'Done-ish' },
                 { key: 'RUNNING', cls: 'bg-run', label: 'Running' },
                 { key: 'PENDING', cls: 'bg-pend', label: 'Pending' },
                 { key: 'REQUEUE_HOLD', cls: 'bg-hold', label: 'Hold' },
@@ -836,13 +838,39 @@
                 const serverName = servers[sIdx].name;
 
                 for (const [xid, info] of Object.entries(data.hot || {})) {
-                    // Compute combined states including wus
-                    const states = { ...info.states };
+                    // Compute states: use DONE files for finished, Slurm for in-progress
                     const wus = info.wus || {};
+                    const slurmStates = info.states || {};
+
+                    // Count WUs by DONE file status
                     const nDone = Object.values(wus).filter(v => v === true).length;
-                    const nFail = Object.values(wus).filter(v => v === false).length - (info.states?.RUNNING || 0) - (info.states?.PENDING || 0) - (info.states?.REQUEUE_HOLD || 0) - (info.states?.COMPLETING || 0);
-                    if (nDone > 0) states[true] = nDone;
-                    if (nFail > 0) states[false] = Math.max(0, nFail);
+                    const nNotDone = Object.values(wus).filter(v => v === false).length;
+
+                    // In-progress states from Slurm
+                    const nRunning = slurmStates.RUNNING || 0;
+                    const nPending = slurmStates.PENDING || 0;
+                    const nHold = slurmStates.REQUEUE_HOLD || 0;
+                    const nCompleting = slurmStates.COMPLETING || 0;
+                    const nInProgress = nRunning + nPending + nHold + nCompleting;
+
+                    // Done-ish = DONE file exists but Slurm still shows running
+                    // This happens when job is finishing up but Slurm hasn't caught up
+                    const nDoneIsh = Math.min(nDone, nRunning);  // Overlap between done and running
+                    const nActualDone = nDone - nDoneIsh;  // Truly done (not running in Slurm)
+                    const nActualRunning = nRunning - nDoneIsh;  // Actually running (no DONE file)
+
+                    // Failed = WUs without DONE file that are not in-progress
+                    const nFail = Math.max(0, nNotDone - nInProgress);
+
+                    // Build states object for display
+                    const states = {};
+                    if (nFail > 0) states[false] = nFail;
+                    if (nActualDone > 0) states[true] = nActualDone;
+                    if (nDoneIsh > 0) states['DONE_ISH'] = nDoneIsh;
+                    if (nCompleting > 0) states.COMPLETING = nCompleting;
+                    if (nActualRunning > 0) states.RUNNING = nActualRunning;
+                    if (nPending > 0) states.PENDING = nPending;
+                    if (nHold > 0) states.REQUEUE_HOLD = nHold;
 
                     // Aggregate
                     for (const [k, v] of Object.entries(states)) {

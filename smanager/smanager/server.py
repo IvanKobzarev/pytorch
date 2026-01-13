@@ -521,10 +521,17 @@ def get_xid_info(xid: str):
     status = {}
     for wid, config in configs.items():
         name = config.get("name", "")
-        if name and (wd_path / name / "DONE").is_file():
+        has_done = name and (wd_path / name / "DONE").is_file()
+        jid = config.get("jid")
+        slurm_state = jobs_by_jid.get(str(jid), {}).get("STATE") if jid else None
+
+        if has_done and slurm_state == "RUNNING":
+            # DONE file exists but Slurm still shows RUNNING (laggy teardown)
+            status[wid] = "DONE_ISH"
+        elif has_done:
             status[wid] = "DONE"
-        elif (jid := config.get("jid")) and str(jid) in jobs_by_jid:
-            status[wid] = jobs_by_jid[str(jid)].get("STATE", "UNKNOWN")
+        elif jid and str(jid) in jobs_by_jid:
+            status[wid] = slurm_state or "UNKNOWN"
         elif jid and jid in saccts and saccts[jid].get('state', {}).get('current'):
             status[wid] = saccts[jid]['state']['current'][-1]
         else:
