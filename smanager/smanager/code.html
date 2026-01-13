@@ -69,8 +69,33 @@
             background: var(--tree-bg);
             border-right: 1px solid var(--border);
             overflow: auto;
-            padding: 8px 0;
+            padding: 0;
             resize: horizontal;
+            display: flex;
+            flex-direction: column;
+        }
+        .tree-search {
+            padding: 8px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .tree-search input {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 12px;
+            background: var(--bg);
+            color: var(--text);
+        }
+        .tree-search input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .tree-content {
+            flex: 1;
+            overflow: auto;
+            padding: 8px 0;
         }
         .content-panel {
             flex: 1;
@@ -168,8 +193,13 @@
         <span class="path" id="pathDisplay"></span>
     </div>
     <div class="container">
-        <div class="tree-panel" id="treePanel">
-            <div class="loading">Loading file tree...</div>
+        <div class="tree-panel">
+            <div class="tree-search">
+                <input type="text" id="treeSearch" placeholder="Search files..." />
+            </div>
+            <div class="tree-content" id="treePanel">
+                <div class="loading">Loading file tree...</div>
+            </div>
         </div>
         <div class="content-panel" id="contentPanel">
             <div class="empty-state">Select a file to view its contents</div>
@@ -188,6 +218,8 @@
         document.title = `Source: ${xid}`;
 
         let selectedPath = null;
+        let treeData = [];  // Store tree data for filtering
+        let isSearching = false;
 
         function escapeHtml(text) {
             const div = document.createElement('div');
@@ -206,15 +238,54 @@
             history.replaceState(null, '', url);
         }
 
-        function renderTree(items, depth = 0) {
+        // Collect all file paths from tree
+        function collectPaths(items, paths = []) {
+            for (const item of items) {
+                paths.push({ path: item.path, type: item.type, name: item.name });
+                if (item.children) {
+                    collectPaths(item.children, paths);
+                }
+            }
+            return paths;
+        }
+
+        // Filter tree to only include items matching the search query
+        function filterTree(items, query) {
+            const lowerQuery = query.toLowerCase();
+            const result = [];
+
+            for (const item of items) {
+                const matches = item.path.toLowerCase().includes(lowerQuery);
+                let filteredChildren = [];
+
+                if (item.children) {
+                    filteredChildren = filterTree(item.children, query);
+                }
+
+                // Include this item if it matches or has matching children
+                if (matches || filteredChildren.length > 0) {
+                    result.push({
+                        ...item,
+                        children: filteredChildren.length > 0 ? filteredChildren : item.children,
+                        _hasMatchingChildren: filteredChildren.length > 0,
+                        _matches: matches
+                    });
+                }
+            }
+
+            return result;
+        }
+
+        function renderTree(items, depth = 0, forceExpanded = false) {
             let html = '';
             for (const item of items) {
                 const indent = depth * 16 + 8;
                 const icon = item.type === 'dir' ? '📁' : '📄';
+                const expanded = forceExpanded ? true : false;
 
                 html += `<div class="tree-item" style="padding-left: ${indent}px" data-path="${escapeHtml(item.path)}" data-type="${item.type}">`;
                 if (item.type === 'dir') {
-                    html += `<span class="tree-icon expand-icon">▶</span>`;
+                    html += `<span class="tree-icon expand-icon">${expanded ? '▼' : '▶'}</span>`;
                 } else {
                     html += `<span class="tree-icon">&nbsp;</span>`;
                 }
@@ -223,8 +294,8 @@
                 html += `</div>`;
 
                 if (item.type === 'dir' && item.children) {
-                    html += `<div class="tree-children" data-parent="${escapeHtml(item.path)}">`;
-                    html += renderTree(item.children, depth + 1);
+                    html += `<div class="tree-children${expanded ? ' expanded' : ''}" data-parent="${escapeHtml(item.path)}">`;
+                    html += renderTree(item.children, depth + 1, forceExpanded);
                     html += `</div>`;
                 }
             }
@@ -257,14 +328,37 @@
             }
         }
 
+        function renderFullTree(panel) {
+            panel.innerHTML = renderTree(treeData, 0, false);
+        }
+
+        function handleSearch(query) {
+            const panel = document.getElementById('treePanel');
+
+            if (!query) {
+                isSearching = false;
+                renderFullTree(panel);
+                // Re-select current file if any
+                if (selectedPath) {
+                    expandToPath(panel, selectedPath);
+                }
+                return;
+            }
+
+            isSearching = true;
+            const filtered = filterTree(treeData, query);
+            panel.innerHTML = renderTree(filtered, 0, true);  // Force expanded
+        }
+
         async function loadTree() {
             try {
                 const resp = await fetch(`/api/xid/${xid}/code/tree`);
                 if (!resp.ok) throw new Error('Failed to load tree');
                 const data = await resp.json();
+                treeData = data.tree;
 
                 const panel = document.getElementById('treePanel');
-                panel.innerHTML = renderTree(data.tree);
+                renderFullTree(panel);
 
                 // Add click handlers
                 panel.addEventListener('click', (e) => {
@@ -285,12 +379,26 @@
                             }
                         }
                     } else {
+                        // If searching, clear search and re-render tree expanded to this file
+                        if (isSearching) {
+                            document.getElementById('treeSearch').value = '';
+                            isSearching = false;
+                            renderFullTree(panel);
+                            expandToPath(panel, path);
+                        }
                         // Load file
                         loadFile(path);
                         // Update selection
                         panel.querySelectorAll('.tree-item').forEach(i => i.classList.remove('selected'));
-                        item.classList.add('selected');
+                        const newItem = panel.querySelector(`.tree-item[data-path="${CSS.escape(path)}"]`);
+                        if (newItem) newItem.classList.add('selected');
                     }
+                });
+
+                // Set up search handler
+                const searchInput = document.getElementById('treeSearch');
+                searchInput.addEventListener('input', (e) => {
+                    handleSearch(e.target.value.trim());
                 });
 
                 // If we have an initial file path, expand to it and load it
