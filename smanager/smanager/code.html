@@ -13,6 +13,7 @@
             --tree-bg: #f7f7f9;
             --accent: #4bc0c8;
             --muted: #666666;
+            --highlight: #fffbcc;
         }
         @media (prefers-color-scheme: dark) {
             :root {
@@ -23,6 +24,7 @@
                 --tree-bg: #1a1d21;
                 --accent: #4bc0c8;
                 --muted: #9aa4b1;
+                --highlight: rgba(255, 251, 204, 0.15);
             }
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -120,6 +122,12 @@
         .code-line:hover {
             background: var(--hover);
         }
+        .code-line.highlighted {
+            background: var(--highlight);
+        }
+        .code-line:target {
+            background: var(--highlight);
+        }
         .line-num {
             color: var(--muted);
             text-align: right;
@@ -127,6 +135,11 @@
             min-width: 50px;
             user-select: none;
             flex-shrink: 0;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .line-num:hover {
+            color: var(--accent);
         }
         .line-content {
             flex: 1;
@@ -164,9 +177,13 @@
     </div>
 
     <script>
-        // Extract XID from URL path (e.g., /code/123456_123456)
-        const pathParts = window.location.pathname.split('/');
-        const xid = pathParts[pathParts.length - 1] || pathParts[pathParts.length - 2];
+        // Parse URL: /code/{xid}/{file_path}#L{line}
+        const pathMatch = window.location.pathname.match(/^\/code\/([^\/]+)(?:\/(.+))?$/);
+        const xid = pathMatch ? pathMatch[1] : '';
+        const initialFilePath = pathMatch && pathMatch[2] ? decodeURIComponent(pathMatch[2]) : null;
+        const hashMatch = window.location.hash.match(/^#L(\d+)$/);
+        const initialLine = hashMatch ? parseInt(hashMatch[1]) : null;
+
         document.getElementById('xidDisplay').textContent = xid;
         document.title = `Source: ${xid}`;
 
@@ -178,12 +195,22 @@
             return div.innerHTML;
         }
 
+        function updateUrl(filePath, line) {
+            let url = `/code/${xid}`;
+            if (filePath) {
+                url += `/${filePath}`;
+            }
+            if (line) {
+                url += `#L${line}`;
+            }
+            history.replaceState(null, '', url);
+        }
+
         function renderTree(items, depth = 0) {
             let html = '';
             for (const item of items) {
                 const indent = depth * 16 + 8;
                 const icon = item.type === 'dir' ? '📁' : '📄';
-                const expandIcon = item.type === 'dir' ? '<span class="expand-icon">▶</span>' : '';
 
                 html += `<div class="tree-item" style="padding-left: ${indent}px" data-path="${escapeHtml(item.path)}" data-type="${item.type}">`;
                 if (item.type === 'dir') {
@@ -202,6 +229,32 @@
                 }
             }
             return html;
+        }
+
+        function expandToPath(panel, filePath) {
+            // Expand all parent directories to reveal the file
+            const parts = filePath.split('/');
+            let currentPath = '';
+            for (let i = 0; i < parts.length - 1; i++) {
+                currentPath += (i > 0 ? '/' : '') + parts[i];
+                const children = panel.querySelector(`.tree-children[data-parent="${CSS.escape(currentPath)}"]`);
+                const item = panel.querySelector(`.tree-item[data-path="${CSS.escape(currentPath)}"]`);
+                if (children) {
+                    children.classList.add('expanded');
+                }
+                if (item) {
+                    const expandIcon = item.querySelector('.expand-icon');
+                    if (expandIcon) expandIcon.textContent = '▼';
+                }
+            }
+
+            // Select the file
+            const fileItem = panel.querySelector(`.tree-item[data-path="${CSS.escape(filePath)}"]`);
+            if (fileItem) {
+                panel.querySelectorAll('.tree-item').forEach(i => i.classList.remove('selected'));
+                fileItem.classList.add('selected');
+                fileItem.scrollIntoView({ block: 'center' });
+            }
         }
 
         async function loadTree() {
@@ -223,7 +276,7 @@
 
                     if (type === 'dir') {
                         // Toggle directory
-                        const children = panel.querySelector(`.tree-children[data-parent="${path}"]`);
+                        const children = panel.querySelector(`.tree-children[data-parent="${CSS.escape(path)}"]`);
                         const expandIcon = item.querySelector('.expand-icon');
                         if (children) {
                             children.classList.toggle('expanded');
@@ -239,14 +292,22 @@
                         item.classList.add('selected');
                     }
                 });
+
+                // If we have an initial file path, expand to it and load it
+                if (initialFilePath) {
+                    expandToPath(panel, initialFilePath);
+                    await loadFile(initialFilePath, initialLine);
+                }
             } catch (e) {
                 document.getElementById('treePanel').innerHTML = `<div class="error">Error: ${e.message}</div>`;
             }
         }
 
-        async function loadFile(path) {
+        async function loadFile(path, scrollToLine = null) {
             selectedPath = path;
             document.getElementById('pathDisplay').textContent = path;
+            updateUrl(path, scrollToLine);
+
             const panel = document.getElementById('contentPanel');
             panel.innerHTML = '<div class="loading">Loading...</div>';
 
@@ -258,17 +319,54 @@
                 const lines = content.split('\n');
                 let html = '<div class="code-view">';
                 for (let i = 0; i < lines.length; i++) {
-                    html += `<div class="code-line">`;
-                    html += `<span class="line-num">${i + 1}</span>`;
+                    const lineNum = i + 1;
+                    const isHighlighted = scrollToLine === lineNum;
+                    html += `<div class="code-line${isHighlighted ? ' highlighted' : ''}" id="L${lineNum}">`;
+                    html += `<a class="line-num" href="#L${lineNum}" onclick="handleLineClick(event, ${lineNum})">${lineNum}</a>`;
                     html += `<span class="line-content">${escapeHtml(lines[i])}</span>`;
                     html += `</div>`;
                 }
                 html += '</div>';
                 panel.innerHTML = html;
+
+                // Scroll to highlighted line
+                if (scrollToLine) {
+                    const lineEl = document.getElementById(`L${scrollToLine}`);
+                    if (lineEl) {
+                        lineEl.scrollIntoView({ block: 'center' });
+                    }
+                }
             } catch (e) {
                 panel.innerHTML = `<div class="error">Error: ${e.message}</div>`;
             }
         }
+
+        function handleLineClick(event, lineNum) {
+            event.preventDefault();
+            // Update URL with line number
+            updateUrl(selectedPath, lineNum);
+            // Remove previous highlight
+            document.querySelectorAll('.code-line.highlighted').forEach(el => el.classList.remove('highlighted'));
+            // Add highlight to clicked line
+            const lineEl = document.getElementById(`L${lineNum}`);
+            if (lineEl) {
+                lineEl.classList.add('highlighted');
+            }
+        }
+
+        // Handle hash changes (e.g., back/forward navigation)
+        window.addEventListener('hashchange', () => {
+            const match = window.location.hash.match(/^#L(\d+)$/);
+            if (match) {
+                const lineNum = parseInt(match[1]);
+                document.querySelectorAll('.code-line.highlighted').forEach(el => el.classList.remove('highlighted'));
+                const lineEl = document.getElementById(`L${lineNum}`);
+                if (lineEl) {
+                    lineEl.classList.add('highlighted');
+                    lineEl.scrollIntoView({ block: 'center' });
+                }
+            }
+        });
 
         loadTree();
     </script>

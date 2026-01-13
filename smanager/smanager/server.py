@@ -717,7 +717,8 @@ def get_code_file(xid: str, file_path: str):
 
 
 @app.get("/code/{xid}")
-def code_browser_page(xid: str):
+@app.get("/code/{xid}/{file_path:path}")
+def code_browser_page(xid: str, file_path: str = ""):
     """Serve the code browser page for an XID."""
     # Verify the source directory exists
     _get_srcdir(xid)
