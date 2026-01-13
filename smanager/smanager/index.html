@@ -320,7 +320,7 @@
         <div id="serverList" class="server-list"></div>
         <input type="text" id="serverUrl" class="server-input" placeholder=":port or host:port" />
         <button class="btn" onclick="addServer()">Add</button>
-        <button class="btn btn-accent" onclick="refreshAll()">Refresh</button>
+        <button class="btn btn-accent" onclick="refresh()">Refresh</button>
         <div class="theme-toggle">
             <button onclick="setTheme('light')" id="theme-light">Light</button>
             <button onclick="setTheme('dark')" id="theme-dark">Dark</button>
@@ -390,7 +390,6 @@
             <input type="text" id="xidInput" placeholder="e.g. 1029_160123" />
             <label>Server:</label>
             <select id="xidServer"></select>
-            <button class="btn btn-accent" onclick="loadXidDetail()">Refresh</button>
             <span class="metric-input">
                 <label>Metric:</label>
                 <input type="text" id="metricInput" value="train/loss" />
@@ -449,7 +448,7 @@
         let serverUsers = {};  // serverIdx -> username
         let prefsLoaded = false;
 
-        async function loadPrefsFromServers(syncBack = true) {
+        async function loadPrefsFromServers() {
             // Clear existing favorites before reloading
             favorites.clear();
 
@@ -468,10 +467,6 @@
             }
 
             prefsLoaded = true;
-            // Sync merged prefs back to all servers (only on initial load)
-            if (syncBack) {
-                await savePrefsToServers();
-            }
         }
 
         async function savePrefsToServers() {
@@ -745,12 +740,21 @@
             document.querySelector('#hotTable tbody').innerHTML = '<tr><td colspan="11" class="loading">Loading...</td></tr>';
             document.querySelector('#coldTable tbody').innerHTML = '';
 
-            // Fetch prefs and overview in parallel (no sync-back on refresh)
+            // Fetch prefs and overview in parallel
             await Promise.all([
-                loadPrefsFromServers(false),
+                loadPrefsFromServers(),
                 ...servers.map((_, i) => fetchOverview(i))
             ]);
             renderOverview();
+        }
+
+        function refresh() {
+            // Refresh the currently active tab
+            if (document.getElementById('xid-detail').classList.contains('active')) {
+                loadXidDetail();
+            } else {
+                refreshAll();
+            }
         }
 
         function formatStates(states) {
