@@ -25,6 +25,7 @@ def get_config():
 
     c.model.txt.posemb = True
     c.model.glope = 0  # No glope by deafult
+    c.model.txt_unemb.chunksz = 4096
 
     c.evals.pplx.type = "pplx"
     c.evals.pplx.steps = 500
