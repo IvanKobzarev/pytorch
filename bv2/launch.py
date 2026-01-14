@@ -102,9 +102,9 @@ def main():
     # which might already be very different as we continue working on the code while sweeps run!
     # TODO: If `code_dst` exists, add a `.1` next, then `.2` etc.
     code_dst = next_free(f"/checkpoint/rigi/bv2/srcdirs/{xid}")
-    excludes = [f"--exclude={p}" for p in (".git/", "__pycache__/")]
+    excludes = [f"--exclude={p}" for p in (".git/", "__pycache__/", "notebooks/")]  # notebooks can be big, usually unrelated.
     print(f"Copying the code from pwd to {BLUE}{code_dst}{RESET} ...", flush=True)
-    subprocess.run(["rsync", "-az", "--mkpath", "--info=progress2", *excludes, "./", code_dst], check=True)
+    subprocess.run(["rsync", "-rltz", "--mkpath", "--info=progress2", *excludes, "./", code_dst], check=True)  # Use dst perms.
     os.chdir(code_dst)  # This does change dir for all subsequent calls, such as slurm ones.
     for i in range(5):
         print(f"\rDone! Giving you {5-i} more seconds of grace period...", flush=True, end="")
