@@ -1118,8 +1118,8 @@
             document.querySelector('[data-view="xid-detail"]').classList.add('active');
             document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
             document.getElementById('xid-detail').classList.add('active');
-            // Update URL hash
-            history.replaceState(null, '', '#' + xid);
+            // Push to history so back button works
+            history.pushState({ xid, serverIdx }, '', '#' + xid);
             loadXidDetail();
         }
 
@@ -1172,8 +1172,6 @@
             }
 
             content.innerHTML = '<p class="loading">Loading...</p>';
-            // Update URL hash
-            history.replaceState(null, '', '#' + xid);
 
             try {
                 const resp = await fetch(`${servers[serverIdx].url}/api/xid/${xid}`, { signal: AbortSignal.timeout(30000) });
@@ -1285,15 +1283,30 @@
                 tab.classList.add('active');
                 document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
                 document.getElementById(tab.dataset.view).classList.add('active');
-                // Clear hash when switching away from xid-detail
-                if (tab.dataset.view !== 'xid-detail') {
-                    history.replaceState(null, '', window.location.pathname);
+                // Push to history when switching tabs
+                if (tab.dataset.view === 'xid-detail') {
+                    const xid = document.getElementById('xidInput').value;
+                    if (xid) history.pushState({ xid }, '', '#' + xid);
+                } else {
+                    history.pushState({ view: tab.dataset.view }, '', window.location.pathname);
                 }
             });
         });
 
-        // Handle hash changes (back/forward navigation)
-        window.addEventListener('hashchange', loadXidFromHash);
+        // Handle back/forward navigation
+        function handleNavigation() {
+            const hash = window.location.hash;
+            if (hash && hash.length > 1) {
+                loadXidFromHash();
+            } else {
+                // Go back to overview
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelector('[data-view="overview"]').classList.add('active');
+                document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+                document.getElementById('overview').classList.add('active');
+            }
+        }
+        window.addEventListener('popstate', handleNavigation);
 
         // Periodic health checks every 5 seconds
         setInterval(() => {
