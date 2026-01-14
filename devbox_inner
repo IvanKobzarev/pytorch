@@ -1,27 +1,18 @@
 #!/bin/bash
 cd ~/rigi || exit 1
 
-# Ports, in order: jupyter in rigi, flattlibrettli, smanager
-PORT_NB=${PORT_NB:-8888}
-PORT_FB=${PORT_FB:-1337}
-PORT_SM=${PORT_SM:-2337}
+PORT_NB=${PORT_NB:-$([ "$SLURM_CLUSTER_NAME" = "fair-sc" ] && echo 8889 || echo 8888)}
 
 SESS="bv2"
 tmux -L inner new-session -d -s "$SESS"
 
 # Three-way split:
-tmux -L inner split-window -v -t "$SESS:0" \; \
-              select-layout -t "$SESS:0" even-vertical
-tmux -L inner split-window -h -t "$SESS:0.0"
-tmux -L inner split-window -h -t "$SESS:0.2"
+tmux -L inner split-window -v -t "$SESS:0"
 
 ENTER=${ENTER:-C-m}
 tmux -L inner send-keys -t "$SESS:0.0" "jupyter lab --no-browser --port=$PORT_NB --NotebookApp.token='' --NotebookApp.password=''" $ENTER
-tmux -L inner send-keys -t "$SESS:0.1" "smanager --port $PORT_SM" $ENTER
-tmux -L inner send-keys -t "$SESS:0.2" "fbi-serve --port $PORT_FB --dataset /checkpoint/rigi/plattli/" $ENTER
-tmux -L inner send-keys -t "$SESS:0.3" "cd /checkpoint/rigi/bv2/workdirs" $ENTER
-tmux -L inner send-keys -t "$SESS:0.3" "jsonl2plattli -o /checkpoint/rigi/plattli XID XID XID"
-
+tmux -L inner send-keys -t "$SESS:0.1" "cd /checkpoint/rigi/bv2/workdirs" $ENTER
+tmux -L inner send-keys -t "$SESS:0.1" "jsonl2plattli -o /checkpoint/rigi/plattli XID XID XID"
 
 tmux -L inner new-window -t "$SESS:1"
 tmux -L inner send-keys -t "$SESS:1" "bv2/tools/local_run -m bv2.train --config bv2/config/finevision.py nsteps:=18"

@@ -3,11 +3,48 @@
 
 set -euo pipefail
 
-PORT_NB=${PORT_NB:-8888}
-PORT_FB=${PORT_FB:-1337}
-PORT_SM=${PORT_SM:-2337}
-STATE_FILE="${STATE_FILE:-/tmp/${USER}_jupyter_${PORT_NB}_${PORT_FB}_${PORT_SM}.info}"
+PORT_NB=${PORT_NB:-$([ "$SLURM_CLUSTER_NAME" = "fair-sc" ] && echo 8889 || echo 8888)}
+PORT_FB=${PORT_FB:-$([ "$SLURM_CLUSTER_NAME" = "fair-sc" ] && echo 1338 || echo 1337)}
+PORT_SM=${PORT_SM:-$([ "$SLURM_CLUSTER_NAME" = "fair-sc" ] && echo 2338 || echo 2337)}
 
+SESS="devbox"
+
+if tmux has-session -t $SESS 2>/dev/null; then
+  echo -n "tmux session '$SESS' already exists. Attach (a), Kill (k), or do nothing (n)? "
+  read -r choice
+  case "$choice" in
+    a)
+      tmux attach-session -t $SESS
+      exit 0
+      ;;
+    k)
+      tmux kill-session -t $SESS
+      echo "Killed. Note, this does not scancel any potentially running devgpu."
+      sleep 1  # Give it a sec, and then continue the script below.
+      ;;
+    *)
+      exit 0
+      ;;
+  esac
+fi
+
+tmux new-session -d -s "$SESS"
+
+# Three-way split:
+tmux split-window -v -t "$SESS:0" \; \
+              select-layout -t "$SESS:0" even-vertical
+tmux split-window -h -t "$SESS:0.0"
+
+ENTER=${ENTER:-C-m}
+# ENTER=""
+tmux send-keys -t "$SESS:0.0" "smanager --port $PORT_SM" $ENTER
+tmux send-keys -t "$SESS:0.1" "fbi-serve --port $PORT_FB --prefs-dir /checkpoint/rigi/$USER --dataset /checkpoint/rigi/plattli/" $ENTER
+
+echo "Tmux session '$SESS' created, to attach: tmux a -t $SESS"
+echo "Now still starting the remote devbox..."
+
+# Now, start the remote devbox on slurm...
+STATE_FILE="${STATE_FILE:-/tmp/${USER}_jupyter_${PORT_NB}.info}"
 [[ -f "$STATE_FILE" ]] && rm "$STATE_FILE"
 
 SRUN_ARGS="--account rigi --qos h100_rigi_high --exclusive --mem 0 --gpus-per-node 8 --time 7-00:00:00"
@@ -16,7 +53,7 @@ SRUN_ARGS="--account rigi --qos h100_rigi_high --exclusive --mem 0 --gpus-per-no
 srun $SRUN_ARGS --output="$STATE_FILE" --open-mode=append \
   bash -c "
     echo \$(hostname -f)
-    PORT_NB=$PORT_NB PORT_FB=$PORT_FB PORT_SM=$PORT_SM ~/rigi/devbox_inner
+    PORT_NB=$PORT_NB ~/rigi/devbox_inner
     sleep infinity
   " &
 SRUN_PID=$!
@@ -27,19 +64,10 @@ until read -r host 2>/dev/null < "$STATE_FILE"; do sleep 0.5; done
 echo "Job running, you can go there and attach using:"
 echo -e "\033[34mssh $host -t tmux -L inner a\033[0m"
 
-ssh -N -f -L ":$PORT_NB:localhost:$PORT_NB" -L ":$PORT_FB:localhost:$PORT_FB" -L ":$PORT_SM:localhost:$PORT_SM" "$host"
-echo "Ports $PORT_NB,$PORT_FB,$PORT_SM forwarded. If you need to forward to laptop, run:"
-echo "ssh -N -f -L localhost:$PORT_NB:localhost:$PORT_NB -L localhost:$PORT_FB:localhost:$PORT_FB -L localhost:$PORT_SM:localhost:$PORT_SM fair-sc-3"
-echo "ssh -N -f -L localhost:$((PORT_NB+1)):localhost:$PORT_NB -L localhost:$((PORT_FB+1)):localhost:$PORT_FB -L localhost:$((PORT_SM+1)):localhost:$PORT_SM fair-sc"
-
-WAIT=${WAIT:-no}
-case "${WAIT,,}" in
-  1|true|yes|y|on) WAIT=1 ;;
-  0|false|no|n|off|'') WAIT=0 ;;
-esac
-
-if [ "$WAIT" -eq 1 ]; then
-  echo "If you Ctrl+C, we'll also kill the slurm job... (run with WAIT=no to disable waiting)"
-  trap "kill $SRUN_PID 2>/dev/null; exit 0" INT TERM
-  wait $SRUN_PID
-fi
+tmux send-keys -t "$SESS:0.2" "ssh -N -f -L 'localhost:$PORT_NB:localhost:$PORT_NB' '$host'" $ENTER
+sleep 0.5
+tmux send-keys -t "$SESS:0.2" "echo -e 'Slurm devbox job running, you can go there and attach using:\n"
+tmux send-keys -t "$SESS:0.2" "\033[34mssh $host -t tmux -L inner a\033[0m\n"
+tmux send-keys -t "$SESS:0.2" "If you need to forward ports on your laptop, run:\n"
+tmux send-keys -t "$SESS:0.2" "\033[34mssh -N -f -L localhost:$PORT_NB:localhost:$PORT_NB -L localhost:$PORT_FB:localhost:$PORT_FB -L localhost:$PORT_SM:localhost:$PORT_SM $SLURM_CLUSTER_NAME\033[0m'" $ENTER
+tmux a -t $SESS
