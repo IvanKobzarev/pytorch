@@ -5,7 +5,7 @@ from collections import Counter
 
 import bagz
 
-from bv2.data.common import get_bagz_reader, sharded_iota_exids
+from bv2.data.common import get_bagz_reader, shuffled_iota_exids
 
 
 class Dataset:
@@ -13,7 +13,7 @@ class Dataset:
         self.reader = get_bagz_reader(fspec, cache_limits=cache_limits)
 
     def make_exids(self, **kw):
-        return sharded_iota_exids(len(self.reader), **kw)
+        return shuffled_iota_exids(len(self.reader), **kw)
 
     def make_example(self, exid):
         return {"data": json.loads(self.reader[exid]), "id": exid}

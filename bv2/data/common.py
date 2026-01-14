@@ -8,24 +8,31 @@ import bv2.utils as u
 from bv2.data.pp import unpatchify
 
 
-def random_exids(seed, n=None, start_offset=0, rank=0, world_size=1):
-    if rank_n := n:  # Turn global `n` into `n` for this rank
+def iota_exids(n=None, start_offset=0, rank=0, world_size=1):
+    if rank_n := n:
         extra = rank < (n % world_size)
         rank_n = n // world_size + extra
     for i in u.count(start=start_offset, end=rank_n):  # Infinite if rank_n is None btw.
-        yield {"exid": u.rng(seed, rank, i).integers(2**32)}, {"start_offset": i + 1}
+        yield {"exid": i * world_size + rank}, {"start_offset": i + 1}
 
 
-def sharded_iota_exids(n, seed, epochs=None, start_epoch=0, start_offset=0, rank=0, world_size=1):
+def random_exids(seed, n=None, start_offset=0, rank=0, world_size=1):
+    for exid, state_after in iota_exids(n=n, start_offset=start_offset, rank=rank, world_size=world_size):
+        yield {"exid": u.rng(seed, exid["exid"]).integers(2**32).item()}, state_after
+
+
+def shuffled_iota_exids(n, seed, epochs=None, start_epoch=0, start_offset=0, rank=0, world_size=1):
+    assert n is not None, "Doesn't make sense for infinite, just use `random_exids`!"
+
     split_size = n / world_size
     start = round(rank * split_size)
     end = round((rank + 1) * split_size)
 
     for ep in u.count(start=start_epoch, end=epochs):
-        exids = u.rng(seed, ep, rank).permutation(np.arange(start, end))
+        exids = u.rng(seed, ep, rank).permutation(np.arange(start, end)).tolist()
 
         # For each exid, yielding (kwargs for make_example, kwargs for self next step)
-        for i, exid in enumerate(map(int, exids[start_offset:-1])):
+        for i, exid in enumerate(exids[start_offset:-1]):
             yield {"exid": exid, "epoch": ep}, {"start_epoch": ep, "start_offset": start_offset + i + 1}
         yield {"exid": exids[-1], "epoch": ep}, {"start_epoch": ep + 1, "start_offset": 0}
         start_offset = 0

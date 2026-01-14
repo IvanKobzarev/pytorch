@@ -5,7 +5,7 @@ from zipfile import ZipFile
 import numpy as np
 
 import bv2.data.dpack as d
-from bv2.data.common import get_bagz_reader, sharded_iota_exids
+from bv2.data.common import get_bagz_reader, shuffled_iota_exids
 from bv2.data.pp import sanity_check
 from bv2.data.tokenizer import get_tiktoken
 
@@ -45,7 +45,7 @@ class Dataset:
         })
 
     def make_exids(self, **kw):
-        return sharded_iota_exids(min(len(self.reader), self.first_N), **kw)
+        return shuffled_iota_exids(min(len(self.reader), self.first_N), **kw)
 
     def vocab_size(self):
         return self.tt.n_vocab

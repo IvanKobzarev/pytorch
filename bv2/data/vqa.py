@@ -11,7 +11,7 @@ from PIL import Image
 
 import bv2.data.dpack as d
 import bv2.utils as u
-from bv2.data.common import get_bagz_reader, sharded_iota_exids, vis_image_text_wandb
+from bv2.data.common import get_bagz_reader, shuffled_iota_exids, vis_image_text_wandb
 from bv2.data.pp import patchify, resize_max_patches, sanity_check
 from bv2.data.tokenizer import get_tiktoken
 
@@ -99,7 +99,7 @@ class Dataset:
         })  # fmt: skip
 
     def make_exids(self, **kw):
-        yield from sharded_iota_exids(len(self.reader), **kw)
+        yield from shuffled_iota_exids(len(self.reader), **kw)
 
     def vocab_size(self):
         return self.tt.n_vocab
