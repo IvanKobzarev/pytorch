@@ -729,7 +729,9 @@ def code_browser_page(xid: str, file_path: str = ""):
     """Serve the code browser page for an XID."""
     # Verify the source directory exists
     _get_srcdir(xid)
-    return FileResponse(SCRIPT_DIR / "code.html")
+    html = (SCRIPT_DIR / "code.html").read_text()
+    html = html.replace("{{VERSION}}", __version__)
+    return Response(content=html, media_type="text/html")
 
 
 @app.post("/api/action/stop/{jid}")
