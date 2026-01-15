@@ -969,6 +969,10 @@
 
             // Sort by xid descending
             hotRows.sort((a, b) => b.xid.localeCompare(a.xid));
+
+            // Filter out hot XIDs from cold rows (server returns all, we filter client-side)
+            const hotXids = new Set(hotRows.map(r => r.xid));
+            allColdRows = allColdRows.filter(r => !hotXids.has(r.xid));
             allColdRows.sort((a, b) => b.xid.localeCompare(a.xid));
 
             hotBody.innerHTML = hotRows.map((r, idx) => {
