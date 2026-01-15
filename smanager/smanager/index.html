@@ -619,17 +619,17 @@
 
         async function deleteXid(serverUrl, serverIdx, xid) {
             if (!confirm(`Delete XID ${xid}?\n\nThis will permanently remove:\n- /checkpoint/rigi/bv2/workdirs/${xid}\n- /checkpoint/rigi/bv2/srcdirs/${xid}\n- /checkpoint/rigi/fbi/${xid}`)) return;
+            const row = document.querySelector(`tr[data-xid="${xid}"]`);
+            if (row) row.classList.add('outdated');
             try {
                 const resp = await fetch(`${serverUrl}/api/action/delete/${xid}`, { method: 'POST' });
                 if (!resp.ok) {
+                    if (row) row.classList.remove('outdated');
                     const err = await resp.json();
                     alert(`Failed to delete XID: ${err.detail || 'Unknown error'}`);
-                    return;
                 }
-                // Remove from local data and re-render (no full refresh needed)
-                allColdRows = allColdRows.filter(r => r.xid !== xid);
-                filterColdTable();
             } catch (e) {
+                if (row) row.classList.remove('outdated');
                 alert(`Error deleting XID: ${e.message}`);
             }
         }
@@ -1024,7 +1024,7 @@
                     ? ` <span class="warning-text" title="${r.warningCount} WU(s) have warnings, go to detail view for more.">⚠</span>`
                     : '';
                 return `
-                <tr ${rowClass}>
+                <tr data-xid="${r.xid}" ${rowClass}>
                     <td class="text-center"><span class="fav-btn ${favorites.has(r.xid) ? 'active' : ''}" onclick="toggleFavorite('${r.xid}')">${favorites.has(r.xid) ? '❤︎' : '♡'}</span></td>
                     <td class="text-center">${delBtn}</td>
                     <td class="text-center">${hideBtn}</td>
