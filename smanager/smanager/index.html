@@ -148,6 +148,7 @@
         .status-fail { color: #ef4444; }
         .status-end { color: #22c55e; }
         .warning-text { color: #ef4444; cursor: help; }
+        tr.outdated { opacity: 0.4; pointer-events: none; }
         .state-bar {
             display: inline-flex;
             width: 100px;
@@ -1039,6 +1040,11 @@
             }).join('');
         }
 
+        function markRowOutdated(jid) {
+            const row = document.querySelector(`tr[data-jid="${jid}"]`);
+            if (row) row.classList.add('outdated');
+        }
+
         async function stopJob(serverUrl, jid) {
             if (!confirm(`Stop job ${jid}?`)) return;
             try {
@@ -1048,7 +1054,7 @@
                     alert(`Failed to stop job: ${err.detail || 'Unknown error'}`);
                     return;
                 }
-                loadXidDetail();
+                markRowOutdated(jid);
             } catch (e) {
                 alert(`Error stopping job: ${e.message}`);
             }
@@ -1078,7 +1084,7 @@
                     alert(`Failed to requeue job: ${err.detail || 'Unknown error'}`);
                     return;
                 }
-                loadXidDetail();
+                markRowOutdated(jid);
             } catch (e) {
                 alert(`Error requeuing job: ${e.message}`);
             }
@@ -1105,7 +1111,7 @@
             window.open(`${serverUrl}/api/xid/${xid}/${wid}/config`, '_blank');
         }
 
-        async function resumeJob(serverUrl, script) {
+        async function resumeJob(serverUrl, script, jid) {
             if (!confirm(`Resume job with script:\n${script}?`)) return;
             try {
                 const resp = await fetch(`${serverUrl}/api/action/resume?script=${encodeURIComponent(script)}`, { method: 'POST' });
@@ -1116,7 +1122,7 @@
                 }
                 const data = await resp.json();
                 alert(`Job submitted: ${data.output || 'OK'}`);
-                loadXidDetail();
+                markRowOutdated(jid);
             } catch (e) {
                 alert(`Error resuming job: ${e.message}`);
             }
@@ -1256,7 +1262,7 @@
                     actionBtn = `<span class="action-btn" onclick="stopJob('${serverUrl}', ${wu.jid})" title="Stop (scancel ${wu.jid})">⏸️</span>`;
                 } else if (wu.status !== 'UNKNOWN' && wu.launch_script) {
                     const escapedScript = wu.launch_script.replace(/'/g, "\\'");
-                    actionBtn = `<span class="action-btn" onclick="resumeJob('${serverUrl}', '${escapedScript}')" title="Restart">▶️</span>`;
+                    actionBtn = `<span class="action-btn" onclick="resumeJob('${serverUrl}', '${escapedScript}', ${wu.jid})" title="Restart">▶️</span>`;
                 }
 
                 // Requeue button: only for running jobs (not pending - can't requeue pending)
@@ -1273,7 +1279,7 @@
                     : wu.wid;
 
                 html += `
-                    <tr>
+                    <tr data-jid="${wu.jid}">
                         <td class="mono text-right">${widDisplay}</td>
                         <td class="mono"><a href="https://www.internalfb.com/fair_hub/job/FAIR_SC_3/${wu.jid}/details" target="_blank">${wu.jid}</a><span class="copy-btn" onclick="navigator.clipboard.writeText('${wu.jid}')" title="Copy">⎘</span></td>
                         <td class="mono text-center">${wu.restarts}</td>
