@@ -94,6 +94,7 @@ def get_config():
     c.evals.decode_doc_vqa.data.name = "vqa"
     c.evals.decode_doc_vqa.data.split = "docvqa_flat/val"
     c.evals.decode_doc_vqa.data.max_patches = lambda: c.data.max_patches
+    c.evals.decode_doc_vqa.data.epochs = 1
     c.evals.decode_doc_vqa.data.nreg = lambda: c.model.reg.nreg
     c.evals.decode_doc_vqa.decode.max_prefix = lambda: c.data.max_patches + special_tokens + 28
     c.evals.decode_doc_vqa.decode.batch_size = 32
