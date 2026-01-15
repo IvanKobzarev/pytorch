@@ -121,7 +121,7 @@ def decoding_iterator(predict_fn, ds, *, max_prefix, max_decode, device, batch_s
 
     def _batched_iter():
         """Yields a tuple of (batch, done_indicator). Batch is always padded to `batch_size`."""
-        _batch_fn = lambda exs: {k: np.concatenate([ex[k][None] for ex in exs], axis=0) for k in exs[0]}
+        _batch_fn = lambda exs: {k: np.concatenate([[ex[k]] for ex in exs], axis=0) for k in exs[0]}
 
         exs = []
         for ex in ex_iter:
