@@ -181,12 +181,17 @@ def _extra_info(xid_info):
     info["total_wus"] = len(list(wd_path.glob("launch_*.sh")))
     launchinfo = wd_path / 'launchinfo.txt'
     workdir_names = []
+    wid_counts = {}  # wid -> count (for duplicate detection)
     if launchinfo.is_file():
         info["wus"] = {}
         for wuwd in wd_path.iterdir():
             if wuwd.is_dir():
                 info["wus"][str(wuwd.name)] = (wuwd / "DONE").exists()
                 workdir_names.append(wuwd.name)
+                # Load config to get wid for duplicate detection
+                config = load_config(wuwd)
+                wid = config.get("wid", wuwd.name)
+                wid_counts[wid] = wid_counts.get(wid, 0) + 1
         try:
             info["config"] = next(re.finditer(r"bv2/config/(.*?) ", launchinfo.read_text())).group(1)
         except:
@@ -197,7 +202,13 @@ def _extra_info(xid_info):
         for wuwd in wd_path.iterdir():
             if wuwd.is_dir():
                 workdir_names.append(wuwd.name)
+                # Load config to get wid for duplicate detection
+                config = load_config(wuwd)
+                wid = config.get("wid", wuwd.name)
+                wid_counts[wid] = wid_counts.get(wid, 0) + 1
     info["name"] = extract_common_name(workdir_names, xid)
+    # Count WUs with duplicate workdirs (warning_count)
+    info["warning_count"] = sum(1 for c in wid_counts.values() if c > 1)
     # Read note if exists
     note_file = wd_path / "NOTE.md"
     info["note"] = note_file.read_text().strip() if note_file.exists() else ""
@@ -489,9 +500,32 @@ def get_xid_info(xid: str):
 
     configs = {}
     last_metrics = {}
+    warnings = {}  # wid -> list of warning strings
     metric_by_wuwd = {wuwd_name: metrics for wuwd_name, metrics in metric_results}
     for wuwd_name, config in config_results:
         wid = config.get("wid", wuwd_name)
+        new_jid = config.get("jid")
+
+        # If wid already exists, prefer the "better" config
+        if wid in configs:
+            old_jid = configs[wid].get("jid")
+            new_in_squeue = str(new_jid) in jobs_by_jid
+            old_in_squeue = str(old_jid) in jobs_by_jid
+
+            # Record warning about duplicate workdir
+            if wid not in warnings:
+                warnings[wid] = []
+            warnings[wid].append(f"Duplicate workdir detected (JIDs: {old_jid}, {new_jid})")
+
+            # Prefer: in squeue > not in squeue; higher jid > lower jid
+            if old_in_squeue and not new_in_squeue:
+                continue  # Keep old
+            if not old_in_squeue and new_in_squeue:
+                pass  # Replace with new
+            elif (new_jid or 0) <= (old_jid or 0):
+                continue  # Keep old (higher or equal jid)
+            # Otherwise fall through to replace
+
         configs[wid] = config
         last_metrics[wid] = metric_by_wuwd.get(wuwd_name, {})
 
@@ -602,6 +636,7 @@ def get_xid_info(xid: str):
             "runtime": hms(elapsed),
             "workdir": str(config.get("workdir", "")),
             "launch_script": str(wd_path / f"launch_{wid}.sh"),
+            "warnings": warnings.get(wid, []),
         })
 
     result = {

@@ -147,6 +147,7 @@
         .status-done { color: #22c55e; }
         .status-fail { color: #ef4444; }
         .status-end { color: #22c55e; }
+        .warning-text { color: #ef4444; cursor: help; }
         .state-bar {
             display: inline-flex;
             width: 100px;
@@ -895,6 +896,7 @@
                         config: info.config || '',
                         name: info.name || '',
                         note: info.note || '',
+                        warningCount: info.warning_count || 0,
                     });
                 }
 
@@ -914,6 +916,7 @@
                         name: info.name || '',
                         note: info.note || '',
                         hidden: info.hidden || false,
+                        warningCount: info.warning_count || 0,
                     });
                 }
 
@@ -933,6 +936,7 @@
                         name: info.name || '',
                         note: info.note || '',
                         hidden: info.hidden || false,
+                        warningCount: info.warning_count || 0,
                     });
                 }
             }
@@ -948,6 +952,9 @@
                 const isCurrentUser = r.user && r.user === serverUsers[r.serverIdx];
                 const userClass = isCurrentUser ? 'current-user' : '';
                 const serverUrl = servers[r.serverIdx]?.url || '';
+                const wusDisplay = r.warningCount > 0
+                    ? `<span class="warning-text" title="${r.warningCount} WU(s) have warnings, go to detail view for more.">${r.wus} ⚠</span>`
+                    : r.wus;
                 return `
                 <tr>
                     <td class="text-center"><span class="fav-btn ${favorites.has(r.xid) ? 'active' : ''}" onclick="toggleFavorite('${r.xid}')">${favorites.has(r.xid) ? '❤︎' : '♡'}</span></td>
@@ -955,7 +962,7 @@
                     <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="code-btn" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span><span class="stop-btn" onclick="stopXid('${serverUrl}', '${r.xid}')" title="Stop (scancel -n ${r.xid})">⏹</span></td>
                     <td class="${userClass}">${r.user}</td>
                     <td>${formatStates(r.states)}</td>
-                    <td class="mono">${r.wus}</td>
+                    <td class="mono">${wusDisplay}</td>
                     <td class="mono text-right">${r.totalGpus}</td>
                     <td class="mono text-right">${r.restarts}</td>
                     <td>${r.qos}</td>
@@ -1011,6 +1018,9 @@
                 const escapedNote = (r.note || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 const isCurrentUser = r.user && r.user === serverUser;
                 const userClass = isCurrentUser ? 'current-user' : '';
+                const warningIndicator = r.warningCount > 0
+                    ? ` <span class="warning-text" title="${r.warningCount} WU(s) have warnings, go to detail view for more.">⚠</span>`
+                    : '';
                 return `
                 <tr ${rowClass}>
                     <td class="text-center"><span class="fav-btn ${favorites.has(r.xid) ? 'active' : ''}" onclick="toggleFavorite('${r.xid}')">${favorites.has(r.xid) ? '❤︎' : '♡'}</span></td>
@@ -1019,7 +1029,7 @@
                     <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="code-btn" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span></td>
                     <td class="${userClass}">${r.user}</td>
                     <td class="mono">
-                        ${r.fail ? `<span class="status-fail">${r.fail}</span>` : ''}${r.fail && r.done ? '+' : ''}${r.done ? `<span class="status-done">${r.done}</span>` : ''}
+                        ${r.fail ? `<span class="status-fail">${r.fail}</span>` : ''}${r.fail && r.done ? '+' : ''}${r.done ? `<span class="status-done">${r.done}</span>` : ''}${warningIndicator}
                     </td>
                     <td>${r.config}</td>
                     <td class="name-note-cell ${textClass}" onclick="editNote(this, ${r.serverIdx}, '${r.xid}', '${escapedNote}')">${displayText || '<span style="opacity:0.3">click to add note</span>'}</td>
@@ -1254,9 +1264,16 @@
                     ? `<span class="rq-btn" onclick="requeueJob('${serverUrl}', ${wu.jid})" title="Requeue (scontrol requeue ${wu.jid})">↶</span>`
                     : '';
 
+                // Warning display for WID
+                const hasWarnings = wu.warnings && wu.warnings.length > 0;
+                const warningTooltip = hasWarnings ? wu.warnings.join('\\n') : '';
+                const widDisplay = hasWarnings
+                    ? `<span class="warning-text" title="${warningTooltip}">${wu.wid} ⚠</span>`
+                    : wu.wid;
+
                 html += `
                     <tr>
-                        <td class="mono text-right">${wu.wid}</td>
+                        <td class="mono text-right">${widDisplay}</td>
                         <td class="mono"><a href="https://www.internalfb.com/fair_hub/job/FAIR_SC_3/${wu.jid}/details" target="_blank">${wu.jid}</a><span class="copy-btn" onclick="navigator.clipboard.writeText('${wu.jid}')" title="Copy">⎘</span></td>
                         <td class="mono text-center">${wu.restarts}</td>
                         <td class="text-center" title="${wu.status} (exit: ${wu.exit_code})">${statusEmoji}</td>
