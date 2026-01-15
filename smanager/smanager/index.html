@@ -324,7 +324,7 @@
     <div class="header-row">
         <h1><span style="color:var(--accent)">s</span>Manager<span style="font-size: 10px; opacity: 0.3; margin-left: 4px;">v{{VERSION}}</span></h1>
         <div id="serverList" class="server-list"></div>
-        <input type="text" id="serverUrl" class="server-input" placeholder=":port or host:port" />
+        <input type="text" id="serverUrl" class="server-input" placeholder=":port or host:port" onkeydown="if(event.key==='Enter')addServer()" />
         <button class="btn" onclick="addServer()">Add</button>
         <button class="btn btn-accent" onclick="refresh()">Refresh</button>
         <div class="theme-toggle">
@@ -698,6 +698,7 @@
             renderServers();
             updateServerSelect();
             checkServerHealth(servers.length - 1);
+            refreshAll();
         }
 
         function removeServer(index) {
