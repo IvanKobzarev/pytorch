@@ -729,12 +729,11 @@
 
         async function fetchOverview(serverIndex) {
             const server = servers[serverIndex];
-            const params = showHidden ? '?include_hidden=true' : '';
             try {
-                const resp = await fetch(`${server.url}/api/overview${params}`, { signal: AbortSignal.timeout(30000) });
+                const resp = await fetch(`${server.url}/api/overview`, { signal: AbortSignal.timeout(30000) });
                 if (!resp.ok) throw new Error('Failed to fetch');
                 const data = await resp.json();
-                overviewData[serverIndex] = data;
+                overviewData[serverIndex] = data;  // Only has "hot" key
                 server.status = 'ok';
             } catch (e) {
                 server.status = 'error';
@@ -743,17 +742,42 @@
             renderServers();
         }
 
+        async function fetchInactiveOverview(serverIndex) {
+            const server = servers[serverIndex];
+            const params = showHidden ? '?include_hidden=true' : '';
+            try {
+                const resp = await fetch(`${server.url}/api/overview/inactive${params}`, { signal: AbortSignal.timeout(60000) });
+                if (!resp.ok) throw new Error('Failed to fetch inactive');
+                const data = await resp.json();
+                // Merge cold/frozen into existing data
+                if (overviewData[serverIndex]) {
+                    overviewData[serverIndex].cold = data.cold;
+                    overviewData[serverIndex].frozen = data.frozen;
+                }
+            } catch (e) {
+                console.error('Failed to fetch inactive for server', serverIndex, e);
+            }
+        }
+
+        let inactiveLoaded = false;
+
         async function refreshAll() {
             overviewData = {};
-            document.querySelector('#hotTable tbody').innerHTML = '<tr><td colspan="11" class="loading">Loading...</td></tr>';
-            document.querySelector('#coldTable tbody').innerHTML = '';
+            inactiveLoaded = false;
+            document.querySelector('#hotTable tbody').innerHTML = '<tr><td colspan="12" class="loading">Loading...</td></tr>';
+            document.querySelector('#coldTable tbody').innerHTML = '<tr><td colspan="9" class="loading">Loading inactive experiments...</td></tr>';
 
-            // Fetch prefs and overview in parallel
+            // Phase 1: Fetch prefs and hot overview in parallel
             await Promise.all([
                 loadPrefsFromServers(),
                 ...servers.map((_, i) => fetchOverview(i))
             ]);
-            renderOverview();
+            renderOverview();  // Render hot immediately
+
+            // Phase 2: Fetch cold/frozen in background
+            await Promise.all(servers.map((_, i) => fetchInactiveOverview(i)));
+            inactiveLoaded = true;
+            renderOverview();  // Re-render with cold/frozen data
         }
 
         function refresh() {
@@ -991,8 +1015,12 @@
                 </tr>
             `;
 
-            // Render cold table with current filter
-            filterColdTable();
+            // Render cold table with current filter (only if inactive data loaded)
+            if (inactiveLoaded) {
+                filterColdTable();
+            } else {
+                coldBody.innerHTML = '<tr><td colspan="9" class="loading">Loading inactive experiments...</td></tr>';
+            }
         }
 
         function filterColdTable() {

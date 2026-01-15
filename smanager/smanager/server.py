@@ -311,19 +311,17 @@ def serve_index():
 
 
 @app.get("/api/overview")
-def get_overview(include_hidden: bool = False):
-    """Get overview of all active and recent experiments.
+def get_overview():
+    """Get overview of hot (active) experiments only - fast path.
 
-    Args:
-        include_hidden: If true, include hidden XIDs in cold/frozen (marked with hidden=true).
+    Returns only XIDs with active jobs in squeue.
     """
     t0 = time.time()
-    hidden_xids = set(_read_xid_file("xid_hide.txt"))
-    log.info("GET /api/overview - fetching jobs... (%d hidden, include=%s)", len(hidden_xids), include_hidden)
+    log.info("GET /api/overview - fetching hot only...")
     headers, job_rows = get_jobs()
     if not headers:
         log.info("GET /api/overview - no jobs found (%.2fs)", time.time() - t0)
-        return {"hot": {}, "cold": {}, "frozen_count": 0}
+        return {"hot": {}}
 
     # Build jobs lookup
     jobs_by_name = {}
@@ -334,27 +332,18 @@ def get_overview(include_hidden: bool = False):
             jobs_by_name[name] = []
         jobs_by_name[name].append(job)
 
-    # Read workdirs
-    workdirs = [d.name for d in BASEDIR.iterdir() if d.is_dir()]
-    wd_by_xid = {xid: wd for wd in workdirs if (xid := extract_xid(wd))}
+    # Only get workdirs that have active jobs
+    active_xids = set(jobs_by_name.keys())
+    workdirs = [d.name for d in BASEDIR.iterdir() if d.is_dir() and extract_xid(d.name) in active_xids]
+    wd_by_xid = {extract_xid(wd): wd for wd in workdirs}
 
-    # Split into hot/cold/frozen
+    # Build hot xids
     hot_xids = {}
-    inactive_xids = {}
-    for xid, wd in sorted(wd_by_xid.items(), reverse=True):
+    for xid, wd in wd_by_xid.items():
         xid_jobs = jobs_by_name.get(xid, [])
         states = Counter(j.get("STATE", "") for j in xid_jobs)
         if states:
             hot_xids[xid] = {"states": dict(states), "wd": wd, "jobs": xid_jobs}
-        else:
-            is_hidden = xid in hidden_xids
-            if include_hidden or not is_hidden:
-                inactive_xids[xid] = {"wd": wd, "hidden": is_hidden}
-
-    # Split inactive into cold (first NUM_RECENT) and frozen (rest)
-    inactive_list = list(inactive_xids.keys())
-    cold_xids = {xid: inactive_xids[xid] for xid in inactive_list[:NUM_RECENT]}
-    frozen_xids = {xid: inactive_xids[xid] for xid in inactive_list[NUM_RECENT:]}
 
     # Add extra info with threading
     hot_items = [(xid, {"states": info["states"], "wd": info["wd"], "jobs": info["jobs"]}) for xid, info in hot_xids.items()]
@@ -362,14 +351,6 @@ def get_overview(include_hidden: bool = False):
     hot_xids = {}
     for xid, info in hot_results:
         hot_xids[xid] = info
-
-    cold_items = [(xid, info) for xid, info in cold_xids.items()]
-    cold_results = list(executor.map(_extra_info, cold_items))
-    cold_xids = dict(cold_results)
-
-    frozen_items = [(xid, info) for xid, info in frozen_xids.items()]
-    frozen_results = list(executor.map(_extra_info, frozen_items))
-    frozen_xids = dict(frozen_results)
 
     # Compute summary stats for hot xids
     nGPUs = {f'gres/gpu:{i}': i for i in range(1, 9)}
@@ -399,14 +380,65 @@ def get_overview(include_hidden: bool = False):
         if "jobs" in info:
             del info["jobs"]
 
-    result = {
-        "hot": hot_xids,
-        "cold": cold_xids,
-        "frozen": frozen_xids,
-    }
-    log.info("GET /api/overview - done: %d hot, %d cold, %d frozen (%.2fs)",
-             len(hot_xids), len(cold_xids), len(frozen_xids), time.time() - t0)
-    return result
+    log.info("GET /api/overview - done: %d hot (%.2fs)", len(hot_xids), time.time() - t0)
+    return {"hot": hot_xids}
+
+
+@app.get("/api/overview/inactive")
+def get_overview_inactive(include_hidden: bool = False):
+    """Get overview of cold and frozen experiments - slower path.
+
+    Args:
+        include_hidden: If true, include hidden XIDs (marked with hidden=true).
+
+    Returns cold (recent inactive) and frozen (older inactive) XIDs.
+    """
+    t0 = time.time()
+    hidden_xids = set(_read_xid_file("xid_hide.txt"))
+    log.info("GET /api/overview/inactive - fetching... (%d hidden, include=%s)", len(hidden_xids), include_hidden)
+
+    # Get active jobs to exclude them
+    headers, job_rows = get_jobs()
+    jobs_by_name = {}
+    if headers:
+        for row in job_rows:
+            job = dict(zip(headers, row))
+            name = job.get("NAME", "")
+            if name not in jobs_by_name:
+                jobs_by_name[name] = []
+            jobs_by_name[name].append(job)
+
+    # Read all workdirs
+    workdirs = [d.name for d in BASEDIR.iterdir() if d.is_dir()]
+    wd_by_xid = {xid: wd for wd in workdirs if (xid := extract_xid(wd))}
+
+    # Get only inactive xids (those without active jobs)
+    inactive_xids = {}
+    for xid, wd in sorted(wd_by_xid.items(), reverse=True):
+        xid_jobs = jobs_by_name.get(xid, [])
+        states = Counter(j.get("STATE", "") for j in xid_jobs)
+        if not states:  # No active jobs
+            is_hidden = xid in hidden_xids
+            if include_hidden or not is_hidden:
+                inactive_xids[xid] = {"wd": wd, "hidden": is_hidden}
+
+    # Split inactive into cold (first NUM_RECENT) and frozen (rest)
+    inactive_list = list(inactive_xids.keys())
+    cold_xids = {xid: inactive_xids[xid] for xid in inactive_list[:NUM_RECENT]}
+    frozen_xids = {xid: inactive_xids[xid] for xid in inactive_list[NUM_RECENT:]}
+
+    # Add extra info with threading
+    cold_items = [(xid, info) for xid, info in cold_xids.items()]
+    cold_results = list(executor.map(_extra_info, cold_items))
+    cold_xids = dict(cold_results)
+
+    frozen_items = [(xid, info) for xid, info in frozen_xids.items()]
+    frozen_results = list(executor.map(_extra_info, frozen_items))
+    frozen_xids = dict(frozen_results)
+
+    log.info("GET /api/overview/inactive - done: %d cold, %d frozen (%.2fs)",
+             len(cold_xids), len(frozen_xids), time.time() - t0)
+    return {"cold": cold_xids, "frozen": frozen_xids}
 
 
 def load_config(wd_path):
