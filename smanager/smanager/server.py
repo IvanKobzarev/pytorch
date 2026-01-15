@@ -603,6 +603,32 @@ def get_xid_info(xid: str):
         else:
             status[wid] = "UNKNOWN"
 
+    # Add pending jobs from squeue that don't have workdirs yet
+    existing_jids = {str(c.get("jid")) for c in configs.values() if c.get("jid")}
+    pending_unknown_idx = 0
+    for jid_str, job_info in jobs_by_jid.items():
+        if jid_str in existing_jids:
+            continue  # Already have this job from workdirs
+        jid = int(jid_str) if jid_str.isdigit() else None
+        # Try to extract wid from sacct submit_line
+        wid = None
+        if jid and jid in saccts:
+            submit_line = saccts[jid].get("submit_line", "")
+            # Try wid:=N pattern first (direct arg), then launch_N.sh
+            m = re.search(r'wid:=(\d+)', submit_line)
+            if not m:
+                m = re.search(r'launch_(\d+)\.sh', submit_line)
+            if m:
+                wid = m.group(1)
+        # If we couldn't extract wid, use "??" placeholder
+        if wid is None:
+            wid = f"??{pending_unknown_idx}"
+            pending_unknown_idx += 1
+        if wid not in configs:
+            configs[wid] = {"jid": jid, "name": "", "pending_only": True}
+            last_metrics[wid] = {}
+            status[wid] = job_info.get("STATE", "PENDING")
+
     # Format for response
     wus = []
     for wid in sorted(configs.keys(), key=lambda x: int(x) if str(x).isdigit() else x):
