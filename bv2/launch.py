@@ -49,6 +49,9 @@ LIGHT = '\033[90m'
 
 
 def main():
+
+    assert "login" in os.uname().nodename, "Launch is only supported from the login node."
+
     # First, get the sweep function out of the config file.
     conf_file = sys.argv[1]
     assert conf_file.endswith(".py"), "First argument of sweep needs to be config file."
