@@ -17,6 +17,8 @@ def iota_exids(n=None, start_offset=0, rank=0, world_size=1):
 
 
 def random_exids(seed, n=None, start_offset=0, rank=0, world_size=1):
+    # NOTE: For this one, it's a bit unclear whether the iter seed (this one) should yield different exids,
+    #       or just the same exids but in different order. Good thing it doesn't matter for our current uses.
     for exid, state_after in iota_exids(n=n, start_offset=start_offset, rank=rank, world_size=world_size):
         yield {"exid": u.rng(seed, exid["exid"]).integers(2**32).item()}, state_after
 

@@ -19,16 +19,17 @@ def render(seed, tiktoken, *, min_nouns=128, max_nouns=256):
 
 
 class Dataset:
-    def __init__(self, tokenizer=None, seed=0, n=150, **kw):
+    def __init__(self, tokenizer=None, seed=0, n=None, **kw):
         self.ttkw = tokenizer or {}
         self.render_kw = kw
+        self.data_seed = seed
         self.n = n
 
     def make_exids(self, **kw):
         yield from random_exids(n=self.n, **kw)
 
     def make_example(self, exid):
-        noun_tokens = render((exid, "render"), self.tt, **self.render_kw)
+        noun_tokens = render((self.data_seed, exid, "render"), self.tt, **self.render_kw)
 
         return sanity_check({
             "tokens": pack_text(np.r_[self.tt.bos, noun_tokens, self.tt.eos], positions="auto"),

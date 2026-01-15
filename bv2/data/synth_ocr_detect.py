@@ -24,6 +24,7 @@ class Dataset:
         self.add_hw = add_hw
         self.tiptoi = tiptoi
         self.ttkw = tokenizer or {}
+        self.data_seed = seed
         self.n = n
 
     def make_exids(self, **kw):
@@ -33,9 +34,9 @@ class Dataset:
         # Format is [BOS, prefix, SEP, img, SEP, suffix, EOS].
         img, text, _ = render(exid, ps=self.ps, unique=True, **self.render_kw)
         lines = text.split("\n")
-        line_idx = u.rng(exid, "row").integers(0, len(lines))
+        line_idx = u.rng(self.data_seed, exid, "row").integers(0, len(lines))
         words_in_line = lines[line_idx].split()
-        word_idx = u.rng(exid, "col").integers(0, len(words_in_line))
+        word_idx = u.rng(self.data_seed, exid, "col").integers(0, len(words_in_line))
         query_word = words_in_line[word_idx]
 
         ft, info = font(self.fs)

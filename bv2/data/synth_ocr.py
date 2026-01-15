@@ -91,18 +91,19 @@ class Dataset:
         self.tiptoi = tiptoi
         self.render_kw = kw
         self.ttkw = tokenizer or {}
+        self.data_seed = seed
         self.n = n
 
     def make_exids(self, **kw):
         yield from random_exids(n=self.n, **kw)
 
     def ground_truth(self, exid):
-        img, txt, _ = render((exid, "render"), ps=self.ps, **self.render_kw)
+        img, txt, _ = render((self.data_seed, exid, "render"), ps=self.ps, **self.render_kw)
         # VQA format
         return {"qas": {"0": ("ocr?", [txt])}, "img": img}
 
     def make_example(self, exid):
-        img, txt, _ = render((exid, "render"), ps=self.ps, **self.render_kw)
+        img, txt, _ = render((self.data_seed, exid, "render"), ps=self.ps, **self.render_kw)
 
         prefix = np.array(self.tt.encode("ocr"))
         suffix = np.array(self.tt.encode(txt))

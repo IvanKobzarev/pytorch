@@ -16,7 +16,7 @@ PATH = {
 
 
 class Dataset:
-    def __init__(self, split, first_N=float("inf"), tokenizer=None, seed=0):
+    def __init__(self, split, first_N=float("inf"), tokenizer=None):
         # Idea: here or in pp: randomize sub-seqlen, because many are >32k!
         self.fspec = PATH[split]
         self.first_N = first_N

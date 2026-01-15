@@ -32,7 +32,7 @@ class Dataset:
         self.nreg = nreg
         self.ttkw = tokenizer or {}
         self.greyout_frac = greyout_frac
-        self.seed = seed
+        self.data_seed = seed
         self.epochs = epochs
 
     def vis_data_wandb(self, data):
@@ -77,7 +77,7 @@ class Dataset:
 
         all_patches, all_positions = [], []
         for i, img in enumerate(images):
-            if u.rng(exid, epoch, self.seed, i, "greyout").random() < self.greyout_frac:
+            if u.rng(self.data_seed, exid, epoch, i, "greyout").random() < self.greyout_frac:
                 img.paste((128, 128, 128), box=(0, 0) + img.size)
             img_resized = resize_max_patches(img, self.max_patches, **self.ps)
             patches, positions = patchify(img_resized, **self.ps)

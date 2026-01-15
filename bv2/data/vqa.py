@@ -27,8 +27,8 @@ class Dataset:
         self.ttkw = tokenizer or {}
         self.greyout_frac = greyout_frac
         self.question_suffix = question_suffix
+        self.data_seed = seed
         self.epochs = epochs
-        self.seed = seed
 
     @property  # Not a cached_property because BagzReader is not picklable.
     def reader(self):  # which would make the whole class unpicklable.
@@ -62,7 +62,7 @@ class Dataset:
         prefix = self.tt.encode(question.lower())
         suffix = self.tt.encode(answer.lower())
 
-        if u.rng(exid, epoch, self.seed, "greyout").random() < self.greyout_frac:
+        if u.rng(self.data_seed, exid, epoch, "greyout").random() < self.greyout_frac:
             img.paste((128, 128, 128), box=(0, 0) + img.size)
         img = resize_max_patches(img, self.max_patches, **self.ps)
         patches, positions = patchify(img, **self.ps)

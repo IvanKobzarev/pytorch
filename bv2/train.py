@@ -610,9 +610,10 @@ def get_config():
     c.evals.pplx_val.type = "pplx"
     c.evals.pplx_val.steps = 10
     c.evals.pplx_val.data.name = lambda: c.data.name
+    c.evals.pplx_val.data.seed = 31337  # "val split" content
+    c.evals.pplx_val.data.n = 150  # "val split" size
     c.evals.pplx_val.data.tokenizer.first_N = lambda: c.data.tokenizer.first_N
     c.evals.pplx_val.iter.maxtok = lambda: c.maxtok
-    c.evals.pplx_val.iter.seed = 31337  # "val split"
     c.evals.pplx_val.iter.eagerness = 1
 
     return c
