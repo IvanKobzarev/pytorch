@@ -15,7 +15,7 @@ from bv2.data.tokenizer import get_tiktoken
 
 
 class Dataset:
-    def __init__(self, ps=16, max_patches=16_384, nreg=0, include=[".*"], exclude=[], tokenizer=None, greyout_frac=0.0, seed=0):
+    def __init__(self, ps=16, max_patches=16_384, nreg=0, include=[".*"], exclude=[], tokenizer=None, greyout_frac=0.0, seed=0, epochs=None):
         base_path = "/checkpoint/rigi/data/FineVision-1.0.1"
 
         paths = []
@@ -33,6 +33,7 @@ class Dataset:
         self.ttkw = tokenizer or {}
         self.greyout_frac = greyout_frac
         self.seed = seed
+        self.epochs = epochs
 
     def vis_data_wandb(self, data):
         return vis_image_text_wandb(data, self.tt, **self.ps)
@@ -124,7 +125,7 @@ class Dataset:
         })
 
     def make_exids(self, **kw):
-        yield from shuffled_iota_exids(len(self.reader), **kw)
+        yield from shuffled_iota_exids(len(self.reader), epochs=self.epochs, **kw)
 
     def vocab_size(self):
         return self.tt.n_vocab

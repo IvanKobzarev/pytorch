@@ -19,15 +19,16 @@ PATH = "/checkpoint/rigi/data/{split}.bag"
 
 
 class Dataset:
-    def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, nreg=0, greyout_frac=0.0, tokenizer=None, seed=0, question_suffix=""):
+    def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, nreg=0, greyout_frac=0.0, tokenizer=None, question_suffix="", seed=0, epochs=None):
         self.fspec = basepath.format(split=split)
         self.ps = dict(ph=ps, pw=ps)
         self.max_patches = max_patches
         self.nreg = nreg
         self.ttkw = tokenizer or {}
         self.greyout_frac = greyout_frac
-        self.seed = seed
         self.question_suffix = question_suffix
+        self.epochs = epochs
+        self.seed = seed
 
     @property  # Not a cached_property because BagzReader is not picklable.
     def reader(self):  # which would make the whole class unpicklable.
@@ -99,7 +100,7 @@ class Dataset:
         })  # fmt: skip
 
     def make_exids(self, **kw):
-        yield from shuffled_iota_exids(len(self.reader), **kw)
+        yield from shuffled_iota_exids(len(self.reader), epochs=self.epochs, **kw)
 
     def vocab_size(self):
         return self.tt.n_vocab
