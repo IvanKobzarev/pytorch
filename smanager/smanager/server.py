@@ -171,7 +171,19 @@ def extract_common_name(workdir_names, xid):
 
 
 def _extra_info(xid_info):
-    xid, info = xid_info
+    """Get extra info for an XID.
+
+    Args:
+        xid_info: Tuple of (xid, info) or (xid, info, skip_config_loading)
+            If skip_config_loading is True, skip loading config.json files
+            (faster but won't detect duplicate workdirs for warnings).
+    """
+    if len(xid_info) == 3:
+        xid, info, skip_config_loading = xid_info
+    else:
+        xid, info = xid_info
+        skip_config_loading = False
+
     wd_path = BASEDIR / info["wd"]
     try:
         info["user"] = wd_path.owner()
@@ -188,10 +200,11 @@ def _extra_info(xid_info):
             if wuwd.is_dir():
                 info["wus"][str(wuwd.name)] = (wuwd / "DONE").exists()
                 workdir_names.append(wuwd.name)
-                # Load config to get wid for duplicate detection
-                config = load_config(wuwd)
-                wid = config.get("wid", wuwd.name)
-                wid_counts[wid] = wid_counts.get(wid, 0) + 1
+                if not skip_config_loading:
+                    # Load config to get wid for duplicate detection
+                    config = load_config(wuwd)
+                    wid = config.get("wid", wuwd.name)
+                    wid_counts[wid] = wid_counts.get(wid, 0) + 1
         try:
             info["config"] = next(re.finditer(r"bv2/config/(.*?) ", launchinfo.read_text())).group(1)
         except:
@@ -202,10 +215,11 @@ def _extra_info(xid_info):
         for wuwd in wd_path.iterdir():
             if wuwd.is_dir():
                 workdir_names.append(wuwd.name)
-                # Load config to get wid for duplicate detection
-                config = load_config(wuwd)
-                wid = config.get("wid", wuwd.name)
-                wid_counts[wid] = wid_counts.get(wid, 0) + 1
+                if not skip_config_loading:
+                    # Load config to get wid for duplicate detection
+                    config = load_config(wuwd)
+                    wid = config.get("wid", wuwd.name)
+                    wid_counts[wid] = wid_counts.get(wid, 0) + 1
     info["name"] = extract_common_name(workdir_names, xid)
     # Count WUs with duplicate workdirs (warning_count)
     info["warning_count"] = sum(1 for c in wid_counts.values() if c > 1)
@@ -427,12 +441,12 @@ def get_overview_inactive(include_hidden: bool = False):
     cold_xids = {xid: inactive_xids[xid] for xid in inactive_list[:NUM_RECENT]}
     frozen_xids = {xid: inactive_xids[xid] for xid in inactive_list[NUM_RECENT:]}
 
-    # Add extra info with threading
-    cold_items = [(xid, info) for xid, info in cold_xids.items()]
+    # Add extra info with threading (skip config loading for faster response)
+    cold_items = [(xid, info, True) for xid, info in cold_xids.items()]
     cold_results = list(executor.map(_extra_info, cold_items))
     cold_xids = dict(cold_results)
 
-    frozen_items = [(xid, info) for xid, info in frozen_xids.items()]
+    frozen_items = [(xid, info, True) for xid, info in frozen_xids.items()]
     frozen_results = list(executor.map(_extra_info, frozen_items))
     frozen_xids = dict(frozen_results)
 
