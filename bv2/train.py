@@ -26,11 +26,11 @@ import torch.distributed.checkpoint as dcp
 import torch.distributed.checkpoint.state_dict as dcpsd
 from torch.profiler import ProfilerActivity, profile, record_function
 
+import bv2.metrics
 import bv2.pdb_distr
 import bv2.simple_data
 import bv2.simple_fsdp
 import bv2.utils as u
-from bv2.metrics import WandbLogger
 from bv2.model import SimpleTransformer
 from bv2.muon import Muon
 
@@ -77,9 +77,9 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         mesh_dim_names=("dp",),  # Add "tp" for 2d parallel
     )
 
-    # Get workdir from rank0 to make sure it's consistent across hosts (timestamp)
-    workdir = pjoin("/checkpoint/rigi/bv2/workdirs", c.get("xid", ""), name)
-    workdir = u.broadcast_object_from(rank=0, obj=workdir)
+    # Get xid/name from rank0 to make sure it's consistent across hosts (if it has timestamp)
+    xid, name = u.broadcast_object_from(rank=0, obj=(c.get("xid", ""), name))
+    workdir = pjoin("/checkpoint/rigi/bv2/workdirs", xid, name)
     prints0(f"Workdir: {u.BLUE}{workdir}{u.RESET}")
 
     # Now that we know the final workdir, dump some info in it and start wandb with it.
@@ -151,7 +151,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     # Potentially resume/fork from a checkpoint, if not, init stuff.
     first_step, tokens_seen, examples_seen = 0, 0, 0
-    resume_data, resume_wandb = {}, None
+    resume_data, resume_metrics = {}, {}
 
     # Checkpoint loading priority: resume > fork > init
     ckpt_path = c.get("fork") or c.get("init")
@@ -163,17 +163,20 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             first_step, resume_data = extras["step"], extras["data"]
             tokens_seen, examples_seen = extras["tokens_seen"], extras["examples_seen"]
             if is_resuming:
-                resume_wandb = extras["metrics"]
+                resume_metrics = extras.get("metrics", {})
 
-    wlogger = WandbLogger(
-        c.to_dict(), rank, name, workdir, project="bv2" if c.nsteps >= 50 else "bv2-dev",
-        resume=resume_wandb, first_step=first_step,
+    mw = bv2.metrics.MultiWriter(
+        bytes=bv2.metrics.BytesWriter(rank, workdir, first_step),
+        wandb=bv2.metrics.WandbWriter(
+            c.to_dict(), rank, name, workdir, project="bv2" if c.nsteps >= 50 else "bv2-dev",
+            resume=resume_metrics.get("wandb"), first_step=first_step,
+        ),
+        plattli=bv2.metrics.PlattliWriter(rank, workdir, first_step),
     )
     # Log once more here for two reasons: (1) track in wandb and (2) after ckpt resume.
     if rank == 0:
         summary_table(model, stats=c.get("param_stats", False))
     prints0(model)
-    wlogger.log({f"pnorm/{n}": global_reduce(p, "norm") for n, p in model.named_parameters()})
 
     peak_mems = []
     train_times = []
@@ -216,12 +219,12 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             args = {k: v for k, v in ev.to_dict().items() if k not in {"type", "data", "steps"}}
             with torch.no_grad():
                 if results := em.run(get_fwd(ev_name), ds_ev, **args, rank=rank, world_size=world_size, device=device):
-                    wlogger.log({f"{ev_name}/{k}": v for k, v in results.items()})
+                    mw.log({f"{ev_name}/{k}": v for k, v in results.items()}, flush=True)
                     print0("")  # End the line we did not end above.
                     for k, v in results.items():
                         prints0(f"Eval results: {ev_name}/{k}: {v}")
             distr.barrier()  # For accurate timing and avoiding u.about_to_get_killed-related divergence.
-            wlogger.log({f"chrono/evals/{ev_name}": perf_counter() - tev0})
+            mw.log({f"chrono/evals/{ev_name}": perf_counter() - tev0})
 
     per_src_examples_seen, per_src_tokens_seen = Counter(), Counter()
     for step, data in zip(
@@ -249,7 +252,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
         lr = sched * c.lr
         set_lr_(optim, lr)
-        wlogger.log({"chrono/lr": lr, "chrono/sched": sched})
+        mw.log({"chrono/lr": lr, "chrono/sched": sched})
 
         model.zero_grad(set_to_none=True)
 
@@ -258,15 +261,15 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         num_examples = sum(len(l) for l in all_lens)
         tokens_seen += num_tokens
         examples_seen += num_examples
-        wlogger.log({"chrono/tokens_seen": tokens_seen})
-        wlogger.log({"chrono/examples_seen": examples_seen})
-        wlogger.log({"chrono/num_tokens": num_tokens})
-        wlogger.log({"chrono/num_examples": num_examples})
-        wlogger.log({"chrono/percent": (step + 1) / c.nsteps})
+        mw.log({"chrono/tokens_seen": tokens_seen})
+        mw.log({"chrono/examples_seen": examples_seen})
+        mw.log({"chrono/num_tokens": num_tokens})
+        mw.log({"chrono/num_examples": num_examples})
+        mw.log({"chrono/percent": (step + 1) / c.nsteps})
 
         # Need to log param norms at this step before the update
         if step < 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
-            wlogger.log({f"pnorm/{n}": global_reduce(p, "norm") for n, p in model.named_parameters()})
+            mw.log({f"pnorm/{n}": global_reduce(p, "norm") for n, p in model.named_parameters()})
 
         local_loss, extras = _fwd_and_bwd_step(
             torch.tensor(c.wd * sched) if c.wd else None,
@@ -280,13 +283,13 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             np.r_[local_loss.cpu(), extras["pplx"].cpu(), extras["ncorrect"].cpu()]))
 
         prints0(f"step {step}: loss {global_loss.item():.8f}")
-        wlogger.log({"train/pplx": global_pplx.item() / num_examples})
-        wlogger.log({"train/loss": global_loss.item()})  # loss used for bwd, so already normalized by a global weight
-        wlogger.log({"train/tokacc": global_ncorrect.item() / extras["global_total_loss_toks"].item()})
-        wlogger.log({"train/n_loss_toks": extras["global_total_loss_toks"].item()})
+        mw.log({"train/pplx": global_pplx.item() / num_examples})
+        mw.log({"train/loss": global_loss.item()})  # loss used for bwd, so already normalized by a global weight
+        mw.log({"train/tokacc": global_ncorrect.item() / extras["global_total_loss_toks"].item()})
+        mw.log({"train/n_loss_toks": extras["global_total_loss_toks"].item()})
         for i, blk_extras in extras["blk"].items():
             max_logit = max(u.all_gather_object(blk_extras["attn"]["max_logit"].cpu())).item()
-            wlogger.log({f"attn_max_logit/blk{i}": max_logit})
+            mw.log({f"attn_max_logit/blk{i}": max_logit})
 
         # For dataset mixtures, collect and report per-component stats and loss.
         # TODO: Update this to be global, or at least check!
@@ -294,7 +297,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             # Count the number of examples of each subset source:
             all_counts = u.all_gather_object(Counter(data["src"]))
             per_src_examples_seen = sum(all_counts, per_src_examples_seen)
-            wlogger.log({f"mix_examples_seen/{n}": c for n, c in per_src_examples_seen.items()})
+            mw.log({f"mix_examples_seen/{n}": c for n, c in per_src_examples_seen.items()})
 
             per_src_toks = Counter()
             per_src_pplx = defaultdict(list)
@@ -304,30 +307,30 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                 per_src_pplx[src].append((extras["tok_losses"] * iseq_mask[:-1]).sum().cpu())
 
             per_src_tokens_seen = sum(u.all_gather_object(per_src_toks), per_src_tokens_seen)
-            wlogger.log({f"mix_tokens_seen/{n}": v.item() for n, v in per_src_tokens_seen.items()})
+            mw.log({f"mix_tokens_seen/{n}": v.item() for n, v in per_src_tokens_seen.items()})
 
             all_pplx = u.all_gather_object(per_src_pplx)  # List of dict of list
             for src in {k for d in all_pplx for k in d}:  # Union of all seen src
                 pplx = np.concat([d.get(src, []) for d in all_pplx]).mean()  # In nats
-                wlogger.log({f"mix_pplx/{src}": pplx / np.log(2)})  # In bits
+                mw.log({f"mix_pplx/{src}": pplx / np.log(2)})  # In bits
 
         # Sync for getting accurate "global" timings
         torch.cuda.synchronize()
         distr.barrier()
         train_times.append(perf_counter() - t_step_start)
         peak_mems.append(torch.cuda.max_memory_allocated() / 1024**2)  # MiB
-        wlogger.log({"chrono/peakmem": peak_mems[-1]})
-        wlogger.log({"chrono/traintime": train_times[-1]})
-        wlogger.log({"chrono/steptime": t_step_start - t_prev_step_start})
-        wlogger.log({"chrono/proctime": perf_counter() - t0})
-        wlogger.log({"chrono/datawait": t_step_start - t_prev_step_end})
+        mw.log({"chrono/peakmem": peak_mems[-1]})
+        mw.log({"chrono/traintime": train_times[-1]})
+        mw.log({"chrono/steptime": t_step_start - t_prev_step_start})
+        mw.log({"chrono/proctime": perf_counter() - t0})
+        mw.log({"chrono/datawait": t_step_start - t_prev_step_end})
 
         # And grad-norms are for this step, but we only get them after the update ran, i.e. here.
         if step < 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
-            wlogger.log({f"gnorm/{n}": global_reduce(p.grad, "norm") for n, p in model.named_parameters()})
+            mw.log({f"gnorm/{n}": global_reduce(p.grad, "norm") for n, p in model.named_parameters()})
 
         # After the update is done, we are at the step+1
-        wlogger.end_step()
+        mw.end_step()
         step += 1
 
         # Checkpoint, but note this is *after* `step`'s update, so +1.
@@ -337,7 +340,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                 "data": data["state_after"][-1],  # NOTE: This differs per process(!)
                 "tokens_seen": tokens_seen,
                 "examples_seen": examples_seen,
-                "metrics": wlogger.save_ckpt(),
+                "metrics": mw.save_ckpt(),
                 "jid": c.get("jid", "n/a"),  # Just for future archeologs.
             })  # fmt: skip
 
@@ -362,11 +365,11 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             with open(pjoin(workdir, f"data_r{rank}.pt"), "wb") as f:
                 torch.save({k: v for k, v in data.items() if k != "flex_masks"}, f)
             if hasattr(ds, "vis_data_wandb"):
-                wlogger.log({f"vis/data{step}": ds.vis_data_wandb(data)})
+                mw.log({f"vis/data{step}": ds.vis_data_wandb(data)})
 
         if step % 1000 == 0 and hasattr(ds, "vis_output_wandb"):
             pred = extras["predictions"].detach().cpu()
-            wlogger.log({f"vis/output{step}": ds.vis_output_wandb(data, pred)})
+            mw.log({f"vis/output{step}": ds.vis_output_wandb(data, pred)})
 
         distr.barrier()  # Sync to get accurate datawait timing.
         t_prev_step_end = perf_counter()
@@ -384,7 +387,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     torch._dynamo.reset()  # Avoid hang: https://x.com/main_horse/status/1937900381574717940
     distr.destroy_process_group()
-    wlogger.finish()
+    mw.finish()
     prints("Destroyed group. All done for real.")
 
 

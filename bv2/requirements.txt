@@ -5,6 +5,7 @@ einops
 ipdb
 numpy
 pillow
+plattli>=0.4.1
 pytest
 pytest-json-report
 rich
