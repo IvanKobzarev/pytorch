@@ -30,6 +30,17 @@ from smanager import __version__
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger(__name__)
 
+
+# Filter to suppress noisy health check logs from uvicorn
+class HealthCheckFilter(logging.Filter):
+    def filter(self, record):
+        msg = record.getMessage()
+        return "/api/health" not in msg and "/api/prefs/favorites" not in msg
+
+
+logging.getLogger("uvicorn.access").addFilter(HealthCheckFilter())
+
+
 app = FastAPI(title="Slurm Manager API")
 
 SCRIPT_DIR = Path(__file__).parent
@@ -231,7 +242,6 @@ def _extra_info(xid_info):
 
 @app.get("/api/health")
 def health():
-    log.info("GET /api/health")
     return {"status": "ok", "group": GROUP, "user": getuser(), "actions_enabled": ACTIONS_ENABLED}
 
 
