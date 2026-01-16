@@ -39,8 +39,7 @@ def get_config():
     c.lr = 3e-4
     c.wd = 1e-4
 
-    c.muon.regexps = [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r'.*unemb.head.weight', r'.*img_emb.proj.weight']
-    c.muon.beta2 = 0.99
+    c.muon.regexps = [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*txt_unemb.head.weight", r".*img_emb.proj.weight"]
 
     c.model.dim = 2048
     c.model.depth = 8

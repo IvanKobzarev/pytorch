@@ -29,12 +29,11 @@ class Muon(torch.optim.Optimizer):
         self,
         params,
         *,
-        lr=torch.tensor(3e-4),  # tensor to avoid recompiles
+        lr,
         muon_momentum=0.95,
         muon_nesterov=True,
         ns_steps=5,
         ns_eps=1e-7,
-        rms_scale=0.2,
         beta1=0.9,
         beta2=0.99,
         eps=1e-8):
@@ -46,7 +45,6 @@ class Muon(torch.optim.Optimizer):
             muon_nesterov=muon_nesterov,
             ns_steps=ns_steps,
             ns_eps=ns_eps,
-            rms_scale=rms_scale,
             adam_beta1=beta1,
             adam_beta2=beta2,
             adam_eps=eps,
@@ -91,7 +89,7 @@ class Muon(torch.optim.Optimizer):
                     GO = ns_ortho(G_full, steps=group["ns_steps"], eps=group["ns_eps"])
 
                     # Scaling rule from https://arxiv.org/abs/2502.16982.
-                    GO = GO * float(group["rms_scale"]) * np.sqrt(max(GO.shape))
+                    GO = GO * 0.2 * np.sqrt(max(GO.shape))
 
                     GO_dt = DTensor.from_local(
                         GO,

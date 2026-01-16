@@ -132,8 +132,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     muon_params = {"params": [p for n, p in model.named_parameters() if _is_muon(n)], "use_muon": True}
     adam_params = {"params": [p for n, p in model.named_parameters() if not _is_muon(n)], "use_muon": False}
 
-    optim = Muon([muon_params, adam_params], **muon_args)
-    optim.init_state()
+    optim = Muon([muon_params, adam_params], lr=torch.tensor(0.0), **muon_args)
+    optim.init_state() # we init state to avoid recompiles
     decay_params = [p for n, p in model.named_parameters() if is_decay(n)]
 
     @record_function("fwd_and_bwd_step")
@@ -607,7 +607,7 @@ def get_config():
     c.lr = 3e-4
     c.wd = lambda: c.lr * 0.1
 
-    c.muon.regexps = [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r'.*unemb.head.weight', r'.*img_emb.proj.weight']
+    c.muon.regexps = [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*txt_unemb.head.weight", r".*img_emb.proj.weight"]
 
     c.model.dim = 4096
     c.model.depth = 4
