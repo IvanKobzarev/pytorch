@@ -1367,9 +1367,13 @@
                 // Push to history when switching tabs
                 if (tab.dataset.view === 'xid-detail') {
                     const xid = document.getElementById('xidInput').value;
-                    if (xid) history.pushState({ xid }, '', '#' + xid);
+                    if (xid) {
+                        history.pushState({ xid }, '', '#' + xid);
+                        loadXidDetail();
+                    }
                 } else {
                     history.pushState({ view: tab.dataset.view }, '', window.location.pathname);
+                    refreshAll();
                 }
             });
         });
