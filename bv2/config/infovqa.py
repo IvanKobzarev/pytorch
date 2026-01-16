@@ -44,6 +44,7 @@ def get_config():
             max_patches = max_patches,
             nreg = lambda: c.model.reg.nreg,
             greyout_frac = frac,
+            epochs = 1,
         )
 
         c.evals[f"val_pplx{s}"].type = "pplx"
@@ -63,6 +64,7 @@ def get_config():
     # Nice to visualize predictions in W&B periodically
     c.evals.decode.type = "decode"
     c.evals.decode.steps = 900  # ~5ep
+    c.evals.decode.data.epochs = 1
     c.evals.decode.data.name = "vqa"
     c.evals.decode.data.split = "infovqa_flat/val"
     c.evals.decode.data.max_patches = lambda: c.decode_max_patches

@@ -31,6 +31,7 @@ def get_config():
 
     c.evals.pplx.type = "pplx"
     c.evals.pplx.steps = 500
+    c.evals.pplx.data.epochs = 1
     c.evals.pplx.data.name = "deduped_code"
     c.evals.pplx.data.split = "val"
     c.evals.pplx.iter.maxtok = lambda: c.maxtok

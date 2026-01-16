@@ -38,6 +38,7 @@ def get_config():
         k = sws.Config()
         k.type = "pplx"
         k.steps = 2000 if blind else 200
+        k.data.epochs = 1
         k.data.name = "vqa"
         k.data.split = split
         k.data.max_patches = lambda: c.data.max_patches
@@ -54,6 +55,7 @@ def get_config():
         k = sws.Config()
         k.type = "vqa"
         k.steps = lambda: range(0, c.nsteps, 2000 if blind else 500)  # Skip first, then every 5k
+        k.data.epochs = 1
         k.data.name = "vqa"
         k.data.split = split
         k.data.max_patches = lambda: c.data.max_patches

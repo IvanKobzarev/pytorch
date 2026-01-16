@@ -43,6 +43,7 @@ def get_config():
     c.evals.pplx.iter.seed = 31337  # Defines the "fixed val split".
     c.evals.pplx.data.name = "synth_ocr_detect"
     c.evals.pplx.data.n = 2048
+    c.evals.pplx.data.epochs = 1
     # Carry over all other settings from train
     c.evals.pplx.data.mode = lambda: c.data.mode
     c.evals.pplx.data.tiptoi = lambda: c.data.tiptoi

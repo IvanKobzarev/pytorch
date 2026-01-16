@@ -58,10 +58,12 @@ def get_config():
     c.evals.pplx.iter.maxtok = lambda: c.maxtok
     c.evals.pplx.iter.seed = 31337  # Defines the "fixed val split".
     c.evals.pplx.data = get_data_config(n=128)
+    c.evals.pplx.data.epochs = 1
 
     c.evals.vqa.type = "vqa"
     c.evals.vqa.steps = lambda: range(1000, c.nsteps, 2000)
     c.evals.vqa.data = get_data_config(seed=31337, n=128)
+    c.evals.vqa.data.epochs = 1
     c.evals.vqa.decode.max_prefix = 1024
     c.evals.vqa.decode.batch_size = 32
     c.evals.vqa.decode.max_decode = 256
@@ -71,6 +73,7 @@ def get_config():
     c.evals.decode.type = "decode"
     c.evals.decode.steps = lambda: range(1000, c.nsteps, 2000)
     c.evals.decode.data = get_data_config(seed=31337, n=128)
+    c.evals.decode.data.epochs = 1
     c.evals.decode.decode.max_prefix = 1024
     c.evals.decode.decode.batch_size = 32
     c.evals.decode.decode.max_decode = 256
