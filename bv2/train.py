@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import sys
 from collections import Counter, defaultdict
 from datetime import datetime
 from functools import cache, partial
@@ -17,6 +18,7 @@ from os.path import join as pjoin
 from time import perf_counter
 
 import numpy as np
+import rich
 import sws
 import torch
 import torch.distributed as distr
@@ -77,7 +79,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     # Get workdir from rank0 to make sure it's consistent across hosts (timestamp)
     workdir = pjoin("/checkpoint/rigi/bv2/workdirs", c.get("xid", ""), name)
     workdir = u.broadcast_object_from(rank=0, obj=workdir)
-    prints0(f"Workdir: {workdir}")
+    prints0(f"Workdir: {u.BLUE}{workdir}{u.RESET}")
 
     # Now that we know the final workdir, dump some info in it and start wandb with it.
     if rank == 0:
@@ -204,7 +206,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             if u.about_to_get_killed() or not (is_step or step == c.nsteps):  # Always run on last step.
                 continue
             tev0 = perf_counter()
-            prints0(f"Running evaluator {ev_name}", end="", flush=True)
+            prints0(f"Running evaluator {u.BLUE}{ev_name}{u.RESET}", end="", flush=True)
             em = import_module(f"bv2.eval.{ev.type}")
             ds_ev = bv2.simple_data.from_config(ev.data.to_dict())
             args = {k: v for k, v in ev.to_dict().items() if k not in {"type", "data", "steps"}}
@@ -374,7 +376,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     else:
         with open(pjoin(workdir, "DONE"), "w+") as f:
             f.write("All good!")
-        prints0(f"Done. Workdir: {workdir}")
+        prints0(f"Done. Workdir: {u.BLUE}{workdir}{u.RESET}")
 
     torch._dynamo.reset()  # Avoid hang: https://x.com/main_horse/status/1937900381574717940
     distr.destroy_process_group()
@@ -433,9 +435,7 @@ def is_decay(name):
 
 
 def summary_table(model, stats=True):
-    import rich
     from rich.table import Table
-
     tbl = Table(
         show_header=True,
         header_style="bold magenta",
@@ -632,6 +632,9 @@ if __name__ == "__main__":
         print("Local run on single-gpu")
         rank = local_rank = 0
         world_size = 1
+
+    if not sys.stdout.isatty():  # Don't squeeze tables or use colors in logs!
+        rich.reconfigure(width=500, color_system=None)
 
     prints = partial(print_stamped, rank=rank)
     print0 = print if rank == 0 else lambda *args, **kwargs: None

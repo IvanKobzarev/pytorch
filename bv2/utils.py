@@ -1,6 +1,7 @@
 import hashlib
 import re
 import signal
+import sys
 import warnings
 from contextlib import ContextDecorator
 from functools import cache
@@ -11,6 +12,15 @@ from types import FunctionType
 import numpy as np
 import torch
 import torch.distributed as distr
+
+# ANSI escape codes, but not in logfiles.
+RED = '\033[31m' if sys.stdout.isatty() else ''
+GREEN = '\033[32m' if sys.stdout.isatty() else ''
+YELLOW = '\033[33m' if sys.stdout.isatty() else ''
+BLUE = '\033[34m' if sys.stdout.isatty() else ''
+BOLD = '\033[1m' if sys.stdout.isatty() else ''
+RESET = '\033[0m' if sys.stdout.isatty() else ''
+LIGHT = '\033[90m' if sys.stdout.isatty() else ''
 
 
 # Can be used both as function annotator, and as with-context.
