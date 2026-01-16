@@ -328,6 +328,7 @@
         <input type="text" id="serverUrl" class="server-input" placeholder=":port or host:port" onkeydown="if(event.key==='Enter')addServer()" />
         <button class="btn" onclick="addServer()">Add</button>
         <button class="btn btn-accent" onclick="refresh()">Refresh</button>
+        <span id="loadStatus" style="font-size: 11px; color: var(--muted); margin-left: 8px;"></span>
         <div class="theme-toggle">
             <button onclick="setTheme('light')" id="theme-light">Light</button>
             <button onclick="setTheme('dark')" id="theme-dark">Dark</button>
@@ -761,23 +762,47 @@
 
         let inactiveLoaded = false;
 
+        function setLoadStatus(text) {
+            document.getElementById('loadStatus').textContent = text;
+        }
+
         async function refreshAll() {
             overviewData = {};
             inactiveLoaded = false;
             document.querySelector('#hotTable tbody').innerHTML = '<tr><td colspan="12" class="loading">Loading...</td></tr>';
             document.querySelector('#coldTable tbody').innerHTML = '<tr><td colspan="9" class="loading">Loading inactive experiments...</td></tr>';
 
-            // Phase 1: Fetch prefs and hot overview in parallel
-            await Promise.all([
-                loadPrefsFromServers(),
-                ...servers.map((_, i) => fetchOverview(i))
-            ]);
-            renderOverview();  // Render hot immediately
+            const numServers = servers.length;
+            let hotCompleted = 0;
+            let inactiveCompleted = 0;
 
-            // Phase 2: Fetch cold/frozen in background
-            await Promise.all(servers.map((_, i) => fetchInactiveOverview(i)));
-            inactiveLoaded = true;
-            renderOverview();  // Re-render with cold/frozen data
+            setLoadStatus(`Loading hot... 0/${numServers}`);
+
+            // Phase 1: Fetch prefs and hot overview, render progressively
+            const prefsPromise = loadPrefsFromServers();
+            const hotPromises = servers.map((_, i) =>
+                fetchOverview(i).then(() => {
+                    hotCompleted++;
+                    setLoadStatus(`Loading hot... ${hotCompleted}/${numServers}`);
+                    renderOverview();
+                })
+            );
+
+            await Promise.all([prefsPromise, ...hotPromises]);
+
+            // Phase 2: Fetch inactive, render progressively
+            setLoadStatus(`Loading inactive... 0/${numServers}`);
+            const inactivePromises = servers.map((_, i) =>
+                fetchInactiveOverview(i).then(() => {
+                    inactiveCompleted++;
+                    setLoadStatus(`Loading inactive... ${inactiveCompleted}/${numServers}`);
+                    inactiveLoaded = true;  // At least one server has inactive data
+                    renderOverview();
+                })
+            );
+
+            await Promise.all(inactivePromises);
+            setLoadStatus('');
         }
 
         function refresh() {
