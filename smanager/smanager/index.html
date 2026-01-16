@@ -1338,7 +1338,7 @@
                 html += `
                     <tr data-jid="${wu.jid}">
                         <td class="mono text-right">${widDisplay}</td>
-                        <td class="mono"><a href="https://www.internalfb.com/fair_hub/job/FAIR_SC_3/${wu.jid}/details" target="_blank">${wu.jid}</a><span class="copy-btn" onclick="navigator.clipboard.writeText('${wu.jid}')" title="Copy">⎘</span></td>
+                        <td class="mono"><a href="${serverUrl}/log/${wu.jid}" target="_blank" title="View Slurm log">${wu.jid}</a><span class="copy-btn" onclick="navigator.clipboard.writeText('${wu.jid}')" title="Copy">⎘</span></td>
                         <td class="mono text-center">${wu.restarts}</td>
                         <td class="text-center" title="${wu.status} (exit: ${wu.exit_code})">${statusEmoji}</td>
                         <td class="text-center">${requeueBtn}</td>

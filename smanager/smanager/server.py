@@ -136,6 +136,7 @@ GROUP = "rigi"
 BASEDIR = Path("/checkpoint/rigi/bv2/workdirs")
 SRCDIR = Path("/checkpoint/rigi/bv2/srcdirs")
 FBIDIR = Path("/checkpoint/rigi/fbi")
+SLURM_OUT_DIR = Path("/checkpoint/rigi/bv2/slurm_out")
 PREFS_DIR = Path(f"/checkpoint/rigi/{getuser()}")  # Set via --prefs-dir flag
 NUM_RECENT = 50
 ACTIONS_ENABLED = True  # Set via --no-actions flag
@@ -842,6 +843,21 @@ def code_browser_page(xid: str, file_path: str = ""):
     html = (SCRIPT_DIR / "code.html").read_text()
     html = html.replace("{{VERSION}}", __version__)
     return Response(content=html, media_type="text/html")
+
+
+@app.get("/log/{jid}")
+def get_log(jid: int):
+    """Serve a Slurm job's log file."""
+    # Search for the log file in all user directories
+    log_filename = f"{jid}.txt"
+    for user_dir in SLURM_OUT_DIR.iterdir():
+        if not user_dir.is_dir():
+            continue
+        log_path = user_dir / log_filename
+        if log_path.exists():
+            content = log_path.read_text(errors="replace")
+            return Response(content=content, media_type="text/plain; charset=utf-8")
+    raise HTTPException(status_code=404, detail=f"Log file not found for job {jid}")
 
 
 @app.post("/api/action/stop/{jid}")
