@@ -32,6 +32,7 @@ import bv2.simple_fsdp
 import bv2.utils as u
 from bv2.metrics import WandbLogger
 from bv2.model import SimpleTransformer
+from bv2.muon import Muon
 
 # Allow using the (lower-precision) tensorcores for all fp32 matmuls.
 # See https://docs.pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices
@@ -123,13 +124,16 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     if rank == 0:
         summary_table(model, stats=c.get("param_stats", False))
 
-    # NOTE: Optimizer doesn't alloc here, only allocs on `.step()`.
-    optim = torch.optim.AdamW(
-        model.parameters(),
-        betas=(torch.tensor(c.get("beta1", 0.9)), torch.tensor(c.get("beta2", 0.999))),
-        lr=torch.tensor(0.0),
-        weight_decay=0,  # Can't even set None!
-        fused=True)
+    muon_args = c.get("muon", sws.Config()).to_dict()
+    muon_regexps = muon_args.pop("regexps", [])
+    def _is_muon(name):
+        return any(re.fullmatch(r, name) for r in muon_regexps)
+
+    muon_params = {"params": [p for n, p in model.named_parameters() if _is_muon(n)], "use_muon": True}
+    adam_params = {"params": [p for n, p in model.named_parameters() if not _is_muon(n)], "use_muon": False}
+
+    optim = Muon([muon_params, adam_params], **muon_args)
+    optim.init_state()
     decay_params = [p for n, p in model.named_parameters() if is_decay(n)]
 
     @record_function("fwd_and_bwd_step")
@@ -602,6 +606,8 @@ def get_config():
     c.warmup_nsteps = 3
     c.lr = 3e-4
     c.wd = lambda: c.lr * 0.1
+
+    c.muon.regexps = [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r'.*unemb.head.weight', r'.*img_emb.proj.weight']
 
     c.model.dim = 4096
     c.model.depth = 4
