@@ -400,7 +400,7 @@
             <select id="xidServer"></select>
             <span class="metric-input">
                 <label>Metric:</label>
-                <input type="text" id="metricInput" value="train/loss" />
+                <input type="text" id="metricInput" value="train/loss" onchange="saveMetricPref()" />
             </span>
         </div>
         <div id="xidContent">
@@ -428,6 +428,16 @@
             updateThemeButtons(saved);
         }
         initTheme();
+
+        // Metric preference
+        function saveMetricPref() {
+            const metric = document.getElementById('metricInput').value.trim();
+            localStorage.setItem('smanager_metric', metric);
+        }
+        function loadMetricPref() {
+            const saved = localStorage.getItem('smanager_metric') || 'train/loss';
+            document.getElementById('metricInput').value = saved;
+        }
 
         const STATE_ICONS = {
             RUNNING: { icon: 'Run', cls: 'status-run' },
@@ -1211,17 +1221,17 @@
 
             const content = document.getElementById('xidContent');
             content.innerHTML = '<p class="loading">Auto-discovering server...</p>';
+            const metric = document.getElementById('metricInput').value.trim();
 
             // Try each server until one succeeds
             for (let i = 0; i < servers.length; i++) {
                 try {
-                    const resp = await fetch(`${servers[i].url}/api/xid/${xid}`, { signal: AbortSignal.timeout(10000) });
+                    const resp = await fetch(`${servers[i].url}/api/xid/${xid}?metric=${encodeURIComponent(metric)}`, { signal: AbortSignal.timeout(10000) });
                     if (resp.ok) {
                         servers[i].status = 'ok';
                         renderServers();
                         document.getElementById('xidServer').value = i;
                         const data = await resp.json();
-                        const metric = document.getElementById('metricInput').value.trim();
                         renderXidDetail(data, metric);
                         return;
                     }
@@ -1248,7 +1258,7 @@
             content.innerHTML = '<p class="loading">Loading...</p>';
 
             try {
-                const resp = await fetch(`${servers[serverIdx].url}/api/xid/${xid}`, { signal: AbortSignal.timeout(30000) });
+                const resp = await fetch(`${servers[serverIdx].url}/api/xid/${xid}?metric=${encodeURIComponent(metric)}`, { signal: AbortSignal.timeout(30000) });
                 if (!resp.ok) throw new Error('Failed to fetch');
                 servers[serverIdx].status = 'ok';
                 renderServers();
@@ -1401,6 +1411,7 @@
         // Init
         async function init() {
             loadServers();
+            loadMetricPref();
             servers.forEach((_, i) => checkServerHealth(i));
 
             // Load prefs from all servers (merges, syncs back)

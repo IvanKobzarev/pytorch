@@ -19,6 +19,8 @@ from functools import partial
 
 import zstandard
 
+from plattli import Reader as PlattliReader, has_plattli
+
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
@@ -474,15 +476,36 @@ def load_config(wd_path):
             return {}
 
 
-def last_metric(wd_path):
+def last_metric(wd_path, metric_name="train/loss"):
+    # Try plattli format first
+    if has_plattli(wd_path):
+        try:
+            with PlattliReader(wd_path) as r:
+                result = {}
+                metrics = r.metrics()
+                # Get step from first metric's last index
+                if metrics:
+                    indices = r.metric_indices(metrics[0])
+                    if len(indices) > 0:
+                        result["step"] = int(indices[-1])
+                # Only fetch the requested metric
+                if metric_name in metrics:
+                    values = r.metric_values(metric_name)
+                    if len(values) > 0:
+                        v = values[-1]
+                        result[metric_name] = v.item() if hasattr(v, 'item') else v
+                return result
+        except Exception as e:
+            log.debug("plattli read failed for %s: %s", wd_path, e)
+
+    # Fallback to jsonl
     fname = wd_path / "metrics.jsonl"
     if not fname.exists():
         return {}
     try:
-        # Use tail -n 1 to efficiently read last line (seeks from end, fast on NFS)
-        result = subprocess.run(["tail", "-n", "1", str(fname)], capture_output=True, text=True)
-        if result.returncode == 0 and result.stdout.strip():
-            return json.loads(result.stdout.strip())
+        res = subprocess.run(["tail", "-n", "1", str(fname)], capture_output=True, text=True)
+        if res.returncode == 0 and res.stdout.strip():
+            return json.loads(res.stdout.strip())
     except:
         pass
     return {}
@@ -505,15 +528,15 @@ def _load_config_only(args):
 
 
 def _load_metric_only(args):
-    wd_path, wuwd_name = args
-    return wuwd_name, last_metric(wd_path / wuwd_name)
+    wd_path, wuwd_name, metric_name = args
+    return wuwd_name, last_metric(wd_path / wuwd_name, metric_name)
 
 
 @app.get("/api/xid/{xid}")
-def get_xid_info(xid: str):
+def get_xid_info(xid: str, metric: str = "train/loss"):
     """Get detailed info for a specific XID."""
     t0 = time.time()
-    log.info("GET /api/xid/%s - fetching...", xid)
+    log.info("GET /api/xid/%s - fetching... (metric=%s)", xid, metric)
     wd_path = BASEDIR / xid
     if not wd_path.exists():
         # Try to find it
@@ -545,7 +568,7 @@ def get_xid_info(xid: str):
 
     # Load metrics in parallel
     t2 = time.time()
-    metric_results = list(executor.map(_load_metric_only, [(wd_path, wd) for wd in workdirs]))
+    metric_results = list(executor.map(_load_metric_only, [(wd_path, wd, metric) for wd in workdirs]))
     log.info("  - loaded metrics in %.2fs", time.time() - t2)
 
     configs = {}
