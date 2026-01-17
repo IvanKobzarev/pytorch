@@ -602,19 +602,12 @@ def get_xid_info(xid: str, metric: str = "train/loss"):
         configs[wid] = config
         last_metrics[wid] = metric_by_wuwd.get(wuwd_name, {})
 
-    # Debug: log first config's keys
-    if configs:
-        first_config = next(iter(configs.values()))
-        log.info("  - sample config keys: %s", list(first_config.keys())[:15])
-
     # Get sacct info for all jids
     jids = set()
     for wid, config in configs.items():
         if "jid" in config:
             jids.add(config["jid"])
     jids.update(int(jid) for jid in jobs_by_jid.keys() if jid.isdigit())
-    log.info("  - found %d jids to fetch sacct for (configs have jid: %d)",
-             len(jids), sum(1 for c in configs.values() if "jid" in c))
 
     t2 = time.time()
     saccts = {}
@@ -660,12 +653,21 @@ def get_xid_info(xid: str, metric: str = "train/loss"):
             if not m:
                 m = re.search(r'launch_(\d+)\.sh', submit_line)
             if m:
-                wid = m.group(1)
+                wid = int(m.group(1))  # Convert to int to match configs keys
         # If we couldn't extract wid, use "??" placeholder
         if wid is None:
             wid = f"??{pending_unknown_idx}"
             pending_unknown_idx += 1
-        if wid not in configs:
+        # If wid exists but old job is not in squeue, replace with new pending job
+        if wid in configs:
+            old_jid = configs[wid].get("jid")
+            old_in_squeue = str(old_jid) in jobs_by_jid
+            if not old_in_squeue:
+                # Old job finished, new job is pending - update to new job
+                configs[wid]["jid"] = jid
+                configs[wid]["pending_only"] = True
+                status[wid] = job_info.get("STATE", "PENDING")
+        else:
             configs[wid] = {"jid": jid, "name": "", "pending_only": True}
             last_metrics[wid] = {}
             status[wid] = job_info.get("STATE", "PENDING")
