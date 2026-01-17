@@ -1417,10 +1417,11 @@
             // Load prefs from all servers (merges, syncs back)
             await loadPrefsFromServers();
 
-            // Now refresh with the merged prefs
-            refreshAll();
+            // If URL has hash, load XID detail directly; otherwise load overview
             if (window.location.hash.length > 1) {
                 loadXidFromHash();
+            } else {
+                refreshAll();
             }
         }
         init();
