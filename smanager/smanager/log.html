@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23121417'/><text x='50%25' y='65%25' font-size='11' text-anchor='middle' fill='%234bc0c8' font-family='serif'>{}</text></svg>">
+    <title>Log Viewer</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --text: #333333;
+            --border: #dddddd;
+            --hover: #e6f2ff;
+            --accent: #4bc0c8;
+            --muted: #666666;
+            --highlight: rgba(255, 251, 204, 0.5);
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #121417;
+                --text: #f0f3f9;
+                --border: rgba(255, 255, 255, 0.08);
+                --hover: rgba(75, 192, 200, 0.15);
+                --accent: #4bc0c8;
+                --muted: #9aa4b1;
+                --highlight: rgba(255, 251, 204, 0.15);
+            }
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; }
+        body {
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 13px;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            padding: 8px 16px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+        .header h1 {
+            font-size: 16px;
+            font-weight: 600;
+        }
+        .header .jid {
+            color: var(--accent);
+            font-family: ui-monospace, monospace;
+        }
+        .header .info {
+            color: var(--muted);
+            font-size: 12px;
+            margin-left: auto;
+        }
+        .header a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+        .header a:hover {
+            text-decoration: underline;
+        }
+        .content {
+            flex: 1;
+            overflow: auto;
+        }
+        .log-view {
+            font-family: ui-monospace, "SF Mono", Monaco, "Cascadia Mono", monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            white-space: pre;
+            padding: 8px 0;
+            min-width: fit-content;
+        }
+        .log-line {
+            display: flex;
+            padding: 0 12px;
+        }
+        .log-line:hover {
+            background: var(--hover);
+        }
+        .log-line:target {
+            background: var(--highlight);
+        }
+        .line-num {
+            color: var(--muted);
+            text-align: right;
+            padding-right: 16px;
+            min-width: 60px;
+            user-select: none;
+            flex-shrink: 0;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .line-num:hover {
+            color: var(--accent);
+        }
+        .line-content {
+            flex: 1;
+        }
+        .loading {
+            padding: 40px;
+            color: var(--muted);
+            text-align: center;
+        }
+        .error {
+            padding: 20px;
+            color: #ef4444;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1><span style="color:var(--accent)">s</span>Manager <span style="font-size: 10px; opacity: 0.3;">v{{VERSION}}</span></h1>
+        <span>Log for job <span class="jid" id="jidDisplay"></span></span>
+        <span class="info" id="lineCount"></span>
+    </div>
+    <div class="content" id="content">
+        <div class="loading">Loading log...</div>
+    </div>
+
+    <script>
+        const jid = window.location.pathname.split('/').pop();
+        document.getElementById('jidDisplay').textContent = jid;
+        document.title = `Log: ${jid}`;
+
+        async function loadLog() {
+            const content = document.getElementById('content');
+            try {
+                const resp = await fetch(`/api/log/${jid}`);
+                if (!resp.ok) throw new Error('Log not found');
+                const text = await resp.text();
+                const lines = text.split('\n');
+
+                document.getElementById('lineCount').textContent = `${lines.length} lines`;
+
+                const html = lines.map((line, i) => {
+                    const num = i + 1;
+                    const escaped = line
+                        .replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;');
+                    return `<div class="log-line" id="L${num}"><a class="line-num" href="#L${num}">${num}</a><span class="line-content">${escaped}</span></div>`;
+                }).join('');
+
+                content.innerHTML = `<div class="log-view">${html}</div>`;
+
+                // Scroll to bottom, or to hash if specified
+                if (window.location.hash) {
+                    const target = document.querySelector(window.location.hash);
+                    if (target) target.scrollIntoView();
+                } else {
+                    content.scrollTop = content.scrollHeight;
+                }
+            } catch (e) {
+                content.innerHTML = `<div class="error">Error: ${e.message}</div>`;
+            }
+        }
+
+        loadLog();
+    </script>
+</body>
+</html>

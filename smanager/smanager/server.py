@@ -871,8 +871,16 @@ def code_browser_page(xid: str, file_path: str = ""):
 
 
 @app.get("/log/{jid}")
+def log_viewer_page(jid: int):
+    """Serve the log viewer page for a job."""
+    html = (SCRIPT_DIR / "log.html").read_text()
+    html = html.replace("{{VERSION}}", __version__)
+    return Response(content=html, media_type="text/html")
+
+
+@app.get("/api/log/{jid}")
 def get_log(jid: int):
-    """Serve a Slurm job's log file."""
+    """Get raw log content for a Slurm job."""
     # Search for the log file in all user directories
     log_filename = f"{jid}.txt"
     for user_dir in SLURM_OUT_DIR.iterdir():
