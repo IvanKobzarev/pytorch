@@ -537,9 +537,13 @@ def _find_xid_path(xid):
     wd_path = BASEDIR / xid
     if wd_path.exists():
         return wd_path
+    # Slow path: iterate BASEDIR to find partial match
+    t0 = time.time()
     for d in BASEDIR.iterdir():
         if d.is_dir() and xid in d.name:
+            log.info("  - _find_xid_path fallback took %.2fs", time.time() - t0)
             return d
+    log.info("  - _find_xid_path fallback took %.2fs (not found)", time.time() - t0)
     return None
 
 
@@ -552,9 +556,12 @@ def get_xid_info(xid: str):
     if not wd_path:
         log.warning("GET /api/xid/%s - not found (%.2fs)", xid, time.time() - t0)
         raise HTTPException(status_code=404, detail=f"XID {xid} not found")
+    log.info("  - found path in %.2fs", time.time() - t0)
 
     # Get current jobs for this xid
+    t1 = time.time()
     lines = run_cmd(f"squeue -n {xid} -O JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:20,NumNodes:20,GRES:20,RestartCnt:20,Reason:20")
+    log.info("  - squeue took %.2fs", time.time() - t1)
     xid_jobs = [[j[i*20:(i+1)*20].strip() for i in range(11)] for j in lines if j.strip()]
     if len(xid_jobs) >= 2:
         headers, job_rows = xid_jobs[0], xid_jobs[1:]
@@ -563,8 +570,9 @@ def get_xid_info(xid: str):
         jobs_by_jid = {}
 
     # Get workdirs
+    t2 = time.time()
     workdirs = [d.name for d in wd_path.iterdir() if d.is_dir()]
-    log.info("  - found %d workdirs", len(workdirs))
+    log.info("  - found %d workdirs (iterdir took %.2fs)", len(workdirs), time.time() - t2)
 
     # Load configs in parallel
     t1 = time.time()
