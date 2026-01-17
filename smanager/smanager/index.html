@@ -1226,13 +1226,15 @@
             // Try each server until one succeeds
             for (let i = 0; i < servers.length; i++) {
                 try {
-                    const resp = await fetch(`${servers[i].url}/api/xid/${xid}?metric=${encodeURIComponent(metric)}`, { signal: AbortSignal.timeout(10000) });
+                    const resp = await fetch(`${servers[i].url}/api/xid/${xid}`, { signal: AbortSignal.timeout(10000) });
                     if (resp.ok) {
                         servers[i].status = 'ok';
                         renderServers();
                         document.getElementById('xidServer').value = i;
                         const data = await resp.json();
                         renderXidDetail(data, metric);
+                        // Fetch metrics separately
+                        fetchAndPopulateMetrics(servers[i].url, xid, metric);
                         return;
                     }
                 } catch (e) {
@@ -1258,16 +1260,57 @@
             content.innerHTML = '<p class="loading">Loading...</p>';
 
             try {
-                const resp = await fetch(`${servers[serverIdx].url}/api/xid/${xid}?metric=${encodeURIComponent(metric)}`, { signal: AbortSignal.timeout(30000) });
+                // Fetch main xid data first (fast, no metrics)
+                const resp = await fetch(`${servers[serverIdx].url}/api/xid/${xid}`, { signal: AbortSignal.timeout(30000) });
                 if (!resp.ok) throw new Error('Failed to fetch');
                 servers[serverIdx].status = 'ok';
                 renderServers();
                 const data = await resp.json();
                 renderXidDetail(data, metric);
+
+                // Then fetch metrics separately (lazy load)
+                fetchAndPopulateMetrics(servers[serverIdx].url, xid, metric);
             } catch (e) {
                 servers[serverIdx].status = 'error';
                 renderServers();
                 content.innerHTML = `<p class="error">Error loading XID: ${e.message}</p>`;
+            }
+        }
+
+        async function fetchAndPopulateMetrics(serverUrl, xid, metric) {
+            try {
+                const resp = await fetch(`${serverUrl}/api/xid/${xid}/metrics?metric=${encodeURIComponent(metric)}`, { signal: AbortSignal.timeout(60000) });
+                if (!resp.ok) return;
+                const metricsData = await resp.json();
+                populateMetrics(metricsData, metric);
+            } catch (e) {
+                console.log('Failed to fetch metrics:', e);
+            }
+        }
+
+        function populateMetrics(metricsData, metricName) {
+            // Update each row's step, metric, and progress cells
+            for (const [wid, metrics] of Object.entries(metricsData)) {
+                const stepCell = document.querySelector(`td[data-wid="${wid}"][data-field="step"]`);
+                const metricCell = document.querySelector(`td[data-wid="${wid}"][data-field="metric"]`);
+                const progressCell = document.querySelector(`td[data-wid="${wid}"][data-field="progress"]`);
+                const nsteps = parseInt(document.querySelector(`tr[data-wid="${wid}"]`)?.dataset?.nsteps) || 0;
+
+                if (stepCell) {
+                    const step = metrics.step;
+                    stepCell.textContent = step ?? '-';
+                }
+                if (metricCell && metricName) {
+                    const v = metrics[metricName];
+                    metricCell.textContent = v !== undefined ? (typeof v === 'number' ? v.toPrecision(3) : v) : '-';
+                }
+                if (progressCell && nsteps) {
+                    const step = metrics.step;
+                    if (step) {
+                        const pct = (step / nsteps * 100).toFixed(1);
+                        progressCell.innerHTML = `<div class="progress-bar"><span class="fill" style="width:${pct}%"></span>${pct}%</div>`;
+                    }
+                }
             }
         }
 
@@ -1305,23 +1348,6 @@
                     return `${lhs}=<em>${rhs}</em>`;
                 }).join(' ');
 
-                let metricVal = 'n/a';
-                if (metricToShow && wu.metrics && wu.metrics[metricToShow] !== undefined) {
-                    const v = wu.metrics[metricToShow];
-                    metricVal = typeof v === 'number' ? v.toPrecision(3) : v;
-                }
-
-                // Parse progress percentage for bar
-                let progressPct = 0;
-                let progressText = wu.progress || 'n/a';
-                if (progressText.endsWith('%')) {
-                    progressPct = parseFloat(progressText);
-                    if (isNaN(progressPct)) progressPct = 0;
-                }
-                const progressBar = progressPct > 0
-                    ? `<div class="progress-bar"><span class="fill" style="width:${progressPct}%"></span>${progressText}</div>`
-                    : progressText;
-
                 // Action button: stop if running/pending/hold, play if stopped/done/failed
                 const isActive = ['RUNNING', 'PENDING', 'REQUEUE_HOLD', 'COMPLETING'].includes(wu.status);
                 let actionBtn = '';
@@ -1346,16 +1372,16 @@
                     : wu.wid;
 
                 html += `
-                    <tr data-jid="${wu.jid}">
+                    <tr data-jid="${wu.jid}" data-wid="${wu.wid}" data-nsteps="${wu.nsteps || 0}">
                         <td class="mono text-right">${widDisplay}</td>
                         <td class="mono"><a href="${serverUrl}/log/${wu.jid}" target="_blank" title="View Slurm log">${wu.jid}</a><span class="copy-btn" onclick="navigator.clipboard.writeText('${wu.jid}')" title="Copy">⎘</span></td>
                         <td class="mono text-center">${wu.restarts}</td>
                         <td class="text-center" title="${wu.status} (exit: ${wu.exit_code})">${statusEmoji}</td>
                         <td class="text-center">${requeueBtn}</td>
                         <td class="text-center">${actionBtn}</td>
-                        <td class="mono text-right">${progressBar}</td>
-                        <td class="mono text-right">${wu.step ?? 'n/a'}</td>
-                        ${metricToShow ? `<td class="mono text-right">${metricVal}</td>` : ''}
+                        <td class="mono text-right" data-wid="${wu.wid}" data-field="progress">-</td>
+                        <td class="mono text-right" data-wid="${wu.wid}" data-field="step">-</td>
+                        ${metricToShow ? `<td class="mono text-right" data-wid="${wu.wid}" data-field="metric">-</td>` : ''}
                         <td class="config-args">${configArgs}<span class="config-view-btn" onclick="showFullConfig('${serverUrl}', '${data.xid}', ${wu.wid})" title="View full config">🔍︎</span></td>
                         <td>${wu.name}</td>
                         <td class="mono text-right">${wu.qwait}</td>

@@ -532,21 +532,26 @@ def _load_metric_only(args):
     return wuwd_name, last_metric(wd_path / wuwd_name, metric_name)
 
 
-@app.get("/api/xid/{xid}")
-def get_xid_info(xid: str, metric: str = "train/loss"):
-    """Get detailed info for a specific XID."""
-    t0 = time.time()
-    log.info("GET /api/xid/%s - fetching... (metric=%s)", xid, metric)
+def _find_xid_path(xid):
+    """Find the workdir path for an XID."""
     wd_path = BASEDIR / xid
-    if not wd_path.exists():
-        # Try to find it
-        for d in BASEDIR.iterdir():
-            if d.is_dir() and xid in d.name:
-                wd_path = d
-                break
-        else:
-            log.warning("GET /api/xid/%s - not found (%.2fs)", xid, time.time() - t0)
-            raise HTTPException(status_code=404, detail=f"XID {xid} not found")
+    if wd_path.exists():
+        return wd_path
+    for d in BASEDIR.iterdir():
+        if d.is_dir() and xid in d.name:
+            return d
+    return None
+
+
+@app.get("/api/xid/{xid}")
+def get_xid_info(xid: str):
+    """Get detailed info for a specific XID (without metrics for faster response)."""
+    t0 = time.time()
+    log.info("GET /api/xid/%s - fetching...", xid)
+    wd_path = _find_xid_path(xid)
+    if not wd_path:
+        log.warning("GET /api/xid/%s - not found (%.2fs)", xid, time.time() - t0)
+        raise HTTPException(status_code=404, detail=f"XID {xid} not found")
 
     # Get current jobs for this xid
     lines = run_cmd(f"squeue -n {xid} -O JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:20,NumNodes:20,GRES:20,RestartCnt:20,Reason:20")
@@ -566,15 +571,8 @@ def get_xid_info(xid: str, metric: str = "train/loss"):
     config_results = list(executor.map(_load_config_only, [(wd_path, wd) for wd in workdirs]))
     log.info("  - loaded configs in %.2fs", time.time() - t1)
 
-    # Load metrics in parallel
-    t2 = time.time()
-    metric_results = list(executor.map(_load_metric_only, [(wd_path, wd, metric) for wd in workdirs]))
-    log.info("  - loaded metrics in %.2fs", time.time() - t2)
-
     configs = {}
-    last_metrics = {}
     warnings = {}  # wid -> list of warning strings
-    metric_by_wuwd = {wuwd_name: metrics for wuwd_name, metrics in metric_results}
     for wuwd_name, config in config_results:
         wid = config.get("wid", wuwd_name)
         new_jid = config.get("jid")
@@ -600,7 +598,6 @@ def get_xid_info(xid: str, metric: str = "train/loss"):
             # Otherwise fall through to replace
 
         configs[wid] = config
-        last_metrics[wid] = metric_by_wuwd.get(wuwd_name, {})
 
     # Get sacct info for all jids
     jids = set()
@@ -669,7 +666,6 @@ def get_xid_info(xid: str, metric: str = "train/loss"):
                 status[wid] = job_info.get("STATE", "PENDING")
         else:
             configs[wid] = {"jid": jid, "name": "", "pending_only": True}
-            last_metrics[wid] = {}
             status[wid] = job_info.get("STATE", "PENDING")
 
     # Format for response
@@ -678,7 +674,6 @@ def get_xid_info(xid: str, metric: str = "train/loss"):
         config = configs[wid]
         jid = config.get("jid", "")
         sacct = saccts.get(jid, {})
-        metrics = last_metrics.get(wid, {})
 
         # Extract submit line args
         submit_line = sacct.get("submit_line", "")
@@ -718,19 +713,13 @@ def get_xid_info(xid: str, metric: str = "train/loss"):
         else:
             qwait = hms(start - eligible)
 
-        step = metrics.get("step")
-        nsteps = config.get("nsteps")
-        progress = f"{step / nsteps:.1%}" if step and nsteps else "n/a"
-
         wus.append({
             "wid": wid,
             "jid": jid,
             "restarts": sacct.get("restart_cnt", 0),
             "exit_code": sacct.get("exit_code", {}).get("return_code", {}).get("number", 0),
             "status": status.get(wid, "UNKNOWN"),
-            "progress": progress,
-            "step": step,
-            "metrics": metrics,
+            "nsteps": config.get("nsteps"),
             "config_args": sws_args,
             "name": config.get("name", ""),
             "qwait": qwait,
@@ -746,6 +735,43 @@ def get_xid_info(xid: str, metric: str = "train/loss"):
         "launch_command": (wd_path / "launchinfo.txt").read_text() if (wd_path / "launchinfo.txt").exists() else "",
     }
     log.info("GET /api/xid/%s - done: %d work units (%.2fs)", xid, len(wus), time.time() - t0)
+    return result
+
+
+@app.get("/api/xid/{xid}/metrics")
+def get_xid_metrics(xid: str, metric: str = "train/loss"):
+    """Get metrics for all WUs of an XID (separate from main xid-detail for lazy loading)."""
+    t0 = time.time()
+    log.info("GET /api/xid/%s/metrics (metric=%s)", xid, metric)
+    wd_path = _find_xid_path(xid)
+    if not wd_path:
+        raise HTTPException(status_code=404, detail=f"XID {xid} not found")
+
+    # Get workdirs
+    workdirs = [d.name for d in wd_path.iterdir() if d.is_dir()]
+
+    # Load configs and metrics in parallel
+    config_results = list(executor.map(_load_config_only, [(wd_path, wd) for wd in workdirs]))
+    metric_results = list(executor.map(_load_metric_only, [(wd_path, wd, metric) for wd in workdirs]))
+
+    # Build wid -> metrics mapping (same duplicate resolution as main endpoint)
+    metric_by_wuwd = {wuwd_name: metrics for wuwd_name, metrics in metric_results}
+    wid_to_wuwd = {}
+    for wuwd_name, config in config_results:
+        wid = config.get("wid", wuwd_name)
+        new_jid = config.get("jid") or 0
+        if wid in wid_to_wuwd:
+            old_jid = wid_to_wuwd[wid][1]
+            if new_jid <= old_jid:
+                continue
+        wid_to_wuwd[wid] = (wuwd_name, new_jid)
+
+    # Build response: wid -> {step, metric_name: value}
+    result = {}
+    for wid, (wuwd_name, _) in wid_to_wuwd.items():
+        result[wid] = metric_by_wuwd.get(wuwd_name, {})
+
+    log.info("GET /api/xid/%s/metrics - done: %d WUs (%.2fs)", xid, len(result), time.time() - t0)
     return result
 
 
