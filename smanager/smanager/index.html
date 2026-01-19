@@ -249,6 +249,10 @@
         .metric-input { margin-left: 16px; }
         .metric-input label { font-size: 12px; margin-right: 4px; }
         .metric-input input { width: 120px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px; background: var(--input-bg); color: var(--text); }
+        .filter-input { margin-left: 16px; display: inline-flex; align-items: center; gap: 4px; }
+        .filter-input input { width: 120px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px; background: var(--input-bg); color: var(--text); }
+        .regex-toggle { padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px; font-family: monospace; background: var(--input-bg); color: var(--text); cursor: pointer; opacity: 0.5; }
+        .regex-toggle.active { opacity: 1; background: var(--accent); color: white; }
         .summary { margin-top: 16px; padding: 8px 12px; background: var(--header-bg); border-radius: 4px; font-size: 12px; }
         .mono { font-family: ui-monospace, "SF Mono", Monaco, "Cascadia Mono", monospace; }
         .copy-btn { cursor: pointer; opacity: 0; margin-left: 4px; }
@@ -402,6 +406,10 @@
                 <label>Metric:</label>
                 <input type="text" id="metricInput" value="train/loss" onchange="saveMetricPref()" />
             </span>
+            <span class="filter-input">
+                <input type="text" id="rowFilterInput" placeholder="filter runs" oninput="applyRowFilter()" />
+                <button id="regexToggle" class="regex-toggle" onclick="toggleRegexMode()" title="Toggle regex mode">.*</button>
+            </span>
         </div>
         <div id="xidContent">
             <p class="loading">Enter an XID and select a server to view details</p>
@@ -465,6 +473,9 @@
         let showHidden = false;
         let serverUsers = {};  // serverIdx -> username
         let prefsLoaded = false;
+        let currentXidData = null;
+        let currentMetric = '';
+        let regexFilterMode = false;
 
         async function loadPrefsFromServers() {
             // Clear existing favorites before reloading
@@ -1232,6 +1243,8 @@
                         renderServers();
                         document.getElementById('xidServer').value = i;
                         const data = await resp.json();
+                        currentXidData = data;
+                        currentMetric = metric;
                         renderXidDetail(data, metric);
                         // Fetch metrics separately
                         fetchAndPopulateMetrics(servers[i].url, xid, metric);
@@ -1266,6 +1279,8 @@
                 servers[serverIdx].status = 'ok';
                 renderServers();
                 const data = await resp.json();
+                currentXidData = data;
+                currentMetric = metric;
                 renderXidDetail(data, metric);
 
                 // Then fetch metrics separately (lazy load)
@@ -1391,6 +1406,45 @@
 
             html += '</tbody></table></div>';
             content.innerHTML = html;
+            applyRowFilter();
+        }
+
+        function applyRowFilter() {
+            if (!currentXidData) return;
+            const filterText = document.getElementById('rowFilterInput')?.value || '';
+            const rows = document.querySelectorAll('#xidContent tbody tr');
+            const wus = currentXidData.wus || [];
+            const wuMap = Object.fromEntries(wus.map(wu => [String(wu.wid), wu]));
+
+            rows.forEach(row => {
+                const wid = row.dataset.wid;
+                const wu = wuMap[wid];
+                if (!wu) return;
+
+                if (!filterText) {
+                    row.style.display = '';
+                    return;
+                }
+
+                const statusEmoji = STATE_EMOJIS[wu.status] || '❓';
+                const configArgsText = (wu.config_args || []).join(' ');
+                const searchable = [wu.wid, wu.jid, wu.status, statusEmoji, configArgsText, wu.name].join(' ');
+
+                let matches;
+                if (regexFilterMode) {
+                    try { matches = new RegExp(filterText).test(searchable); }
+                    catch { matches = false; }
+                } else {
+                    matches = searchable.toLowerCase().includes(filterText.toLowerCase());
+                }
+                row.style.display = matches ? '' : 'none';
+            });
+        }
+
+        function toggleRegexMode() {
+            regexFilterMode = !regexFilterMode;
+            document.getElementById('regexToggle').classList.toggle('active', regexFilterMode);
+            applyRowFilter();
         }
 
         // Tab switching
