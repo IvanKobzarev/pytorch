@@ -1531,7 +1531,10 @@
             const serverIdx = document.getElementById('xidServer').value;
             const serverUrl = servers[serverIdx]?.url || '';
 
+            document.body.style.cursor = 'wait';
             await Promise.all(jids.map(jid => fetch(`${serverUrl}/api/action/stop/${jid}`, { method: 'POST' })));
+            document.body.style.cursor = '';
+            document.getElementById('rowFilterInput').value = '';
             loadXidDetail();
         }
 
@@ -1544,7 +1547,10 @@
             const serverIdx = document.getElementById('xidServer').value;
             const serverUrl = servers[serverIdx]?.url || '';
 
+            document.body.style.cursor = 'wait';
             await Promise.all(jids.map(jid => fetch(`${serverUrl}/api/action/requeue/${jid}`, { method: 'POST' })));
+            document.body.style.cursor = '';
+            document.getElementById('rowFilterInput').value = '';
             loadXidDetail();
         }
 
@@ -1564,7 +1570,10 @@
             const serverIdx = document.getElementById('xidServer').value;
             const serverUrl = servers[serverIdx]?.url || '';
 
+            document.body.style.cursor = 'wait';
             await Promise.all(scripts.map(script => fetch(`${serverUrl}/api/action/resume?script=${encodeURIComponent(script)}`, { method: 'POST' })));
+            document.body.style.cursor = '';
+            document.getElementById('rowFilterInput').value = '';
             loadXidDetail();
         }
 
