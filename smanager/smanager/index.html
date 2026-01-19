@@ -139,6 +139,9 @@
         }
         tbody tr:nth-child(even) { background: var(--even-row); }
         tbody tr:hover { background: var(--hover); }
+        tbody tr.row-selected { background: var(--hover); }
+        tbody tr.row-selected:hover { background: rgba(75, 192, 200, 0.35); }
+        input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; background: var(--input-bg); border: 1px solid var(--border); border-radius: 3px; }
         .text-right { text-align: right; }
         .text-center { text-align: center; }
         .status-run { color: #3b82f6; }
@@ -1338,6 +1341,7 @@
             let html = `<div class="table-container-full"><table>
                 <thead>
                     <tr>
+                        <th style="width:2em"><input type="checkbox" id="selectAllCheckbox" onclick="toggleAllVisibleRows()" /></th>
                         <th style="width:3em">WID</th>
                         <th style="width:6em">JID/Logs</th>
                         <th style="width:2em" title="Restarts">R</th>
@@ -1388,6 +1392,7 @@
 
                 html += `
                     <tr data-jid="${wu.jid}" data-wid="${wu.wid}" data-nsteps="${wu.nsteps || 0}">
+                        <td class="text-center"><input type="checkbox" class="row-select" onchange="updateRowSelection(this)" /></td>
                         <td class="mono text-right">${widDisplay}</td>
                         <td class="mono"><a href="${serverUrl}/log/${wu.jid}" target="_blank" title="View Slurm log">${wu.jid}</a><span class="copy-btn" onclick="navigator.clipboard.writeText('${wu.jid}')" title="Copy">⎘</span></td>
                         <td class="mono text-center">${wu.restarts}</td>
@@ -1439,12 +1444,39 @@
                 }
                 row.style.display = matches ? '' : 'none';
             });
+            updateHeaderCheckbox();
         }
 
         function toggleRegexMode() {
             regexFilterMode = !regexFilterMode;
             document.getElementById('regexToggle').classList.toggle('active', regexFilterMode);
             applyRowFilter();
+        }
+
+        function updateRowSelection(checkbox) {
+            checkbox.closest('tr').classList.toggle('row-selected', checkbox.checked);
+            updateHeaderCheckbox();
+        }
+
+        function updateHeaderCheckbox() {
+            const headerCheckbox = document.getElementById('selectAllCheckbox');
+            if (!headerCheckbox) return;
+            const visibleRows = [...document.querySelectorAll('#xidContent tbody tr')].filter(r => r.style.display !== 'none');
+            const checkedCount = visibleRows.filter(r => r.querySelector('.row-select')?.checked).length;
+            headerCheckbox.checked = checkedCount > 0 && checkedCount === visibleRows.length;
+            headerCheckbox.indeterminate = checkedCount > 0 && checkedCount < visibleRows.length;
+        }
+
+        function toggleAllVisibleRows() {
+            const headerCheckbox = document.getElementById('selectAllCheckbox');
+            const visibleRows = [...document.querySelectorAll('#xidContent tbody tr')].filter(r => r.style.display !== 'none');
+            visibleRows.forEach(row => {
+                const cb = row.querySelector('.row-select');
+                if (cb) {
+                    cb.checked = headerCheckbox.checked;
+                    row.classList.toggle('row-selected', headerCheckbox.checked);
+                }
+            });
         }
 
         // Tab switching
