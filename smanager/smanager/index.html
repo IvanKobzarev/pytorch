@@ -918,9 +918,9 @@
 
                     // Done-ish = DONE file exists but Slurm still shows running
                     // This happens when job is finishing up but Slurm hasn't caught up
-                    const nDoneIsh = Math.min(nDone, nRunning);  // Overlap between done and running
-                    const nActualDone = nDone - nDoneIsh;  // Truly done (not running in Slurm)
-                    const nActualRunning = nRunning - nDoneIsh;  // Actually running (no DONE file)
+                    const nDoneIsh = info.done_ish_count || 0;
+                    const nActualDone = info.actual_done_count || 0;
+                    const nActualRunning = nRunning - nDoneIsh;
 
                     // Failed = WUs without DONE file that are not in-progress
                     const nFail = Math.max(0, nNotDone - nInProgress);

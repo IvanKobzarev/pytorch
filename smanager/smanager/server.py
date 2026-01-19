@@ -234,6 +234,41 @@ def _extra_info(xid_info):
                     config = load_config(wuwd)
                     wid = config.get("wid", wuwd.name)
                     wid_counts[wid] = wid_counts.get(wid, 0) + 1
+
+    # Calculate Done-ish count if jobs are available
+    # Note: A job might write DONE but get stuck running in Slurm without quitting.
+    # Without explicit xid-jid mapping, we must load DONE workdir configs to get their JID and compare to running jobs.
+    info["done_ish_count"] = 0
+    info["actual_done_count"] = 0
+
+    if "jobs" in info and info.get("wus"):
+        jobs_by_jid = {job.get("JOBID", ""): job for job in info["jobs"] if job.get("JOBID")}
+        done_wuwd_names = [name for name, is_done in info["wus"].items() if is_done]
+
+        if done_wuwd_names:
+            try:
+                config_args = [(wd_path, wuwd_name) for wuwd_name in done_wuwd_names]
+                config_results = list(executor.map(_load_config_only, config_args))
+
+                done_ish = 0
+                actual_done = 0
+
+                for wuwd_name, config in config_results:
+                    jid = config.get("jid")
+                    if jid and str(jid) in jobs_by_jid:
+                        slurm_state = jobs_by_jid[str(jid)].get("STATE", "")
+                        if slurm_state == "RUNNING":
+                            done_ish += 1
+                        else:
+                            actual_done += 1
+                    else:
+                        actual_done += 1
+
+                info["done_ish_count"] = done_ish
+                info["actual_done_count"] = actual_done
+            except Exception as e:
+                log.warning("Failed to calculate done_ish for %s: %s", xid, e)
+
     info["name"] = extract_common_name(workdir_names, xid)
     # Count WUs with duplicate workdirs (warning_count)
     info["warning_count"] = sum(1 for c in wid_counts.values() if c > 1)
