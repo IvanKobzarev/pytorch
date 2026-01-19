@@ -256,6 +256,10 @@
         .filter-input input { width: 120px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px; background: var(--input-bg); color: var(--text); }
         .regex-toggle { padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px; font-family: monospace; background: var(--input-bg); color: var(--text); cursor: pointer; opacity: 0.5; }
         .regex-toggle.active { opacity: 1; background: var(--accent); color: white; }
+        .bulk-actions { margin-left: 16px; display: inline-flex; align-items: center; gap: 8px; }
+        .bulk-action-btn { cursor: default; font-size: 16px; opacity: 0.25; }
+        .bulk-action-btn.enabled { cursor: pointer; opacity: 1; }
+        .bulk-action-btn.enabled:hover { opacity: 0.7; }
         .summary { margin-top: 16px; padding: 8px 12px; background: var(--header-bg); border-radius: 4px; font-size: 12px; }
         .mono { font-family: ui-monospace, "SF Mono", Monaco, "Cascadia Mono", monospace; }
         .copy-btn { cursor: pointer; opacity: 0; margin-left: 4px; }
@@ -412,6 +416,11 @@
             <span class="filter-input">
                 <input type="text" id="rowFilterInput" placeholder="filter runs" oninput="applyRowFilter()" />
                 <button id="regexToggle" class="regex-toggle" onclick="toggleRegexMode()" title="Toggle regex mode">.*</button>
+            </span>
+            <span class="bulk-actions">
+                <span id="bulkRequeueBtn" class="bulk-action-btn" onclick="bulkRequeue()" title="Requeue selected">↶</span>
+                <span id="bulkRestartBtn" class="bulk-action-btn" onclick="bulkRestart()" title="Restart selected">▶️</span>
+                <span id="bulkStopBtn" class="bulk-action-btn" onclick="bulkStop()" title="Stop selected">⏸️</span>
             </span>
         </div>
         <div id="xidContent">
@@ -1445,6 +1454,7 @@
                 row.style.display = matches ? '' : 'none';
             });
             updateHeaderCheckbox();
+            updateBulkActionButtons();
         }
 
         function toggleRegexMode() {
@@ -1456,6 +1466,7 @@
         function updateRowSelection(checkbox) {
             checkbox.closest('tr').classList.toggle('row-selected', checkbox.checked);
             updateHeaderCheckbox();
+            updateBulkActionButtons();
         }
 
         function updateHeaderCheckbox() {
@@ -1477,6 +1488,84 @@
                     row.classList.toggle('row-selected', headerCheckbox.checked);
                 }
             });
+            updateBulkActionButtons();
+        }
+
+        function updateBulkActionButtons() {
+            const selectedRows = [...document.querySelectorAll('#xidContent tbody tr.row-selected')].filter(r => r.style.display !== 'none');
+            const requeueBtn = document.getElementById('bulkRequeueBtn');
+            const restartBtn = document.getElementById('bulkRestartBtn');
+            const stopBtn = document.getElementById('bulkStopBtn');
+            if (!restartBtn || !stopBtn || !requeueBtn) return;
+
+            if (selectedRows.length === 0) {
+                requeueBtn.classList.remove('enabled');
+                restartBtn.classList.remove('enabled');
+                stopBtn.classList.remove('enabled');
+                return;
+            }
+
+            let allCanRequeue = true, allCanRestart = true, allCanStop = true;
+            for (const row of selectedRows) {
+                const requeueCell = row.querySelector('td:nth-child(6)');
+                const actionCell = row.querySelector('td:nth-child(7)');
+                const hasRequeue = requeueCell?.textContent.includes('↶');
+                const hasStop = actionCell?.textContent.includes('⏸️');
+                const hasRestart = actionCell?.textContent.includes('▶️');
+                if (!hasRequeue) allCanRequeue = false;
+                if (!hasRestart) allCanRestart = false;
+                if (!hasStop) allCanStop = false;
+            }
+
+            requeueBtn.classList.toggle('enabled', allCanRequeue);
+            restartBtn.classList.toggle('enabled', allCanRestart);
+            stopBtn.classList.toggle('enabled', allCanStop);
+        }
+
+        async function bulkStop() {
+            if (!document.getElementById('bulkStopBtn').classList.contains('enabled')) return;
+            const selectedRows = [...document.querySelectorAll('#xidContent tbody tr.row-selected')].filter(r => r.style.display !== 'none');
+            const jids = selectedRows.map(r => r.dataset.jid);
+            if (!confirm(`Stop ${jids.length} job(s)?`)) return;
+
+            const serverIdx = document.getElementById('xidServer').value;
+            const serverUrl = servers[serverIdx]?.url || '';
+
+            await Promise.all(jids.map(jid => fetch(`${serverUrl}/api/action/stop/${jid}`, { method: 'POST' })));
+            loadXidDetail();
+        }
+
+        async function bulkRequeue() {
+            if (!document.getElementById('bulkRequeueBtn').classList.contains('enabled')) return;
+            const selectedRows = [...document.querySelectorAll('#xidContent tbody tr.row-selected')].filter(r => r.style.display !== 'none');
+            const jids = selectedRows.map(r => r.dataset.jid);
+            if (!confirm(`Requeue ${jids.length} job(s)?`)) return;
+
+            const serverIdx = document.getElementById('xidServer').value;
+            const serverUrl = servers[serverIdx]?.url || '';
+
+            await Promise.all(jids.map(jid => fetch(`${serverUrl}/api/action/requeue/${jid}`, { method: 'POST' })));
+            loadXidDetail();
+        }
+
+        async function bulkRestart() {
+            if (!document.getElementById('bulkRestartBtn').classList.contains('enabled')) return;
+            const selectedRows = [...document.querySelectorAll('#xidContent tbody tr.row-selected')].filter(r => r.style.display !== 'none');
+            const wids = selectedRows.map(r => r.dataset.wid);
+            const wuMap = Object.fromEntries((currentXidData?.wus || []).map(wu => [String(wu.wid), wu]));
+            const scripts = wids.map(wid => wuMap[wid]?.launch_script).filter(Boolean);
+
+            if (scripts.length !== wids.length) {
+                alert('Some selected jobs cannot be restarted');
+                return;
+            }
+            if (!confirm(`Restart ${scripts.length} job(s)?`)) return;
+
+            const serverIdx = document.getElementById('xidServer').value;
+            const serverUrl = servers[serverIdx]?.url || '';
+
+            await Promise.all(scripts.map(script => fetch(`${serverUrl}/api/action/resume?script=${encodeURIComponent(script)}`, { method: 'POST' })));
+            loadXidDetail();
         }
 
         // Tab switching
