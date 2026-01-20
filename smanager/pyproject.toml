@@ -11,7 +11,7 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
     "zstandard>=0.20.0",
-    "plattli",
+    "plattli>=0.5.2",
 ]
 
 [project.scripts]

@@ -17,9 +17,8 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
+import plattli
 import zstandard
-
-from plattli import Reader as PlattliReader, has_plattli
 
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -513,9 +512,9 @@ def load_config(wd_path):
 
 def last_metric(wd_path, metric_name="train/loss"):
     # Try plattli format first
-    if has_plattli(wd_path):
+    if plattli.is_run_dir(wd_path):
         try:
-            with PlattliReader(wd_path) as r:
+            with plattli.Reader(wd_path) as r:
                 result = {}
                 metrics = r.metrics()
                 # Get step from first metric's last index
