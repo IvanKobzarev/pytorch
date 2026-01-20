@@ -19,16 +19,18 @@ PATH = "/checkpoint/rigi/data/{split}.bag"
 
 
 class Dataset:
-    def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, nreg=0, greyout_frac=0.0, tokenizer=None, question_suffix="", seed=0, epochs=None):
+    def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, nreg=0, greyout_frac=0.0, tokenizer=None, qfmt="{q}", lower_q=False, lower_a=False, seed=0, epochs=None):
         self.fspec = basepath.format(split=split)
         self.ps = dict(ph=ps, pw=ps)
         self.max_patches = max_patches
         self.nreg = nreg
         self.ttkw = tokenizer or {}
         self.greyout_frac = greyout_frac
-        self.question_suffix = question_suffix
         self.data_seed = seed
         self.epochs = epochs
+        self.qfmt = qfmt
+        self.lower_q = lower_q
+        self.lower_a = lower_a
 
     @property  # Not a cached_property because BagzReader is not picklable.
     def reader(self):  # which would make the whole class unpicklable.
@@ -57,10 +59,11 @@ class Dataset:
         question, answers = data["qas"][list(data["qas"])[q_idx]]
         answer = answers[q_cycle % len(answers)]
 
-        if self.question_suffix:
-            question = question + self.question_suffix
-        prefix = self.tt.encode(question.lower())
-        suffix = self.tt.encode(answer.lower())
+        answer = answer.lower() if self.lower_a else answer
+        question = question.lower() if self.lower_q else question
+        question = self.qfmt.format(q=question)
+        prefix = self.tt.encode(question)
+        suffix = self.tt.encode(answer)
 
         if u.rng(self.data_seed, exid, epoch, "greyout").random() < self.greyout_frac:
             img.paste((128, 128, 128), box=(0, 0) + img.size)
