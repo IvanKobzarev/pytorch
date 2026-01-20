@@ -36,38 +36,9 @@ tmux split-window -v -t "$SESS:0" \; \
 tmux split-window -h -t "$SESS:0.0"
 
 ENTER=${ENTER:-C-m}
-# ENTER=""
 tmux send-keys -t "$SESS:0.0" "smanager --port $PORT_SM" $ENTER
-tmux send-keys -t "$SESS:0.1" "fbi-serve --port $PORT_FB --prefs-dir /checkpoint/rigi/$USER --dataset /checkpoint/rigi/plattli/" $ENTER
+tmux send-keys -t "$SESS:0.1" "fbi-serve --port $PORT_FB --prefs-dir /checkpoint/rigi/$USER --share-dir /checkpoint/rigi/shares --maxdepth 2 --dataset /checkpoint/rigi/bv2/workdirs" $ENTER
+tmux send-keys -t "$SESS:0.2" "env PORT_NB=$PORT_NB ~/rigi/devbox_launch_inner" $ENTER
 
-echo "Tmux session '$SESS' created, to attach: tmux a -t $SESS"
-echo "Now still starting the remote devbox..."
-
-# Now, start the remote devbox on slurm...
-STATE_FILE="${STATE_FILE:-/tmp/${USER}_jupyter_${PORT_NB}.info}"
-[[ -f "$STATE_FILE" ]] && rm "$STATE_FILE"
-
-SRUN_ARGS="--account rigi --qos h100_rigi_high --exclusive --mem 0 --gpus-per-node 8 --time 7-00:00:00"
-
-# Create a wrapper that prints hostname first, then runs the script
-srun $SRUN_ARGS --output="$STATE_FILE" --open-mode=append \
-  bash -c "
-    echo \$(hostname -f)
-    PORT_NB=$PORT_NB ~/rigi/devbox_inner
-    sleep infinity
-  " &
-SRUN_PID=$!
-
-
-# Wait until the file has the host/port
-until read -r host 2>/dev/null < "$STATE_FILE"; do sleep 0.5; done
-echo "Job running, you can go there and attach using:"
-echo -e "\033[34mssh $host -t tmux -L inner a\033[0m"
-
-tmux send-keys -t "$SESS:0.2" "ssh -N -f -L 'localhost:$PORT_NB:localhost:$PORT_NB' '$host'" $ENTER
-sleep 0.5
-tmux send-keys -t "$SESS:0.2" "echo -e 'Slurm devbox job running, you can go there and attach using:\n"
-tmux send-keys -t "$SESS:0.2" "\033[34mssh $host -t tmux -L inner a\033[0m\n"
-tmux send-keys -t "$SESS:0.2" "If you need to forward ports on your laptop, run:\n"
-tmux send-keys -t "$SESS:0.2" "\033[34mssh -N -f -L localhost:$PORT_NB:localhost:$PORT_NB -L localhost:$PORT_FB:localhost:$PORT_FB -L localhost:$PORT_SM:localhost:$PORT_SM $SLURM_CLUSTER_NAME\033[0m'" $ENTER
+echo "Tmux session '$SESS' created, to attach, just re-launch this script or tmux a -t $SESS"
 tmux a -t $SESS

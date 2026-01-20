@@ -12,7 +12,7 @@ tmux -L inner split-window -v -t "$SESS:0"
 ENTER=${ENTER:-C-m}
 tmux -L inner send-keys -t "$SESS:0.0" "jupyter lab --no-browser --port=$PORT_NB --NotebookApp.token='' --NotebookApp.password=''" $ENTER
 tmux -L inner send-keys -t "$SESS:0.1" "cd /checkpoint/rigi/bv2/workdirs" $ENTER
-tmux -L inner send-keys -t "$SESS:0.1" "jsonl2plattli -o /checkpoint/rigi/plattli XID XID XID"
+tmux -L inner send-keys -t "$SESS:0.1" "jsonl2plattli XID XID XID"
 
 tmux -L inner new-window -t "$SESS:1"
 tmux -L inner send-keys -t "$SESS:1" "bv2/tools/local_run -m bv2.train --config bv2/config/finevision.py nsteps:=18"

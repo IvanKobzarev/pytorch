@@ -1,0 +1,34 @@
+#!/bin/bash
+# Launches a GPU devbox, starts the tmux inside it, forwards the ports.
+
+PORT_NB=${PORT_NB:-$([ "$SLURM_CLUSTER_NAME" = "fair-sc" ] && echo 8889 || echo 8888)}
+
+echo "Now still starting the remote devbox..."
+
+# Now, start the remote devbox on slurm...
+STATE_FILE="${STATE_FILE:-/tmp/${USER}_jupyter_${PORT_NB}.info}"
+[[ -f "$STATE_FILE" ]] && rm "$STATE_FILE"
+
+SRUN_ARGS="--account rigi --qos h100_rigi_high --exclusive --mem 0 --gpus-per-node 8 --time 7-00:00:00"
+
+# Create a wrapper that prints hostname first, then runs the script
+srun $SRUN_ARGS --output="$STATE_FILE" --open-mode=append \
+  bash -c "
+    echo \$(hostname -f)
+    PORT_NB=$PORT_NB ~/rigi/devbox_inner
+    sleep infinity
+  " &
+SRUN_PID=$!
+
+
+# Wait until the file has the host/port
+until read -r host 2>/dev/null < "$STATE_FILE"; do sleep 0.5; done
+echo "Job running, you can go there and attach using:"
+echo -e "\033[34mssh $host -t tmux -L inner a\033[0m"
+
+ssh -N -f -L "localhost:$PORT_NB:localhost:$PORT_NB" "$host"
+
+echo -e "Slurm devbox job running, you can go there and attach using:"
+echo -e "\033[34mssh $host -t tmux -L inner a\033[0m"
+echo -e "If you need to forward ports on your laptop, run:"
+echo -e "\033[34mssh -N -f -L localhost:$PORT_NB:localhost:$PORT_NB -L localhost:$PORT_FB:localhost:$PORT_FB -L localhost:$PORT_SM:localhost:$PORT_SM $SLURM_CLUSTER_NAME\033[0m'
