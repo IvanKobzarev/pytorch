@@ -1,7 +1,7 @@
 import json
 from functools import partial
 
-from bv2.data.common import iota_exids, shuffled_iota_exids
+from bv2.data.common import cycle_qas, iota_exids, shuffled_iota_exids
 
 
 def assert_same_exids(actual, ref):
@@ -81,6 +81,39 @@ def test_shuffled_iota_exids():
     assert not end
 
 
+def test_cycle_qas():
+    qas = {
+        "q1": ["a"],
+        "q2": ["a", "b"],
+        "q3": ["A", "B", "C", "D"],
+    }
+
+    noseed_seen = []
+    seed1_seen = []
+    seed2_seen = []
+    for epoch in range(12):
+        noseed_seen.append(cycle_qas(qas, epoch, seed=None))
+        seed1_seen.append(cycle_qas(qas, epoch, seed="hahaha"))
+        seed2_seen.append(cycle_qas(qas, epoch, seed="lollol"))
+    expected = [
+        ("q1", "a"), ("q2", "a"), ("q3", "A"),
+        ("q1", "a"), ("q2", "b"), ("q3", "B"),
+        ("q1", "a"), ("q2", "a"), ("q3", "C"),
+        ("q1", "a"), ("q2", "b"), ("q3", "D"),
+    ]
+
+    # Visits should match in all cases:
+    assert noseed_seen == expected
+    assert set(seed1_seen) == set(expected)
+    assert set(seed2_seen) == set(expected)
+
+    # But order of visits should be different in all cases:
+    assert seed1_seen != noseed_seen
+    assert seed2_seen != noseed_seen
+    assert seed1_seen != seed2_seen
+
+
 if __name__ == "__main__":
     test_iota_exids()
     test_shuffled_iota_exids()
+    test_cycle_qas()

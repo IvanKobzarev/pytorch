@@ -11,7 +11,7 @@ from PIL import Image
 
 import bv2.data.dpack as d
 import bv2.utils as u
-from bv2.data.common import get_bagz_reader, shuffled_iota_exids, vis_image_text_wandb
+from bv2.data.common import cycle_qas, get_bagz_reader, shuffled_iota_exids, vis_image_text_wandb
 from bv2.data.pp import patchify, resize_max_patches, sanity_check
 from bv2.data.tokenizer import get_tiktoken
 
@@ -54,11 +54,7 @@ class Dataset:
             img = img if img.mode == "RGB" else img.convert("RGB")
             # NOTE: Not using "ocr.json" here yet.
 
-        # Cycle through the questions and its answers by epochs
-        q_cycle, q_idx = divmod(epoch, len(data["qas"]))
-        question, answers = data["qas"][list(data["qas"])[q_idx]]
-        answer = answers[q_cycle % len(answers)]
-
+        question, answer = cycle_qas(data["qas"], epoch, seed=(self.data_seed, exid, "cycle_qas"))
         answer = answer.lower() if self.lower_a else answer
         question = question.lower() if self.lower_q else question
         question = self.qfmt.format(q=question)

@@ -10,7 +10,7 @@ from PIL import Image
 import bv2.data.dpack as d
 import bv2.data.finevision_info as fvi
 import bv2.utils as u
-from bv2.data.common import get_bagz_reader, shuffled_iota_exids, vis_image_text_wandb
+from bv2.data.common import cycle_qas, get_bagz_reader, shuffled_iota_exids, vis_image_text_wandb
 from bv2.data.pp import patchify, resize_max_patches, sanity_check
 from bv2.data.tokenizer import get_tiktoken
 
@@ -65,13 +65,10 @@ class Dataset:
                 for image_file in image_files:
                     images.append(_read_img(image_file))
 
-        # TODO: some datasets contain a sequence of QAs, with follow up questions like:
+        # TODO: some datasets contain a sequence of QAs that are follow-ups:
         # question - answer; follow q - answer; follow q - answer. In this case, we should
         # concat all the QAs instead of picking a random one.
-        q_cycle, q_idx = divmod(epoch, len(data["qas"]))
-        question, answers = data["qas"][list(data["qas"])[q_idx]]
-        answer = answers[q_cycle % len(answers)]
-
+        question, answer = cycle_qas(data["qas"], epoch, seed=(self.data_seed, exid, "cycle_qas"))
         prefix = self.tt.encode(question)
         suffix = self.tt.encode(answer)
         npre, nsuf = len(prefix), len(suffix)

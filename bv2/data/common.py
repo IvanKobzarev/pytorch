@@ -40,6 +40,30 @@ def shuffled_iota_exids(n, seed, epochs=None, start_epoch=0, start_offset=0, ran
         start_offset = 0
 
 
+def cycle_qas(qas, epoch, seed):
+    # `qas` is a {"q": ["a", "a", ...], ...} or similar.
+
+    # An example can have multiple Q/A pairs, and each Q can have multiple A's.
+    # For many datasets with multiple Q's, the order is structured, for example
+    # first all questions of one type, then all of another, etc. Training in that
+    # order is a bad idea, and so we randomize the order we cycle through, both
+    # questions and answers for any given question, on a per-exid basis.
+
+    num_qs = len(qas)
+    q_cycle, q_idx = divmod(epoch, num_qs)
+    if seed is not None and num_qs > 1:
+        q_idx = u.rng(seed, q_cycle).permutation(num_qs)[q_idx]
+    question, answers = list(qas.items())[q_idx]
+
+    num_as = len(answers)
+    if seed is not None and num_as > 1:
+        a_idx = u.rng(seed, q_idx).permutation(num_as)[q_cycle % num_as]
+    else:
+        a_idx = q_cycle % num_as
+    answer = answers[a_idx]
+    return question, answer
+
+
 @cache
 def get_bagz_reader(fspec, cache_limits=True):
     # NOTE1: See this file for the full definition of `fspec`:
