@@ -79,7 +79,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     # Get xid/name from rank0 to make sure it's consistent across hosts (if it has timestamp)
     xid, name = u.broadcast_object_from(rank=0, obj=(c.get("xid", ""), name))
-    workdir = pjoin("/checkpoint/rigi/bv2/workdirs", xid, name)
+    workdir = "workdirs" if xid or c.nsteps >= 50 else "workdirs-dbg"
+    workdir = pjoin("/checkpoint/rigi/bv2/", workdir, xid, name)
     prints0(f"Workdir: {u.BLUE}{workdir}{u.RESET}")
 
     # Now that we know the final workdir, dump some info in it and start wandb with it.
