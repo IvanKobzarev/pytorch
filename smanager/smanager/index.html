@@ -282,16 +282,16 @@
         .del-btn { cursor: pointer; opacity: 0; }
         tr:hover .del-btn { opacity: 0.3; }
         .del-btn:hover { opacity: 1 !important; }
-        .hide-btn { cursor: pointer; opacity: 0; }
-        tr:hover .hide-btn { opacity: 0.3; }
-        .hide-btn:hover { opacity: 1 !important; }
+        .archive-btn { cursor: pointer; opacity: 0; }
+        tr:hover .archive-btn { opacity: 0.3; }
+        .archive-btn:hover { opacity: 1 !important; }
         .fav-toggle { cursor: pointer; font-size: 16px; opacity: 0.4; }
         .fav-toggle:hover { opacity: 0.7; }
         .fav-toggle.active { opacity: 1; color: #ef4444; }
         .col-fav { width: 1.6em; }
         .col-rq { width: 1.6em; }
         .col-del { width: 1.6em; }
-        .col-hide { width: 1.6em; }
+        .col-archive { width: 1.6em; }
         .col-xid { width: 11.5em; }
         .col-usr { width: 5em; }
         .col-states { width: 110px; }
@@ -381,7 +381,6 @@
             <h2 style="margin: 0;">Inactive Experiments</h2>
             <input type="text" id="coldFilter" class="server-input" placeholder="xid or username" oninput="filterColdTable()" />
             <span id="favFilterToggle" class="fav-toggle" onclick="toggleFavFilter()" title="Show only favorites">♡</span>
-            <span id="hiddenFilterToggle" class="fav-toggle" onclick="toggleHiddenFilter()" title="Show hidden">🫥</span>
         </div>
         <div class="table-container" style="max-height: none; overflow-y: visible;">
             <table id="coldTable">
@@ -389,7 +388,7 @@
                     <tr>
                         <th class="col-fav">♡</th>
                         <th class="col-del">🗑</th>
-                        <th class="col-hide">🫥</th>
+                        <th class="col-archive">📦︎</th>
                         <th class="col-xid">XID</th>
                         <th class="col-usr">User</th>
                         <th style="width:5em">WUs</th>
@@ -482,7 +481,6 @@
         let overviewData = {};
         let favorites = new Set();
         let showOnlyFavorites = false;
-        let showHidden = false;
         let serverUsers = {};  // serverIdx -> username
         let prefsLoaded = false;
         let currentXidData = null;
@@ -525,33 +523,20 @@
             }
         }
 
-        async function hideXid(xid) {
-            // Send to all servers (replicate)
-            for (const s of servers) {
-                fetch(`${s.url}/api/prefs/hide/${xid}`, { method: 'POST', signal: AbortSignal.timeout(5000) }).catch(() => {});
-            }
-        }
-
-        async function unhideXid(xid) {
-            // Send to all servers (replicate)
-            for (const s of servers) {
-                fetch(`${s.url}/api/prefs/unhide/${xid}`, { method: 'POST', signal: AbortSignal.timeout(5000) }).catch(() => {});
-            }
-        }
-
-        function toggleHidden(serverIdx, xid, isHidden) {
-            if (isHidden) {
-                unhideXid(xid);
-                // Mark as not hidden in local data and re-render
-                for (const r of allColdRows) {
-                    if (r.xid === xid) r.hidden = false;
+        async function archiveXid(serverUrl, serverIdx, xid) {
+            if (!confirm(`Archive XID ${xid}?\n\nThis will:\n- Remove all ckpt-* directories/files\n- Move workdir to archive directory`)) return;
+            const row = document.querySelector(`tr[data-xid="${xid}"]`);
+            if (row) row.classList.add('outdated');
+            try {
+                const resp = await fetch(`${serverUrl}/api/action/archive/${xid}`, { method: 'POST' });
+                if (!resp.ok) {
+                    if (row) row.classList.remove('outdated');
+                    const err = await resp.json();
+                    alert(`Failed to archive XID: ${err.detail || 'Unknown error'}`);
                 }
-                filterColdTable();
-            } else {
-                hideXid(xid);
-                // Remove from local data and re-render
-                allColdRows = allColdRows.filter(r => r.xid !== xid);
-                filterColdTable();
+            } catch (e) {
+                if (row) row.classList.remove('outdated');
+                alert(`Error archiving XID: ${e.message}`);
             }
         }
 
@@ -642,13 +627,6 @@
             toggle.textContent = showOnlyFavorites ? '❤︎' : '♡';
             toggle.classList.toggle('active', showOnlyFavorites);
             filterColdTable();
-        }
-
-        function toggleHiddenFilter() {
-            showHidden = !showHidden;
-            const toggle = document.getElementById('hiddenFilterToggle');
-            toggle.classList.toggle('active', showHidden);
-            refreshAll();  // Re-fetch with include_hidden flag
         }
 
         async function deleteXid(serverUrl, serverIdx, xid) {
@@ -778,9 +756,8 @@
 
         async function fetchInactiveOverview(serverIndex) {
             const server = servers[serverIndex];
-            const params = showHidden ? '?include_hidden=true' : '';
             try {
-                const resp = await fetch(`${server.url}/api/overview/inactive${params}`, { signal: AbortSignal.timeout(60000) });
+                const resp = await fetch(`${server.url}/api/overview/inactive`, { signal: AbortSignal.timeout(60000) });
                 if (!resp.ok) throw new Error('Failed to fetch inactive');
                 const data = await resp.json();
                 // Merge cold/frozen into existing data
@@ -999,7 +976,6 @@
                         config: info.config || '',
                         name: info.name || '',
                         note: info.note || '',
-                        hidden: info.hidden || false,
                         warningCount: info.warning_count || 0,
                     });
                 }
@@ -1019,7 +995,6 @@
                         config: info.config || '',
                         name: info.name || '',
                         note: info.note || '',
-                        hidden: info.hidden || false,
                         warningCount: info.warning_count || 0,
                     });
                 }
@@ -1103,8 +1078,9 @@
                 const delBtn = canDelete
                     ? `<span class="del-btn" onclick="deleteXid('${serverUrl}', ${r.serverIdx}, '${r.xid}')" title="Delete ${r.xid}">🗑</span>`
                     : '';
-                const hideBtn = `<span class="hide-btn" onclick="toggleHidden(${r.serverIdx}, '${r.xid}', ${r.hidden})" title="${r.hidden ? 'Unhide' : 'Hide'} ${r.xid}">🫥</span>`;
-                const rowClass = r.hidden ? 'style="opacity: 0.5"' : '';
+                const archiveBtn = canDelete
+                    ? `<span class="archive-btn" onclick="archiveXid('${serverUrl}', ${r.serverIdx}, '${r.xid}')" title="Archive ${r.xid}">📦︎</span>`
+                    : '';
                 const displayText = r.note || r.name;
                 const textClass = r.note ? 'note-text' : 'name-text';
                 const escapedNote = (r.note || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
@@ -1114,10 +1090,10 @@
                     ? ` <span class="warning-text" title="${r.warningCount} WU(s) have warnings, go to detail view for more.">⚠</span>`
                     : '';
                 return `
-                <tr data-xid="${r.xid}" ${rowClass}>
+                <tr data-xid="${r.xid}">
                     <td class="text-center"><span class="fav-btn ${favorites.has(r.xid) ? 'active' : ''}" onclick="toggleFavorite('${r.xid}')">${favorites.has(r.xid) ? '❤︎' : '♡'}</span></td>
                     <td class="text-center">${delBtn}</td>
-                    <td class="text-center">${hideBtn}</td>
+                    <td class="text-center">${archiveBtn}</td>
                     <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="code-btn" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span></td>
                     <td class="${userClass}">${r.user}</td>
                     <td class="mono">

@@ -139,6 +139,7 @@ SRCDIR = Path("/checkpoint/rigi/bv2/srcdirs")
 FBIDIR = Path("/checkpoint/rigi/fbi")
 SLURM_OUT_DIR = Path("/checkpoint/rigi/bv2/slurm_out")
 PREFS_DIR = Path(f"/checkpoint/rigi/{getuser()}")  # Set via --prefs-dir flag
+ARCHIVE_DIR = Path("/checkpoint/rigi/bv2/workdirs-archive")  # Set via --archive-dir flag
 NUM_RECENT = 50
 ACTIONS_ENABLED = True  # Set via --no-actions flag
 
@@ -308,37 +309,6 @@ def set_favorites(favorites: list[str] = Body(...)):
     return {"status": "ok"}
 
 
-@app.get("/api/prefs/hidden")
-def get_hidden():
-    log.info("GET /api/prefs/hidden")
-    return {"hidden": _read_xid_file("xid_hide.txt")}
-
-
-@app.post("/api/prefs/hidden")
-def set_hidden(hidden: list[str] = Body(...)):
-    log.info("POST /api/prefs/hidden (%d items)", len(hidden))
-    _write_xid_file("xid_hide.txt", hidden)
-    return {"status": "ok"}
-
-
-@app.post("/api/prefs/hide/{xid}")
-def hide_xid(xid: str):
-    log.info("POST /api/prefs/hide/%s", xid)
-    current = set(_read_xid_file("xid_hide.txt"))
-    current.add(xid)
-    _write_xid_file("xid_hide.txt", current)
-    return {"status": "ok", "hidden": True}
-
-
-@app.post("/api/prefs/unhide/{xid}")
-def unhide_xid(xid: str):
-    log.info("POST /api/prefs/unhide/%s", xid)
-    current = set(_read_xid_file("xid_hide.txt"))
-    current.discard(xid)
-    _write_xid_file("xid_hide.txt", current)
-    return {"status": "ok", "hidden": False}
-
-
 @app.post("/api/note/{xid}")
 def set_note(xid: str, note: str = Body(..., embed=True)):
     """Set or delete a note for an XID."""
@@ -453,17 +423,13 @@ def get_overview():
 
 
 @app.get("/api/overview/inactive")
-def get_overview_inactive(include_hidden: bool = False):
+def get_overview_inactive():
     """Get overview of cold and frozen experiments - slower path.
-
-    Args:
-        include_hidden: If true, include hidden XIDs (marked with hidden=true).
 
     Returns ALL inactive workdirs. Client should filter out hot XIDs.
     """
     t0 = time.time()
-    hidden_xids = set(_read_xid_file("xid_hide.txt"))
-    log.info("GET /api/overview/inactive - fetching... (%d hidden, include=%s)", len(hidden_xids), include_hidden)
+    log.info("GET /api/overview/inactive - fetching...")
 
     # Read all workdirs (client will filter out hot XIDs)
     workdirs = [d.name for d in BASEDIR.iterdir() if d.is_dir()]
@@ -472,9 +438,7 @@ def get_overview_inactive(include_hidden: bool = False):
     # Build list of all XIDs (client filters out hot ones)
     all_xids = {}
     for xid, wd in sorted(wd_by_xid.items(), reverse=True):
-        is_hidden = xid in hidden_xids
-        if include_hidden or not is_hidden:
-            all_xids[xid] = {"wd": wd, "hidden": is_hidden}
+        all_xids[xid] = {"wd": wd}
 
     # Split into cold (first NUM_RECENT) and frozen (rest)
     all_list = list(all_xids.keys())
@@ -1077,8 +1041,39 @@ def delete_xid(xid: str):
     return {"status": "ok", "xid": xid, "deleted": deleted}
 
 
+@app.post("/api/action/archive/{xid}")
+def archive_xid(xid: str):
+    """Archive an XID by removing checkpoints and moving workdir to archive directory."""
+    if not ACTIONS_ENABLED:
+        raise HTTPException(status_code=403, detail="Actions are disabled (--no-actions)")
+    if ARCHIVE_DIR is None:
+        raise HTTPException(status_code=400, detail="Archive directory not configured (use --archive-dir)")
+    if not xid or not _xid_re.fullmatch(xid):
+        raise HTTPException(status_code=400, detail="Invalid XID format")
+    log.info("POST /api/action/archive/%s", xid)
+    wd_path = BASEDIR / xid
+    if not wd_path.exists():
+        raise HTTPException(status_code=404, detail=f"XID {xid} not found")
+    # Remove ckpt-* directories/files from workdir and subdirectories
+    for item in wd_path.rglob("ckpt-*"):
+        if item.is_symlink():
+            item.unlink()
+            log.info("Removed checkpoint symlink %s", item)
+        elif item.is_dir():
+            shutil.rmtree(item)
+            log.info("Removed checkpoint dir %s", item)
+        else:
+            item.unlink()
+            log.info("Removed checkpoint file %s", item)
+    # Move workdir to archive directory
+    dest = ARCHIVE_DIR / xid
+    shutil.move(str(wd_path), str(dest))
+    log.info("Moved %s to %s", wd_path, dest)
+    return {"status": "ok", "xid": xid, "archived_to": str(dest)}
+
+
 def main():
-    global PREFS_DIR, ACTIONS_ENABLED
+    global PREFS_DIR, ACTIONS_ENABLED, ARCHIVE_DIR
     import argparse
     parser = argparse.ArgumentParser(description="sManager - Slurm job management web UI")
     parser.add_argument("--version", action="version", version=f"smanager {__version__}")
@@ -1086,6 +1081,7 @@ def main():
     parser.add_argument("--port", type=int, default=2337)
     parser.add_argument("--prefs-dir", help=f"Directory for preferences files (default: /checkpoint/rigi/USER)")
     parser.add_argument("--no-actions", action="store_true", help="Disable all action endpoints (stop, resume, delete)")
+    parser.add_argument("--archive-dir", help="Directory where archived XIDs are moved to")
     args = parser.parse_args()
     if args.prefs_dir:
         PREFS_DIR = Path(args.prefs_dir)
@@ -1093,6 +1089,9 @@ def main():
     if args.no_actions:
         ACTIONS_ENABLED = False
         log.info("Actions are DISABLED (--no-actions flag)")
+    if args.archive_dir:
+        ARCHIVE_DIR = Path(args.archive_dir)
+        log.info("Archive directory: %s", ARCHIVE_DIR)
     uvicorn.run(app, host=args.host, port=args.port)
 
 
