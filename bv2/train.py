@@ -379,15 +379,16 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         prints(f"Step times (med: {np.median(train_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in train_times)}")  # fmt: skip
 
     if u.about_to_get_killed():
+        mw.finish(training_done=False)
         prints(f"Finished {perf_counter() - u.about_to_get_killed()}s after getting the pre-emption call!")
     else:
+        mw.finish(training_done=True)
         with open(pjoin(workdir, "DONE"), "w+") as f:
             f.write("All good!")
         prints0(f"Done. Workdir: {u.BLUE}{workdir}{u.RESET}")
 
     torch._dynamo.reset()  # Avoid hang: https://x.com/main_horse/status/1937900381574717940
     distr.destroy_process_group()
-    mw.finish()
     prints("Destroyed group. All done for real.")
 
 

@@ -34,7 +34,7 @@ class BytesWriter:
     def end_step(self):
         self.step += 1
 
-    def finish(self):
+    def finish(self, training_done):
         pass
 
     def save_ckpt(self):
@@ -85,8 +85,8 @@ class WandbWriter:
         self.step += 1
 
     @only_on_rank0
-    def finish(self):
-        self.wandb_run.finish()
+    def finish(self, training_done):
+        self.wandb_run.finish()  # Wandb doesn't know "preempted state", so always finish.
 
     @only_on_rank0
     def save_ckpt(self):
@@ -114,7 +114,7 @@ class JsonlWriter:
             self.step_metrics = {}
         self.step += 1
 
-    def finish(self):
+    def finish(self, training_done):
         pass
 
     def save_ckpt(self):
@@ -160,8 +160,9 @@ class PlattliWriter:
         self.step += 1
 
     @only_on_rank0
-    def finish(self):
-        self.writer.finish(optimize=True, zip=True)
+    def finish(self, training_done):
+        # Only optimize plattli storage/zip when we're fully done, not when preempted.
+        self.writer.finish(optimize=training_done, zip=training_done)
 
     def save_ckpt(self):
         return None
@@ -179,9 +180,9 @@ class MultiWriter:
         for w in self.writers.values():
             w.end_step()
 
-    def finish(self):
+    def finish(self, training_done):
         for w in self.writers.values():
-            w.finish()
+            w.finish(training_done)
 
     def save_ckpt(self):
         return {name: w.save_ckpt() for name, w in self.writers.items() if w is not None}
