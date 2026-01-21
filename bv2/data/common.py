@@ -41,7 +41,7 @@ def shuffled_iota_exids(n, seed, epochs=None, start_epoch=0, start_offset=0, ran
 
 
 def cycle_qas(qas, epoch, seed):
-    # `qas` is a {"q": ["a", "a", ...], ...} or similar.
+    # `qas` is a {ID: ("q", ["a", "a", ...]), ...} or similar.
 
     # An example can have multiple Q/A pairs, and each Q can have multiple A's.
     # For many datasets with multiple Q's, the order is structured, for example
@@ -53,7 +53,8 @@ def cycle_qas(qas, epoch, seed):
     q_cycle, q_idx = divmod(epoch, num_qs)
     if seed is not None and num_qs > 1:
         q_idx = u.rng(seed, q_cycle).permutation(num_qs)[q_idx]
-    question, answers = list(qas.items())[q_idx]
+    qid = list(qas)[q_idx]
+    question, answers = qas[qid]
 
     num_as = len(answers)
     if seed is not None and num_as > 1:
@@ -61,7 +62,7 @@ def cycle_qas(qas, epoch, seed):
     else:
         a_idx = q_cycle % num_as
     answer = answers[a_idx]
-    return question, answer
+    return qid, question, answer
 
 
 @cache

@@ -68,7 +68,7 @@ class Dataset:
         # TODO: some datasets contain a sequence of QAs that are follow-ups:
         # question - answer; follow q - answer; follow q - answer. In this case, we should
         # concat all the QAs instead of picking a random one.
-        question, answer = cycle_qas(data["qas"], epoch, seed=(self.data_seed, exid, "cycle_qas"))
+        qid, question, answer = cycle_qas(data["qas"], epoch, seed=(self.data_seed, exid, "cycle_qas"))
         prefix = self.tt.encode(question)
         suffix = self.tt.encode(answer)
         npre, nsuf = len(prefix), len(suffix)

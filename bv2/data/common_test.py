@@ -83,9 +83,9 @@ def test_shuffled_iota_exids():
 
 def test_cycle_qas():
     qas = {
-        "q1": ["a"],
-        "q2": ["a", "b"],
-        "q3": ["A", "B", "C", "D"],
+        "q1": ("q", ["a"]),
+        "q2": ("p", ["a", "b"]),
+        "q3": ("Q", ["A", "B", "C", "D"]),
     }
 
     noseed_seen = []
@@ -96,10 +96,10 @@ def test_cycle_qas():
         seed1_seen.append(cycle_qas(qas, epoch, seed="hahaha"))
         seed2_seen.append(cycle_qas(qas, epoch, seed="lollol"))
     expected = [
-        ("q1", "a"), ("q2", "a"), ("q3", "A"),
-        ("q1", "a"), ("q2", "b"), ("q3", "B"),
-        ("q1", "a"), ("q2", "a"), ("q3", "C"),
-        ("q1", "a"), ("q2", "b"), ("q3", "D"),
+        ("q1", "q", "a"), ("q2", "p", "a"), ("q3", "Q", "A"),
+        ("q1", "q", "a"), ("q2", "p", "b"), ("q3", "Q", "B"),
+        ("q1", "q", "a"), ("q2", "p", "a"), ("q3", "Q", "C"),
+        ("q1", "q", "a"), ("q2", "p", "b"), ("q3", "Q", "D"),
     ]
 
     # Visits should match in all cases:

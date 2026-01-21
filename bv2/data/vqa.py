@@ -54,7 +54,7 @@ class Dataset:
             img = img if img.mode == "RGB" else img.convert("RGB")
             # NOTE: Not using "ocr.json" here yet.
 
-        question, answer = cycle_qas(data["qas"], epoch, seed=(self.data_seed, exid, "cycle_qas"))
+        qid, question, answer = cycle_qas(data["qas"], epoch, seed=(self.data_seed, exid, "cycle_qas"))
         answer = answer.lower() if self.lower_a else answer
         question = question.lower() if self.lower_q else question
         question = self.qfmt.format(q=question)
