@@ -350,6 +350,7 @@
     <div class="tabs">
         <button class="tab active" data-view="overview">Overview</button>
         <button class="tab" data-view="xid-detail">XID Details</button>
+        <button class="tab" data-view="misc-detail">Misc Details</button>
     </div>
 
     <div id="overview" class="view active">
@@ -427,6 +428,32 @@
         </div>
     </div>
 
+    <div id="misc-detail" class="view">
+        <h2>Miscellaneous Jobs</h2>
+        <p style="color: var(--text-muted); margin-bottom: 16px;">Jobs running under the rigi account that don't match the XID pattern.</p>
+        <div class="table-container" style="max-height: none; overflow-y: visible;">
+            <table id="miscTable">
+                <thead>
+                    <tr>
+                        <th>Job ID</th>
+                        <th>Name</th>
+                        <th>User</th>
+                        <th>State</th>
+                        <th>Time</th>
+                        <th>CPUs</th>
+                        <th>QoS</th>
+                        <th>Nodes</th>
+                        <th>GPUs</th>
+                        <th>Priority</th>
+                        <th>Reason</th>
+                        <th>Server</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
     <script>
         // Theme handling
         function setTheme(theme) {
@@ -479,6 +506,7 @@
 
         let servers = [];
         let overviewData = {};
+        let miscData = {};  // serverIdx -> misc jobs data
         let favorites = new Set();
         let showOnlyFavorites = false;
         let serverUsers = {};  // serverIdx -> username
@@ -1046,7 +1074,7 @@
                     <tr>
                         <td class="text-center"></td>
                         <td class="text-center"></td>
-                        <td class="mono">Miscellaneous</td>
+                        <td class="mono"><span class="clickable" onclick="showMiscDetail()">Miscellaneous</span></td>
                         <td></td>
                         <td>${formatStates(r.states)}</td>
                         <td class="mono">${r.wus}</td>
@@ -1253,6 +1281,61 @@
             // Push to history so back button works
             history.pushState({ xid, serverIdx }, '', '#' + xid);
             loadXidDetail();
+        }
+
+        function showMiscDetail() {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector('[data-view="misc-detail"]').classList.add('active');
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.getElementById('misc-detail').classList.add('active');
+            history.pushState({ view: 'misc-detail' }, '', '#misc');
+            renderMiscTable();
+        }
+
+        function renderMiscTable() {
+            const tbody = document.querySelector('#miscTable tbody');
+            const rows = [];
+            for (const [sIdx, data] of Object.entries(overviewData)) {
+                if (!data || !data.misc || !data.misc.jobs) continue;
+                const serverName = servers[sIdx].name;
+                for (const job of data.misc.jobs) {
+                    rows.push({
+                        jobId: job.JOBID || '',
+                        name: job.NAME || '',
+                        user: job.USER || '',
+                        state: job.STATE || '',
+                        time: job.TIME || job.TIME_USED || '',
+                        cpus: job.CPUS || job.NUM_CPUS || '',
+                        qos: job.QOS || '',
+                        nodes: job.NODES || job.NUM_NODES || '',
+                        gpus: job.TRES_PER_NODE || '',
+                        priority: job.PRIORITY || '',
+                        reason: job.REASON || '',
+                        server: serverName,
+                    });
+                }
+            }
+            if (rows.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="12" class="loading">No miscellaneous jobs found</td></tr>';
+                return;
+            }
+            const stateEmoji = s => STATE_EMOJIS[s] || '';
+            tbody.innerHTML = rows.map(r => `
+                <tr>
+                    <td class="mono">${r.jobId}</td>
+                    <td>${r.name}</td>
+                    <td>${r.user}</td>
+                    <td>${stateEmoji(r.state)} ${r.state}</td>
+                    <td class="mono">${r.time}</td>
+                    <td class="mono text-right">${r.cpus}</td>
+                    <td>${r.qos}</td>
+                    <td class="mono text-right">${r.nodes}</td>
+                    <td>${r.gpus}</td>
+                    <td class="mono">${r.priority}</td>
+                    <td>${r.reason}</td>
+                    <td><span class="server-badge">${r.server}</span></td>
+                </tr>
+            `).join('');
         }
 
         async function loadXidFromHash() {
@@ -1616,6 +1699,9 @@
                         history.pushState({ xid }, '', '#' + xid);
                         loadXidDetail();
                     }
+                } else if (tab.dataset.view === 'misc-detail') {
+                    history.pushState({ view: 'misc-detail' }, '', '#misc');
+                    renderMiscTable();
                 } else {
                     history.pushState({ view: tab.dataset.view }, '', window.location.pathname);
                     refreshAll();
@@ -1626,7 +1712,13 @@
         // Handle back/forward navigation
         function handleNavigation() {
             const hash = window.location.hash;
-            if (hash && hash.length > 1) {
+            if (hash === '#misc') {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelector('[data-view="misc-detail"]').classList.add('active');
+                document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+                document.getElementById('misc-detail').classList.add('active');
+                renderMiscTable();
+            } else if (hash && hash.length > 1) {
                 loadXidFromHash();
             } else {
                 // Go back to overview

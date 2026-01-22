@@ -158,8 +158,8 @@ def extract_xid(name):
 
 
 def get_jobs(group=GROUP):
-    lines = run_cmd(f"squeue -A {group} -O JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:20,NumNodes:20,GRES:20,RestartCnt:20,Reason:20")
-    jobs = [[j[i*20:(i+1)*20].strip() for i in range(11)] for j in lines if j.strip()]
+    lines = run_cmd(f"squeue -A {group} -O JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:20,NumNodes:20,GRES:20,RestartCnt:20,Reason:20,Priority:20")
+    jobs = [[j[i*20:(i+1)*20].strip() for i in range(12)] for j in lines if j.strip()]
     if len(jobs) < 2:
         return [], []
     return jobs[0], jobs[1:]
@@ -436,7 +436,7 @@ def get_overview():
                 misc_gpus += int(nodes) * nGPUs.get(tres, 0)
             except:
                 pass
-        misc = {"count": len(misc_jobs), "gpus": misc_gpus, "states": dict(misc_states)}
+        misc = {"count": len(misc_jobs), "gpus": misc_gpus, "states": dict(misc_states), "jobs": misc_jobs}
 
     log.info("GET /api/overview - done: %d hot, %d misc (%.2fs)", len(hot_xids), len(misc_jobs), time.time() - t0)
     return {"hot": hot_xids, "misc": misc}
