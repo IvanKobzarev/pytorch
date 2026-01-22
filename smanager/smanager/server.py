@@ -158,11 +158,18 @@ def extract_xid(name):
 
 
 def get_jobs(group=GROUP):
-    lines = run_cmd(f"squeue -A {group} -O JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:20,NumNodes:20,GRES:20,RestartCnt:20,Reason:20,Priority:20,PriorityLong:20")
+    lines = run_cmd(f"squeue -A {group} -O JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:20,NumNodes:20,tres-per-node:20,RestartCnt:20,Reason:20,Priority:20,PriorityLong:20")
     jobs = [[j[i*20:(i+1)*20].strip() for i in range(13)] for j in lines if j.strip()]
     if len(jobs) < 2:
         return [], []
-    return jobs[0], jobs[1:]
+    headers = jobs[0]
+    # Handle duplicate header names (e.g., both Priority and PriorityLong may output as PRIORITY)
+    seen = {}
+    for i, h in enumerate(headers):
+        if h in seen:
+            headers[i] = h + "_LONG"
+        seen[h] = True
+    return headers, jobs[1:]
 
 
 def extract_common_name(workdir_names, xid):

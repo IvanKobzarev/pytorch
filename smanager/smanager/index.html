@@ -435,17 +435,18 @@
             <table id="miscTable">
                 <thead>
                     <tr>
+                        <th style="width: 2em"></th>
                         <th>Job ID</th>
                         <th>Name</th>
                         <th>User</th>
                         <th>State</th>
                         <th>Time</th>
-                        <th>CPUs</th>
+                        <th style="width: 50px;">CPUs</th>
                         <th>QoS</th>
-                        <th>Nodes</th>
+                        <th style="width: 50px;">Nodes</th>
                         <th>GPUs</th>
-                        <th>Priority</th>
-                        <th>PriorityLong</th>
+                        <th>Prio</th>
+                        <th>PrioL</th>
                         <th>Reason</th>
                         <th>Server</th>
                     </tr>
@@ -844,10 +845,14 @@
             setLoadStatus('');
         }
 
-        function refresh() {
+        async function refresh() {
             // Refresh the currently active tab
             if (document.getElementById('xid-detail').classList.contains('active')) {
                 loadXidDetail();
+            } else if (document.getElementById('misc-detail').classList.contains('active')) {
+                document.querySelector('#miscTable tbody').innerHTML = '<tr><td colspan="14" class="loading">Loading...</td></tr>';
+                await refreshAll();
+                renderMiscTable();
             } else {
                 refreshAll();
             }
@@ -1300,12 +1305,17 @@
             loadXidDetail();
         }
 
-        function showMiscDetail() {
+        async function showMiscDetail() {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.querySelector('[data-view="misc-detail"]').classList.add('active');
             document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
             document.getElementById('misc-detail').classList.add('active');
             history.pushState({ view: 'misc-detail' }, '', '#misc');
+            // Load overview data if not already loaded
+            if (Object.keys(overviewData).length === 0) {
+                document.querySelector('#miscTable tbody').innerHTML = '<tr><td colspan="14" class="loading">Loading...</td></tr>';
+                await refreshAll();
+            }
             renderMiscTable();
         }
 
@@ -1315,6 +1325,7 @@
             for (const [sIdx, data] of Object.entries(overviewData)) {
                 if (!data || !data.misc || !data.misc.jobs) continue;
                 const serverName = servers[sIdx].name;
+                const serverUrl = servers[sIdx].url;
                 for (const job of data.misc.jobs) {
                     rows.push({
                         jobId: job.JOBID || '',
@@ -1322,30 +1333,41 @@
                         user: job.USER || '',
                         state: job.STATE || '',
                         time: job.TIME || job.TIME_USED || '',
-                        cpus: job.CPUS || job.NUM_CPUS || '',
+                        cpus: job.CPUS || '',
                         qos: job.QOS || '',
-                        nodes: job.NODES || job.NUM_NODES || '',
+                        nodes: job.NODES || '',
                         gpus: job.TRES_PER_NODE || '',
                         priority: job.PRIORITY || '',
                         priorityLong: job.PRIORITY_LONG || '',
                         reason: job.REASON || '',
                         server: serverName,
+                        serverUrl: serverUrl,
                     });
                 }
             }
             if (rows.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="12" class="loading">No miscellaneous jobs found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="14" class="loading">No miscellaneous jobs found</td></tr>';
                 return;
             }
             const stateEmoji = s => STATE_EMOJIS[s] || '';
-            const fmtPriority = p => {
+            // Format float priority as percentage with 3 decimals (like Python's {x:.3%})
+            const fmtPrio = p => {
+                const n = parseFloat(p);
+                if (isNaN(n)) return p;
+                return (n * 100).toFixed(3) + '%';
+            };
+            // Format long priority with 2 decimal places
+            const fmtPrioL = p => {
                 const n = parseInt(p);
                 if (isNaN(n)) return p;
-                if (n >= 100000) return Math.round(n / 1000) + 'k';
+                if (n >= 1000000) return (n / 1000000).toFixed(2) + 'M';
+                if (n >= 1000) return (n / 1000).toFixed(2) + 'k';
                 return String(n);
             };
+            const isActive = s => ['RUNNING', 'PENDING', 'REQUEUE_HOLD', 'COMPLETING'].includes(s);
             tbody.innerHTML = rows.map(r => `
-                <tr>
+                <tr data-jid="${r.jobId}">
+                    <td class="text-center">${isActive(r.state) ? `<span class="action-btn" onclick="stopJob('${r.serverUrl}', ${r.jobId})" title="Stop (scancel ${r.jobId})">⏸️</span>` : ''}</td>
                     <td class="mono">${r.jobId}</td>
                     <td>${r.name}</td>
                     <td>${r.user}</td>
@@ -1355,7 +1377,8 @@
                     <td>${r.qos}</td>
                     <td class="mono text-right">${r.nodes}</td>
                     <td>${r.gpus}</td>
-                    <td class="mono">${fmtPriority(r.priority)}</td>
+                    <td class="mono" title="${r.priority}">${fmtPrio(r.priority)}</td>
+                    <td class="mono" title="${r.priorityLong}">${fmtPrioL(r.priorityLong)}</td>
                     <td>${r.reason}</td>
                     <td><span class="server-badge">${r.server}</span></td>
                 </tr>
@@ -1367,6 +1390,12 @@
             if (!hash || hash.length < 2) return;
             const xid = hash.slice(1);
             if (!xid) return;
+
+            // Handle #misc specially
+            if (xid === 'misc') {
+                showMiscDetail();
+                return;
+            }
 
             document.getElementById('xidInput').value = xid;
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
