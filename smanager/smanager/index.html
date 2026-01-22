@@ -445,6 +445,7 @@
                         <th>Nodes</th>
                         <th>GPUs</th>
                         <th>Priority</th>
+                        <th>PriorityLong</th>
                         <th>Reason</th>
                         <th>Server</th>
                     </tr>
@@ -989,7 +990,7 @@
                     });
                 }
 
-                // Add miscellaneous row for non-XID jobs
+                // Aggregate miscellaneous jobs (will add single row after loop)
                 const misc = data.misc;
                 if (misc && misc.count > 0) {
                     const miscStates = misc.states || {};
@@ -998,23 +999,6 @@
                     }
                     totalWUs += misc.count;
                     totalGPUs += misc.gpus || 0;
-                    hotRows.push({
-                        server: serverName,
-                        serverIdx: sIdx,
-                        xid: null,
-                        user: '',
-                        states: miscStates,
-                        wus: misc.count,
-                        gpuPerJob: 0,
-                        totalGpus: misc.gpus || 0,
-                        restarts: 0,
-                        qos: '',
-                        config: '',
-                        name: '',
-                        note: '',
-                        warningCount: 0,
-                        isMisc: true,
-                    });
                 }
 
                 // Add cold (recent) experiments with full info
@@ -1056,6 +1040,39 @@
                 }
             }
 
+            // Add single aggregated miscellaneous row for all servers
+            let totalMiscCount = 0;
+            let totalMiscGpus = 0;
+            const miscStates = {};
+            for (const [sIdx, data] of Object.entries(overviewData)) {
+                if (!data || !data.misc) continue;
+                const misc = data.misc;
+                totalMiscCount += misc.count || 0;
+                totalMiscGpus += misc.gpus || 0;
+                for (const [k, v] of Object.entries(misc.states || {})) {
+                    miscStates[k] = (miscStates[k] || 0) + v;
+                }
+            }
+            if (totalMiscCount > 0) {
+                hotRows.push({
+                    server: '',
+                    serverIdx: null,
+                    xid: null,
+                    user: '',
+                    states: miscStates,
+                    wus: totalMiscCount,
+                    gpuPerJob: 0,
+                    totalGpus: totalMiscGpus,
+                    restarts: 0,
+                    qos: '',
+                    config: '',
+                    name: '',
+                    note: '',
+                    warningCount: 0,
+                    isMisc: true,
+                });
+            }
+
             // Sort by xid descending (misc rows with null xid go to the end)
             hotRows.sort((a, b) => {
                 if (!a.xid) return 1;
@@ -1083,7 +1100,7 @@
                         <td></td>
                         <td></td>
                         <td></td>
-                        <td><span class="server-badge">${r.server}</span></td>
+                        <td></td>
                     </tr>`;
                 }
                 const displayText = r.note || r.name;
@@ -1310,6 +1327,7 @@
                         nodes: job.NODES || job.NUM_NODES || '',
                         gpus: job.TRES_PER_NODE || '',
                         priority: job.PRIORITY || '',
+                        priorityLong: job.PRIORITY_LONG || '',
                         reason: job.REASON || '',
                         server: serverName,
                     });
@@ -1320,6 +1338,12 @@
                 return;
             }
             const stateEmoji = s => STATE_EMOJIS[s] || '';
+            const fmtPriority = p => {
+                const n = parseInt(p);
+                if (isNaN(n)) return p;
+                if (n >= 100000) return Math.round(n / 1000) + 'k';
+                return String(n);
+            };
             tbody.innerHTML = rows.map(r => `
                 <tr>
                     <td class="mono">${r.jobId}</td>
@@ -1331,7 +1355,7 @@
                     <td>${r.qos}</td>
                     <td class="mono text-right">${r.nodes}</td>
                     <td>${r.gpus}</td>
-                    <td class="mono">${r.priority}</td>
+                    <td class="mono">${fmtPriority(r.priority)}</td>
                     <td>${r.reason}</td>
                     <td><span class="server-badge">${r.server}</span></td>
                 </tr>
