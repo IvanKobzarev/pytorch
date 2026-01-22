@@ -961,6 +961,34 @@
                     });
                 }
 
+                // Add miscellaneous row for non-XID jobs
+                const misc = data.misc;
+                if (misc && misc.count > 0) {
+                    const miscStates = misc.states || {};
+                    for (const [k, v] of Object.entries(miscStates)) {
+                        allStates[k] = (allStates[k] || 0) + v;
+                    }
+                    totalWUs += misc.count;
+                    totalGPUs += misc.gpus || 0;
+                    hotRows.push({
+                        server: serverName,
+                        serverIdx: sIdx,
+                        xid: null,
+                        user: '',
+                        states: miscStates,
+                        wus: misc.count,
+                        gpuPerJob: 0,
+                        totalGpus: misc.gpus || 0,
+                        restarts: 0,
+                        qos: '',
+                        config: '',
+                        name: '',
+                        note: '',
+                        warningCount: 0,
+                        isMisc: true,
+                    });
+                }
+
                 // Add cold (recent) experiments with full info
                 for (const [xid, info] of Object.entries(data.cold || {})) {
                     const wus = info.wus || {};
@@ -1000,15 +1028,36 @@
                 }
             }
 
-            // Sort by xid descending
-            hotRows.sort((a, b) => b.xid.localeCompare(a.xid));
+            // Sort by xid descending (misc rows with null xid go to the end)
+            hotRows.sort((a, b) => {
+                if (!a.xid) return 1;
+                if (!b.xid) return -1;
+                return b.xid.localeCompare(a.xid);
+            });
 
             // Filter out hot XIDs from cold rows (server returns all, we filter client-side)
-            const hotXids = new Set(hotRows.map(r => r.xid));
+            const hotXids = new Set(hotRows.map(r => r.xid).filter(x => x));
             allColdRows = allColdRows.filter(r => !hotXids.has(r.xid));
             allColdRows.sort((a, b) => b.xid.localeCompare(a.xid));
 
             hotBody.innerHTML = hotRows.map((r, idx) => {
+                if (r.isMisc) {
+                    return `
+                    <tr>
+                        <td class="text-center"></td>
+                        <td class="text-center"></td>
+                        <td class="mono">Miscellaneous</td>
+                        <td></td>
+                        <td>${formatStates(r.states)}</td>
+                        <td class="mono">${r.wus}</td>
+                        <td class="mono text-right">${r.totalGpus}</td>
+                        <td class="mono text-right"></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td><span class="server-badge">${r.server}</span></td>
+                    </tr>`;
+                }
                 const displayText = r.note || r.name;
                 const textClass = r.note ? 'note-text' : 'name-text';
                 const escapedNote = (r.note || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');

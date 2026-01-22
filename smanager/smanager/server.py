@@ -357,14 +357,18 @@ def get_overview():
         log.info("GET /api/overview - no jobs found (%.2fs)", time.time() - t0)
         return {"hot": {}}
 
-    # Build jobs lookup
+    # Build jobs lookup and track misc (non-XID) jobs
     jobs_by_name = {}
+    misc_jobs = []
     for row in job_rows:
         job = dict(zip(headers, row))
         name = job.get("NAME", "")
-        if name not in jobs_by_name:
-            jobs_by_name[name] = []
-        jobs_by_name[name].append(job)
+        if extract_xid(name):
+            if name not in jobs_by_name:
+                jobs_by_name[name] = []
+            jobs_by_name[name].append(job)
+        else:
+            misc_jobs.append(job)
 
     # Only get workdirs that have active jobs
     t2 = time.time()
@@ -418,8 +422,24 @@ def get_overview():
         if "jobs" in info:
             del info["jobs"]
 
-    log.info("GET /api/overview - done: %d hot (%.2fs)", len(hot_xids), time.time() - t0)
-    return {"hot": hot_xids}
+    # Compute misc stats (non-XID jobs)
+    misc = None
+    if misc_jobs:
+        misc_gpus = 0
+        misc_states = Counter(j.get("STATE", "") for j in misc_jobs)
+        for job in misc_jobs:
+            if job.get("STATE") != "RUNNING":
+                continue
+            nodes = job.get("NODES", "1")
+            tres = job.get("TRES_PER_NODE", "")
+            try:
+                misc_gpus += int(nodes) * nGPUs.get(tres, 0)
+            except:
+                pass
+        misc = {"count": len(misc_jobs), "gpus": misc_gpus, "states": dict(misc_states)}
+
+    log.info("GET /api/overview - done: %d hot, %d misc (%.2fs)", len(hot_xids), len(misc_jobs), time.time() - t0)
+    return {"hot": hot_xids, "misc": misc}
 
 
 @app.get("/api/overview/inactive")
