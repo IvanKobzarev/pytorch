@@ -361,6 +361,7 @@
                     <tr>
                         <th class="col-fav">♡</th>
                         <th class="col-rq">↶</th>
+                        <th style="width:1.6em" title="Open run in Flättlibrettli">📉︎</th>
                         <th class="col-xid">XID</th>
                         <th class="col-usr">User</th>
                         <th class="col-states">States</th>
@@ -390,6 +391,7 @@
                         <th class="col-fav">♡</th>
                         <th class="col-del">🗑</th>
                         <th class="col-archive">📦︎</th>
+                        <th style="width:1.6em" title="Open run in Flättlibrettli">📉︎</th>
                         <th class="col-xid">XID</th>
                         <th class="col-usr">User</th>
                         <th style="width:5em">WUs</th>
@@ -418,6 +420,7 @@
                 <button id="regexToggle" class="regex-toggle" onclick="toggleRegexMode()" title="Toggle regex mode">.*</button>
             </span>
             <span class="bulk-actions">
+                <span id="bulkFlattliBtn" class="bulk-action-btn enabled" onclick="bulkFlattli()" title="Open run in Flättlibrettli">📉︎</span>
                 <span id="bulkRequeueBtn" class="bulk-action-btn" onclick="bulkRequeue()" title="Requeue selected">↶</span>
                 <span id="bulkRestartBtn" class="bulk-action-btn" onclick="bulkRestart()" title="Restart selected">▶️</span>
                 <span id="bulkStopBtn" class="bulk-action-btn" onclick="bulkStop()" title="Stop selected">⏸️</span>
@@ -568,6 +571,10 @@
                 if (row) row.classList.remove('outdated');
                 alert(`Error archiving XID: ${e.message}`);
             }
+        }
+
+        function openFlattli(xid) {
+            window.open(`${location.protocol}//${location.hostname}:1337?run=${xid}`, '_blank');
         }
 
         function toggleFavorite(xid) {
@@ -809,8 +816,8 @@
         async function refreshAll() {
             overviewData = {};
             inactiveLoaded = false;
-            document.querySelector('#hotTable tbody').innerHTML = '<tr><td colspan="12" class="loading">Loading...</td></tr>';
-            document.querySelector('#coldTable tbody').innerHTML = '<tr><td colspan="9" class="loading">Loading inactive experiments...</td></tr>';
+            document.querySelector('#hotTable tbody').innerHTML = '<tr><td colspan="13" class="loading">Loading...</td></tr>';
+            document.querySelector('#coldTable tbody').innerHTML = '<tr><td colspan="10" class="loading">Loading inactive experiments...</td></tr>';
 
             const numServers = servers.length;
             let hotCompleted = 0;
@@ -1096,6 +1103,7 @@
                     <tr>
                         <td class="text-center"></td>
                         <td class="text-center"></td>
+                        <td class="text-center"></td>
                         <td class="mono"><span class="clickable" onclick="showMiscDetail()">Miscellaneous</span></td>
                         <td></td>
                         <td>${formatStates(r.states)}</td>
@@ -1121,6 +1129,7 @@
                 <tr>
                     <td class="text-center"><span class="fav-btn ${favorites.has(r.xid) ? 'active' : ''}" onclick="toggleFavorite('${r.xid}')">${favorites.has(r.xid) ? '❤︎' : '♡'}</span></td>
                     <td class="text-center"><span class="rq-btn" onclick="requeueXid('${serverUrl}', '${r.xid}')" title="Requeue all jobs">↶</span></td>
+                    <td class="text-center"><span class="rq-btn" onclick="openFlattli('${r.xid}')" title="Open run in Flättlibrettli">📉︎</span></td>
                     <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="code-btn" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span><span class="stop-btn" onclick="stopXid('${serverUrl}', '${r.xid}')" title="Stop (scancel -n ${r.xid})">⏹</span></td>
                     <td class="${userClass}">${r.user}</td>
                     <td>${formatStates(r.states)}</td>
@@ -1136,6 +1145,7 @@
 
             hotFoot.innerHTML = `
                 <tr class="footer-row">
+                    <td></td>
                     <td></td>
                     <td></td>
                     <td></td>
@@ -1193,6 +1203,7 @@
                     <td class="text-center"><span class="fav-btn ${favorites.has(r.xid) ? 'active' : ''}" onclick="toggleFavorite('${r.xid}')">${favorites.has(r.xid) ? '❤︎' : '♡'}</span></td>
                     <td class="text-center">${delBtn}</td>
                     <td class="text-center">${archiveBtn}</td>
+                    <td class="text-center"><span class="rq-btn" onclick="openFlattli('${r.xid}')" title="Open run in Flättlibrettli">📉︎</span></td>
                     <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="code-btn" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span></td>
                     <td class="${userClass}">${r.user}</td>
                     <td class="mono">
@@ -1681,6 +1692,24 @@
             requeueBtn.classList.toggle('enabled', allCanRequeue);
             restartBtn.classList.toggle('enabled', allCanRestart);
             stopBtn.classList.toggle('enabled', allCanStop);
+        }
+
+        function bulkFlattli() {
+            const xid = document.getElementById('xidInput').value;
+            if (!xid) return;
+            const baseUrl = `${location.protocol}//${location.hostname}:1337`;
+            const selectedRows = [...document.querySelectorAll('#xidContent tbody tr.row-selected')].filter(r => r.style.display !== 'none');
+            if (selectedRows.length === 0) {
+                window.open(`${baseUrl}?run=${xid}`, '_blank');
+            } else {
+                const wuMap = Object.fromEntries((currentXidData?.wus || []).map(wu => [String(wu.wid), wu]));
+                const runs = selectedRows.map(r => {
+                    const wid = r.dataset.wid;
+                    const wu = wuMap[wid];
+                    return wu ? `${xid}/${wu.name}` : null;
+                }).filter(Boolean);
+                window.open(`${baseUrl}?${runs.map(r => 'run=' + r).join('&')}`, '_blank');
+            }
         }
 
         async function bulkStop() {
