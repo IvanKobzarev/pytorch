@@ -1,6 +1,10 @@
+from functools import cache
+
 import numpy as np
 from einops import rearrange
 from PIL import Image
+
+import bv2.utils as u
 
 
 def sanity_check(example):
@@ -80,3 +84,22 @@ def resize_max_patches(img, max_patches, *, ph=16, pw=16):
     # Lanczos used to be called ANTIALIAS in pillow. However, it's not quite the
     # same as TF and TV's linear+antialias. Let's see if it's a bottleneck.
     return img.resize(target, Image.LANCZOS)
+
+
+@cache
+def _patch_vals(min_patches, max_patches, exp, mode_patches=None):
+    vals = np.arange(min_patches, max_patches + 1)
+    if mode_patches:
+        probs = np.float_power(abs(vals - mode_patches) + 1.0, -exp)
+    else:
+        probs = np.float_power(vals, -exp)  # To avoid int neg power issues.
+    probs /= probs.sum()
+    return probs, vals
+
+
+def rand_resize(img, max_patches, exp=None, key=None, min_patches=64, mode_patches=None, *, ph=16, pw=16):
+    if exp is not None:
+        probs, vals = _patch_vals(min_patches, max_patches, exp, mode_patches)
+        max_patches = u.rng(key, "choice").choice(vals, p=probs)
+
+    return resize_max_patches(img, max_patches, ph=ph, pw=pw)

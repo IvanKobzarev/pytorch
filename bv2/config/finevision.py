@@ -20,6 +20,8 @@ def get_config():
         "textvqa": 21953//2, "textvqa_fmt": 21953//2,
     }
     c.data.common.max_patches = 784  # (448/16)^2 = 784; (2048/16)^2 = 16_384
+    c.data.common.rand_resize.exp = None  # Disables this.
+    c.data.common.rand_resize.mode_patches = None
     c.data.common.nreg = lambda: c.model.reg.nreg
     c.data.common.greyout_frac = 0.03
 
@@ -53,7 +55,7 @@ def get_config():
     # 16384 patches: 13m examples / 100k steps
     c.nsteps = 100_000
     c.warmup_nsteps = 1000
-    c.lr = 3e-4
+    c.lr = 6e-4
     c.wd = lambda: c.lr * 0.1
 
     c.muon.regexps = [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*txt_unemb.head.weight", r".*img_emb.proj.weight"]
@@ -64,12 +66,12 @@ def get_config():
     c.model.stages = lambda: "half" if c.model.reg.nreg > 0 else "single"
     c.model.txt_unemb.chunksz = 4096
 
-    def eval_data(name, blind=False, qfmt=None, lower_q=True, lower_a=True):
+    def eval_data(name, max_p=None, blind=False, qfmt=None, lower_q=True, lower_a=True):
         k = sws.Config()
         k.name = "vqa"
         k.split = name
         k.epochs = 1
-        k.max_patches = lambda: c.data.common.max_patches
+        k.max_patches = max_p or (lambda: min(c.data.common.max_patches, 3136))
         k.nreg = lambda: c.model.reg.nreg
         k.greyout_frac = 1.0 if blind else 0.0
         if qfmt:
@@ -78,35 +80,36 @@ def get_config():
         k.lower_a = lower_a
         return k
 
-    def pplx_eval(name, blind=False, qfmt=None):
+    def pplx_eval(name, max_p=None, blind=False, qfmt=None):
         k = sws.Config()
         k.type = "pplx"
-        k.steps = 5000 if blind else 2500
-        k.data = eval_data(name, blind=blind, qfmt=qfmt)
+        k.steps = 5000 if not blind and qfmt else 20_000
+        k.data = eval_data(name, max_p=max_p, blind=blind, qfmt=qfmt)
         k.iter.maxtok = lambda: c.maxtok
         return k
 
-    c.evals["docvqa/pplx"] = pplx_eval("docvqa/val")
-    c.evals["docvqa_fmt/pplx"] = pplx_eval("docvqa/val", qfmt=CUSTOM_QFMT["docvqa"])
-    c.evals["docvqa_fmt/pplx_blind"] = pplx_eval("docvqa/val", qfmt=CUSTOM_QFMT["docvqa"], blind=True)
-    c.evals["infovqa/pplx"] = pplx_eval("infovqa/val")
-    c.evals["infovqa_fmt/pplx"] = pplx_eval("infovqa/val", qfmt=CUSTOM_QFMT["infovqa"])
-    c.evals["infovqa_fmt/pplx_blind"] = pplx_eval("infovqa/val", qfmt=CUSTOM_QFMT["infovqa"], blind=True)
-    c.evals["stvqa/pplx"] = pplx_eval("stvqa/val")
-    c.evals["stvqa_fmt/pplx"] = pplx_eval("stvqa/val", qfmt=CUSTOM_QFMT["stvqa"])
-    c.evals["stvqa_fmt/pplx_blind"] = pplx_eval("stvqa/val", qfmt=CUSTOM_QFMT["stvqa"], blind=True)
-    c.evals["textvqa/pplx"] = pplx_eval("textvqa/val")
-    c.evals["textvqa_fmt/pplx"] = pplx_eval("textvqa/val", qfmt=CUSTOM_QFMT["textvqa"])
-    c.evals["textvqa_fmt/pplx_blind"] = pplx_eval("textvqa/val", qfmt=CUSTOM_QFMT["textvqa"], blind=True)
+    for max_p in (196, 784, 3136):  # 224/448/896
+        c.evals[f"docvqa/{max_p}/pplx"] = pplx_eval("docvqa/val", max_p)
+        c.evals[f"docvqa_fmt/{max_p}/pplx"] = pplx_eval("docvqa/val", max_p, qfmt=CUSTOM_QFMT["docvqa"])
+        c.evals[f"docvqa_fmt/{max_p}/blind/pplx"] = pplx_eval("docvqa/val", max_p, qfmt=CUSTOM_QFMT["docvqa"], blind=True)
+        c.evals[f"infovqa/{max_p}/pplx"] = pplx_eval("infovqa/val", max_p)
+        c.evals[f"infovqa_fmt/{max_p}/pplx"] = pplx_eval("infovqa/val", max_p, qfmt=CUSTOM_QFMT["infovqa"])
+        c.evals[f"infovqa_fmt/{max_p}/blind/pplx"] = pplx_eval("infovqa/val", max_p, qfmt=CUSTOM_QFMT["infovqa"], blind=True)
+        c.evals[f"stvqa/{max_p}/pplx"] = pplx_eval("stvqa/val", max_p)
+        c.evals[f"stvqa_fmt/{max_p}/pplx"] = pplx_eval("stvqa/val", max_p, qfmt=CUSTOM_QFMT["stvqa"])
+        c.evals[f"stvqa_fmt/{max_p}/blind/pplx"] = pplx_eval("stvqa/val", max_p, qfmt=CUSTOM_QFMT["stvqa"], blind=True)
+        c.evals[f"textvqa/{max_p}/pplx"] = pplx_eval("textvqa/val", max_p)
+        c.evals[f"textvqa_fmt/{max_p}/pplx"] = pplx_eval("textvqa/val", max_p, qfmt=CUSTOM_QFMT["textvqa"])
+        c.evals[f"textvqa_fmt/{max_p}/blind/pplx"] = pplx_eval("textvqa/val", max_p, qfmt=CUSTOM_QFMT["textvqa"], blind=True)
 
     special_tokens = 64 # rough estimate of special tokens count: bos, eos, sep, image line sep.
-    def vqa_eval(name, max_q, max_a, bs=32, blind=False, qfmt=None):
+    def vqa_eval(name, max_q, max_a, max_p=None, bs=32, blind=False, qfmt=None):
         k = sws.Config()
         k.type = "vqa"
-        k.steps = lambda: range(5000, c.nsteps, 20_000 if blind else 5000)  # Skip first, then every 5k
-        k.data = eval_data(name, blind=blind, qfmt=qfmt)
+        k.steps = lambda: range(5000, c.nsteps, 5000 if not blind and qfmt else 20_000)  # Skip first, then every 5k
+        k.data = eval_data(name, max_p=max_p, blind=blind, qfmt=qfmt)
         k.lower_a = True
-        k.decode.max_prefix = lambda: c.data.common.max_patches + special_tokens + max_q
+        k.decode.max_prefix = max_p + special_tokens + max_q if max_p else lambda: min(c.data.common.max_patches, 3136) + special_tokens + max_q
         k.decode.max_decode = 1 + max_a
         k.decode.batch_size = bs
         k.decode.T = 0.01
@@ -114,23 +117,41 @@ def get_config():
         return k
 
     # NOTE: The max_q was increased to cover the fmt!
-    c.evals["docvqa/vqa"] = vqa_eval("docvqa_flat/val", max_q=25, max_a=16)    # covers 99% ; do 40, 33 for all
-    c.evals["docvqa_fmt/vqa"] = vqa_eval("docvqa_flat/val", max_q=28, max_a=16, qfmt=CUSTOM_QFMT["docvqa"])    # covers 99% ; do 44, 33 for all
-    c.evals["docvqa_fmt/vqa_blind"] = vqa_eval("docvqa_flat/val", max_q=28, max_a=16, qfmt=CUSTOM_QFMT["docvqa"], blind=True)
-    c.evals["infovqa/vqa"] = vqa_eval("infovqa_flat/val", max_q=28, max_a=11)  # covers 99% ; do 38, 11 for all
-    c.evals["infovqa_fmt/vqa"] = vqa_eval("infovqa_flat/val", max_q=33, max_a=11, qfmt=CUSTOM_QFMT["infovqa"])  # covers 99% ; do 46, 11 for all
-    c.evals["infovqa_fmt/vqa_blind"] = vqa_eval("infovqa_flat/val", max_q=33, max_a=11, qfmt=CUSTOM_QFMT["infovqa"], blind=True)
-    c.evals["stvqa/vqa"] = vqa_eval("stvqa_flat/val", max_q=18, max_a=11)      # covers 99% ; do 27, 23 for all
-    c.evals["stvqa_fmt/vqa"] = vqa_eval("stvqa_flat/val", max_q=20, max_a=11, qfmt=CUSTOM_QFMT["stvqa"])      # covers 99% ; do 30, 23 for all
-    c.evals["stvqa_fmt/vqa_blind"] = vqa_eval("stvqa_flat/val", max_q=20, max_a=11, qfmt=CUSTOM_QFMT["stvqa"], blind=True)
+    for max_p, bs in [(196, 128), (784, 64), (3136, 8)]:  # 224/448/896
+        c.evals[f"docvqa/{max_p}/vqa"] = vqa_eval("docvqa_flat/val", max_q=25, max_a=16, max_p=max_p, bs=bs)    # covers 99% ; do 40, 33 for all
+        c.evals[f"docvqa_fmt/{max_p}/vqa"] = vqa_eval("docvqa_flat/val", max_q=28, max_a=16, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["docvqa"])    # covers 99% ; do 44, 33 for all
+        c.evals[f"docvqa_fmt/{max_p}/blind/vqa"] = vqa_eval("docvqa_flat/val", max_q=28, max_a=16, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["docvqa"], blind=True)
+        c.evals[f"infovqa/{max_p}/vqa"] = vqa_eval("infovqa_flat/val", max_q=28, max_a=11, max_p=max_p, bs=bs)  # covers 99% ; do 38, 11 for all
+        c.evals[f"infovqa_fmt/{max_p}/vqa"] = vqa_eval("infovqa_flat/val", max_q=33, max_a=11, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["infovqa"])  # covers 99% ; do 46, 11 for all
+        c.evals[f"infovqa_fmt/{max_p}/blind/vqa"] = vqa_eval("infovqa_flat/val", max_q=33, max_a=11, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["infovqa"], blind=True)
+        c.evals[f"stvqa/{max_p}/vqa"] = vqa_eval("stvqa_flat/val", max_q=18, max_a=11, max_p=max_p, bs=bs)      # covers 99% ; do 27, 23 for all
+        c.evals[f"stvqa_fmt/{max_p}/vqa"] = vqa_eval("stvqa_flat/val", max_q=20, max_a=11, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["stvqa"])      # covers 99% ; do 30, 23 for all
+        c.evals[f"stvqa_fmt/{max_p}/blind/vqa"] = vqa_eval("stvqa_flat/val", max_q=20, max_a=11, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["stvqa"], blind=True)
 
-    # Nice to visualize predictions in W&B periodically
-    c.evals.decode_doc_vqa.type = "decode"
-    c.evals.decode_doc_vqa.steps = lambda: range(5000, c.nsteps, 20_000)
-    c.evals.decode_doc_vqa.data = eval_data("docvqa_flat/val", qfmt=CUSTOM_QFMT["docvqa"])
-    c.evals.decode_doc_vqa.decode.max_prefix = lambda: c.evals.decode_doc_vqa.data.max_patches + special_tokens + 25
-    c.evals.decode_doc_vqa.decode.batch_size = 32
-    c.evals.decode_doc_vqa.decode.max_decode = 8  # For visualization/qualitative purposes only, so intentionally extra short.
-    c.evals.decode_doc_vqa.decode.T = 0.01
+    del c["evals"]
+
+    # Nice to visualize predictions in W&B periodically. Very small/short decode for sanity-check only.
+    # Single resolution to avoid bugginess.
+    c.evals["decode_docvqa_fmt"].type = "decode"
+    c.evals["decode_docvqa_fmt"].steps = lambda: range(5000, c.nsteps, 20_000)
+    c.evals["decode_docvqa_fmt"].data = eval_data("docvqa_flat/val", qfmt=CUSTOM_QFMT["docvqa"])
+    c.evals["decode_docvqa_fmt"].max_prefix = lambda: min(c.data.common.max_patches, 3136) + special_tokens + 28
+    c.evals["decode_docvqa_fmt"].max_decode = 8
+    c.evals["decode_docvqa_fmt"].batch_size = bs
+    c.evals["decode_docvqa_fmt"].T = 0.01
 
     return c
+
+def nosweep():
+    for lr in (3e-4, 6e-4,):
+        # Baselines:
+        yield f"{lr=}", "c.data.common.max_patches=196"
+        yield f"{lr=}", "c.data.common.max_patches=784"
+        yield f"{lr=}", "c.data.common.max_patches=3136"
+
+        # Randomized max-patches
+        for exp, mode_patches in [
+            (1.616, None),  # 448px² in expectation
+            (1.12, 196),  # 224px² as mode, 448px² in expectation
+        ]:
+            yield f"{lr=}", f"{exp=}", f"{mode_patches=}", "c.data.common.max_patches=16_384"

@@ -12,17 +12,18 @@ from PIL import Image
 import bv2.data.dpack as d
 import bv2.utils as u
 from bv2.data.common import cycle_qas, get_bagz_reader, shuffled_iota_exids, vis_image_text_wandb
-from bv2.data.pp import patchify, resize_max_patches, sanity_check
+from bv2.data.pp import patchify, rand_resize, sanity_check
 from bv2.data.tokenizer import get_tiktoken
 
 PATH = "/checkpoint/rigi/data/{split}.bag"
 
 
 class Dataset:
-    def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, nreg=0, greyout_frac=0.0, tokenizer=None, qfmt="{q}", lower_q=False, lower_a=False, seed=0, epochs=None):
+    def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, rand_resize=None, nreg=0, greyout_frac=0.0, tokenizer=None, qfmt="{q}", lower_q=False, lower_a=False, seed=0, epochs=None):
         self.fspec = basepath.format(split=split)
         self.ps = dict(ph=ps, pw=ps)
         self.max_patches = max_patches
+        self.rand_resize = rand_resize
         self.nreg = nreg
         self.ttkw = tokenizer or {}
         self.greyout_frac = greyout_frac
@@ -61,9 +62,10 @@ class Dataset:
         prefix = self.tt.encode(question)
         suffix = self.tt.encode(answer)
 
-        if u.rng(self.data_seed, exid, epoch, "greyout").random() < self.greyout_frac:
+        key = (self.data_seed, exid, epoch)
+        img = rand_resize(img, self.max_patches, key=(key, "resize"), **self.rand_resize or {}, **self.ps)
+        if u.rng(key, "greyout").random() < self.greyout_frac:
             img.paste((128, 128, 128), box=(0, 0) + img.size)
-        img = resize_max_patches(img, self.max_patches, **self.ps)
         patches, positions = patchify(img, **self.ps)
 
         npre = len(prefix)
