@@ -208,12 +208,13 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     # Eval loop is reused, so we wrap it as a function
     def run_evals(step):
         """Run evaluations for a given step if conditions are met."""
+        teval0, ran_eval = perf_counter(), False
         for ev_name in c.get("evals", {}):
             ev = c.evals[ev_name]
             is_step = (step == 2 or (step > 2 and step % ev.steps == 0)) if isinstance(ev.steps, int) else step in ev.steps
             if u.about_to_get_killed() or not (is_step or step == c.nsteps):  # Always run on last step.
                 continue
-            tev0 = perf_counter()
+            tev0, ran_eval = perf_counter(), True
             prints0(f"Running evaluator {u.BLUE}{ev_name}{u.RESET}", end="", flush=True)
             em = import_module(f"bv2.eval.{ev.type}")
             ds_ev = bv2.simple_data.from_config(ev.data.to_dict())
@@ -226,6 +227,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                         prints0(f"Eval results: {ev_name}/{k}: {v}")
             distr.barrier()  # For accurate timing and avoiding u.about_to_get_killed-related divergence.
             mw.log({f"chrono/evals/{ev_name}": perf_counter() - tev0})
+        if ran_eval:
+            mw.log({"chrono/evaltime": perf_counter() - teval0})
 
     per_src_examples_seen, per_src_tokens_seen = Counter(), Counter()
     for step, data in zip(
