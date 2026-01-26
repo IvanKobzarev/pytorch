@@ -527,7 +527,7 @@ def load_config(wd_path):
 
 def last_metric(wd_path, metric_name="train/loss"):
     # Try plattli format first
-    if plattli.is_run_dir(wd_path):
+    if plattli.is_run(wd_path):
         try:
             with plattli.Reader(wd_path) as r:
                 result = {}
