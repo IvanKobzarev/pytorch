@@ -11,6 +11,7 @@ import signal
 import sys
 import os
 import shutil
+from datetime import datetime
 from getpass import getuser
 from pathlib import Path
 from collections import Counter
@@ -484,6 +485,22 @@ def get_overview_inactive():
     cold_results = list(executor.map(_extra_info, cold_items))
     cold_xids = dict(cold_results)
 
+    # Query sacct for cold experiments without finish_time
+    def _get_sacct_finish(args):
+        xid, info = args
+        if info.get("finish_time"):
+            return xid, info
+        user = info.get("user", "")
+        if not user or user == "?":
+            return xid, info
+        sacct_time = get_sacct_end_time(xid, user)
+        if sacct_time:
+            info["finish_time"] = sacct_time
+        return xid, info
+
+    cold_with_sacct = list(executor.map(_get_sacct_finish, cold_xids.items()))
+    cold_xids = dict(cold_with_sacct)
+
     frozen_items = [(xid, info, True) for xid, info in frozen_xids.items()]
     frozen_results = list(executor.map(_extra_info, frozen_items))
     frozen_xids = dict(frozen_results)
@@ -552,6 +569,24 @@ def load_sacct(jid):
     except Exception as e:
         log.debug("load_sacct failed for %s: %s", jid, e)
     return {}
+
+
+def get_sacct_end_time(xid, user):
+    """Get job end time from sacct for an XID."""
+    try:
+        result = run_cmd(f"sacct -n -X -o End -S now-14days -u {user} --name={xid}")
+        max_time = 0
+        for line in result:
+            line = line.strip()
+            if line and line != "Unknown":
+                try:
+                    dt = datetime.strptime(line, "%Y-%m-%dT%H:%M:%S")
+                    max_time = max(max_time, dt.timestamp())
+                except:
+                    pass
+        return max_time if max_time > 0 else None
+    except:
+        return None
 
 
 def _load_config_only(args):
