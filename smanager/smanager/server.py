@@ -219,7 +219,14 @@ def _extra_info(xid_info):
         info["wus"] = {}
         for wuwd in wd_path.iterdir():
             if wuwd.is_dir():
-                info["wus"][str(wuwd.name)] = (wuwd / "DONE").exists()
+                done_path = wuwd / "DONE"
+                try:
+                    mtime = done_path.stat().st_mtime
+                    info["wus"][str(wuwd.name)] = True
+                    if mtime > info.get("finish_time", 0):
+                        info["finish_time"] = mtime
+                except FileNotFoundError:
+                    info["wus"][str(wuwd.name)] = False
                 workdir_names.append(wuwd.name)
                 if not skip_config_loading:
                     # Load config to get wid for duplicate detection
