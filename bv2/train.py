@@ -387,13 +387,14 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         prints(f"Finished {perf_counter() - u.about_to_get_killed()}s after getting the pre-emption call!")
     else:
         mw.finish(training_done=True)
-        with open(pjoin(workdir, "DONE"), "w+") as f:
-            f.write("All good!")
-        prints0(f"Done. Workdir: {u.BLUE}{workdir}{u.RESET}")
+        if rank == 0:
+            with open(pjoin(workdir, "DONE"), "w+") as f:
+                f.write("All good!")
+            prints(f"Done. Workdir: {u.BLUE}{workdir}{u.RESET}")
 
     torch._dynamo.reset()  # Avoid hang: https://x.com/main_horse/status/1937900381574717940
     distr.destroy_process_group()
-    prints("Destroyed group. All done for real.")
+    prints(f"Destroyed group on rank {rank}. All done for real.")
 
 
 ###############
