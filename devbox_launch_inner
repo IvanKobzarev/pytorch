@@ -23,12 +23,10 @@ SRUN_PID=$!
 
 # Wait until the file has the host/port
 until read -r host 2>/dev/null < "$STATE_FILE"; do sleep 0.5; done
-echo "Job running, you can go there and attach using:"
+echo "Slurm devbox job running, you can go there and attach using:"
 echo -e "\033[34mssh $host -t tmux -L inner a\033[0m"
 
 ssh -N -f -L "localhost:$PORT_NB:localhost:$PORT_NB" "$host"
 
-echo -e "Slurm devbox job running, you can go there and attach using:"
-echo -e "\033[34mssh $host -t tmux -L inner a\033[0m"
-echo -e "If you need to forward ports on your laptop, run:"
-echo -e "\033[34mssh -N -f -L localhost:$PORT_NB:localhost:$PORT_NB -L localhost:$PORT_FB:localhost:$PORT_FB -L localhost:$PORT_SM:localhost:$PORT_SM $SLURM_CLUSTER_NAME\033[0m'
+echo -e "Ports forwarded to frontend. To forward to your laptop, run:"
+echo -e "\033[34mssh -N -f -L localhost:$PORT_NB:localhost:$PORT_NB -L localhost:$PORT_FB:localhost:$PORT_FB -L localhost:$PORT_SM:localhost:$PORT_SM $SLURM_CLUSTER_NAME\033[0m"

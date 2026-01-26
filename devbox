@@ -32,7 +32,7 @@ tmux new-session -d -s "$SESS"
 
 # Three-way split:
 tmux split-window -v -t "$SESS:0" \; \
-              select-layout -t "$SESS:0" even-vertical
+     select-layout -t "$SESS:0" even-vertical
 tmux split-window -h -t "$SESS:0.0"
 
 ENTER=${ENTER:-C-m}
@@ -40,5 +40,7 @@ tmux send-keys -t "$SESS:0.0" "smanager --port $PORT_SM" $ENTER
 tmux send-keys -t "$SESS:0.1" "fbi-serve --port $PORT_FB --prefs-dir /checkpoint/rigi/$USER --share-dir /checkpoint/rigi/shares --maxdepth 2 --dataset /checkpoint/rigi/bv2/workdirs" $ENTER
 tmux send-keys -t "$SESS:0.2" "env PORT_NB=$PORT_NB ~/rigi/devbox_launch_inner" $ENTER
 
+echo -e "To forward to your laptop, run:"
+echo -e "\033[34mssh -N -f -L localhost:$PORT_NB:localhost:$PORT_NB -L localhost:$PORT_FB:localhost:$PORT_FB -L localhost:$PORT_SM:localhost:$PORT_SM $SLURM_CLUSTER_NAME\033[0m"
 echo "Tmux session '$SESS' created, to attach, just re-launch this script or tmux a -t $SESS"
 tmux a -t $SESS
