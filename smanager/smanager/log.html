@@ -83,7 +83,7 @@
         .log-line:hover {
             background: var(--hover);
         }
-        .log-line:target {
+        .log-line:target, .log-line.selected {
             background: var(--highlight);
         }
         .line-num {
@@ -238,7 +238,10 @@
                 // Scroll to bottom, or to hash if specified
                 if (window.location.hash) {
                     const target = document.querySelector(window.location.hash);
-                    if (target) target.scrollIntoView();
+                    if (target) {
+                        target.classList.add('selected');
+                        target.scrollIntoView({block: 'center'});
+                    }
                 } else {
                     content.scrollTop = content.scrollHeight;
                 }
@@ -248,6 +251,11 @@
         }
 
         loadLog();
+
+        // Handle hash changes (clicking line numbers)
+        window.addEventListener('hashchange', () => {
+            document.querySelectorAll('.log-line.selected').forEach(el => el.classList.remove('selected'));
+        });
     </script>
 </body>
 </html>
