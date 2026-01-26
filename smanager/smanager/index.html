@@ -141,6 +141,8 @@
         tbody tr:hover { background: var(--hover); }
         tbody tr.row-selected { background: var(--hover); }
         tbody tr.row-selected:hover { background: rgba(75, 192, 200, 0.35); }
+        tbody tr.highlight-full { background: var(--hover) !important; }
+        tbody tr.highlight-muted { background: rgba(75, 192, 200, 0.08) !important; }
         tbody tr.recent-12h:nth-child(odd) { background: rgba(34, 197, 94, 0.15); }
         tbody tr.recent-12h:nth-child(even) { background: rgba(34, 197, 94, 0.13); }
         tbody tr.recent-12h:hover { background: rgba(34, 197, 94, 0.25); }
@@ -182,7 +184,10 @@
             border-radius: 3px;
             font-size: 10px;
             margin-right: 4px;
+            cursor: pointer;
         }
+        .qos-cell { cursor: pointer; }
+        .user-cell { cursor: pointer; }
         [data-theme="dark"] .server-badge { background: rgba(255, 255, 255, 0.1); }
         @media (prefers-color-scheme: dark) {
             [data-theme="auto"] .server-badge { background: rgba(255, 255, 255, 0.1); }
@@ -1147,20 +1152,20 @@
                     ? `<span class="warning-text" title="${r.warningCount} WU(s) have warnings, go to detail view for more.">${r.wus} ⚠</span>`
                     : r.wus;
                 return `
-                <tr>
+                <tr data-server="${r.server}" data-qos="${r.qos}" data-user="${r.user}">
                     <td class="text-center"><span class="fav-btn ${favorites.has(r.xid) ? 'active' : ''}" onclick="toggleFavorite('${r.xid}')">${favorites.has(r.xid) ? '❤︎' : '♡'}</span></td>
                     <td class="text-center"><span class="rq-btn" onclick="requeueXid('${serverUrl}', '${r.xid}')" title="Requeue all jobs">↶</span></td>
                     <td class="text-center"><span class="rq-btn" onclick="openFlattli('${r.xid}')" title="Open run in Flättlibrettli">📉︎</span></td>
                     <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="code-btn" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span><span class="stop-btn" onclick="stopXid('${serverUrl}', '${r.xid}')" title="Stop (scancel -n ${r.xid})">⏹</span></td>
-                    <td class="${userClass}">${r.user}</td>
+                    <td class="user-cell ${userClass}" data-user="${r.user}">${r.user}</td>
                     <td>${formatStates(r.states)}</td>
                     <td class="mono">${wusDisplay}</td>
                     <td class="mono text-right">${r.totalGpus}</td>
                     <td class="mono text-right">${r.restarts}</td>
-                    <td>${r.qos}</td>
+                    <td class="qos-cell" data-qos="${r.qos}" data-server="${r.server}">${r.qos}</td>
                     <td>${r.config}</td>
                     <td class="name-note-cell ${textClass}" onclick="editNote(this, ${r.serverIdx}, '${r.xid}', '${escapedNote}')">${displayText || '<span style="opacity:0.3">click to add note</span>'}</td>
-                    <td><span class="server-badge">${r.server}</span></td>
+                    <td><span class="server-badge" data-server="${r.server}">${r.server}</span></td>
                 </tr>`;
             }).join('');
 
@@ -1847,6 +1852,59 @@
         setInterval(() => {
             servers.forEach((_, i) => checkServerHealth(i));
         }, 5000);
+
+        // Hover highlighting for server badges and QoS cells in hot table
+        function setupHotTableHovers() {
+            const hotTable = document.getElementById('hotTable');
+            if (!hotTable) return;
+
+            function clearHighlights() {
+                hotTable.querySelectorAll('tr.highlight-full, tr.highlight-muted').forEach(row => {
+                    row.classList.remove('highlight-full', 'highlight-muted');
+                });
+            }
+
+            hotTable.addEventListener('mouseover', (e) => {
+                const serverBadge = e.target.closest('.server-badge');
+                const qosCell = e.target.closest('.qos-cell');
+                const userCell = e.target.closest('.user-cell');
+
+                if (serverBadge) {
+                    const server = serverBadge.dataset.server;
+                    clearHighlights();
+                    hotTable.querySelectorAll(`tbody tr[data-server="${server}"]`).forEach(row => {
+                        row.classList.add('highlight-full');
+                    });
+                } else if (qosCell) {
+                    const qos = qosCell.dataset.qos;
+                    const server = qosCell.dataset.server;
+                    clearHighlights();
+                    hotTable.querySelectorAll(`tbody tr[data-qos="${qos}"]`).forEach(row => {
+                        if (row.dataset.server === server) {
+                            row.classList.add('highlight-full');
+                        } else {
+                            row.classList.add('highlight-muted');
+                        }
+                    });
+                } else if (userCell) {
+                    const user = userCell.dataset.user;
+                    clearHighlights();
+                    hotTable.querySelectorAll(`tbody tr[data-user="${user}"]`).forEach(row => {
+                        row.classList.add('highlight-full');
+                    });
+                }
+            });
+
+            hotTable.addEventListener('mouseout', (e) => {
+                const serverBadge = e.target.closest('.server-badge');
+                const qosCell = e.target.closest('.qos-cell');
+                const userCell = e.target.closest('.user-cell');
+                if (serverBadge || qosCell || userCell) {
+                    clearHighlights();
+                }
+            });
+        }
+        setupHotTableHovers();
 
         // Init
         async function init() {
