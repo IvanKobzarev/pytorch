@@ -141,9 +141,11 @@
         tbody tr:hover { background: var(--hover); }
         tbody tr.row-selected { background: var(--hover); }
         tbody tr.row-selected:hover { background: rgba(75, 192, 200, 0.35); }
-        tbody tr.recent-12h { background: rgba(34, 197, 94, 0.15); }
+        tbody tr.recent-12h:nth-child(odd) { background: rgba(34, 197, 94, 0.15); }
+        tbody tr.recent-12h:nth-child(even) { background: rgba(34, 197, 94, 0.13); }
         tbody tr.recent-12h:hover { background: rgba(34, 197, 94, 0.25); }
-        tbody tr.recent-48h { background: rgba(34, 197, 94, 0.10); }
+        tbody tr.recent-48h:nth-child(odd) { background: rgba(34, 197, 94, 0.10); }
+        tbody tr.recent-48h:nth-child(even) { background: rgba(34, 197, 94, 0.08); }
         tbody tr.recent-48h:hover { background: rgba(34, 197, 94, 0.16); }
         input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; background: var(--input-bg); border: 1px solid var(--border); border-radius: 3px; }
         .text-right { text-align: right; }
