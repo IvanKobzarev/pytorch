@@ -15,7 +15,7 @@ forward_sig() {
 
 # The Ctrl+C is sent to everyone by default. In the launcher though, we want to wait for all
 # the launched processes to exit naturally upon this, so we just print and that's it.
-trap 'echo "Got SIGINT, hard-killing all kids immediately"; kill -9 -- -$$' INT
+trap 'echo "Got SIGINT, hard-killing all kids immediately"; for p in "${pids[@]:-}"; do kill -9 "$p" 2>/dev/null || true; done' INT
 
 # The SIGTERM on the other hand, we want to propagate to all children.
 # It's also the signal SLURM sends before hard-killing you. So we forward, and wait.
@@ -36,12 +36,15 @@ export WORLD_SIZE=$NGPUS
 
 # Run all processes in the background, except rank 0...
 for (( local_rank=1; local_rank<NGPUS; local_rank++ )); do
-  RANK=$local_rank LOCAL_RANK=$local_rank python -u "$@" &
+  setsid env RANK=$local_rank LOCAL_RANK=$local_rank python -u "$@" &
   pids+=($!)
 done
-# ...which we start while staying attached. This way our pdb works, and...
-if RANK=0 LOCAL_RANK=0 python -u "$@"; then
-  wait  # Wait for all processes if exit was successful, or...
-else
-  kill -9 -- -$$  # Hard kill everyone right away if there was an error, avoids spam.
-fi
+
+# Run rank 0 in background too, but preserve stdin for pdb.
+# This lets us use `wait` which allows traps to fire immediately.
+RANK=0 LOCAL_RANK=0 python -u "$@" <&0 &
+rank0_pid=$!
+pids+=($rank0_pid)
+
+# Wait for rank 0 to finish. Traps fire immediately during `wait`.
+wait $rank0_pid && wait || for p in "${pids[@]:-}"; do kill -9 "$p" 2>/dev/null || true; done
