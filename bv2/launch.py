@@ -48,9 +48,12 @@ RESET = '\033[0m'
 LIGHT = '\033[90m'
 
 
-def main():
+def main(slurm=True):
 
-    assert "login" in os.uname().nodename, "Launch is only supported from the login node."
+    if slurm:
+        assert "login" in os.uname().nodename, "Launch is only supported from the login node."
+    else:
+        assert "login" not in os.uname().nodename, "Serial launch is only supported from the devbox."
 
     # First, get the sweep function out of the config file.
     conf_file = sys.argv[1]
@@ -90,7 +93,10 @@ def main():
         print("")
 
     # Construct the common part of the launch command:
-    slurm = ["sbatch", *slurm_args, "--job-name", xid, "bv2/tools/launch_fair_srun"]
+    if slurm:
+        launcher = ["sbatch", *slurm_args, "--job-name", xid, "bv2/tools/launch_fair_srun"]
+    else:
+        launcher = ["bv2/tools/local_run"]
     torch = ["-m", "bv2.train", "--config", conf_file]
 
     all_jobs = list(sweep_fn())
@@ -130,10 +136,13 @@ def main():
                 log_over = "overrides: " + ", ".join(f"{RESET}{BOLD}{arg}{RESET}{LIGHT}" for arg in sws_args) + LIGHT
                 log_args = f"{log_over} | {log_args}"
 
-            print(f"{log_xwid} | {log_args}", end="", flush=True)
+            print(f"{log_xwid} | {log_args}", end="" if slurm else "\n\n", flush=True)
 
-            command_words = [*slurm, *torch, *work_unit_args, f"xid:=\"{xid}\"", f"wid:={wid}", *sws_args]
-            ret = subprocess.run(command_words, capture_output=True, text=True, shell=False)
+            command_words = [*launcher, *torch, *work_unit_args, f"xid:=\"{xid}\"", f"wid:={wid}", *sws_args]
+            ret = subprocess.run(command_words, capture_output=slurm, text=True, shell=False)
+
+            if not slurm:
+                continue  # The rest is slurm-specific restart-script and launcher parsing.
 
             # Write the exact launch command into a shell file that can be used to re-launch:
             (wd / f"launch_{wid}.sh").write_text(f"#!/bin/bash\ncd {code_dst}\n" + shlex.join(command_words) + "\n", encoding="utf-8")
@@ -154,9 +163,12 @@ def main():
     except KeyboardInterrupt:
         print(f"\n{RED}{BOLD}Launch interrupted. See command below to kill launched jobs.{RESET}")
 
-    print(f"{RESET}To kill all these jobs: {BLUE}scancel -n {xid}{RESET}")
-    print(f"To see status of all these jobs (triple-click to select line):\n"
-          f"{BLUE}squeue -n {xid}{RESET} -O JobId:9,Name:20,UserName:5,State:10,TimeUsed:11,NumCPUs:5,NumNodes:6,GRES:14,RestartCnt:4,QOS:9,Reason")
+    if slurm:
+        print(f"{RESET}To kill all these jobs: {BLUE}scancel -n {xid}{RESET}")
+        print(f"To see status of all these jobs (triple-click to select line):\n"
+            f"{BLUE}squeue -n {xid}{RESET} -O JobId:9,Name:20,UserName:5,State:10,TimeUsed:11,NumCPUs:5,NumNodes:6,GRES:14,RestartCnt:4,QOS:9,Reason")
+    else:
+        print(f"{BLUE}Done{RESET} with the whole sweep!")
 
 
 def next_free(path):

@@ -55,8 +55,6 @@ torch.set_deterministic_debug_mode("error")  # raises error on non-determinism
 
 
 def main(c, rank, local_rank, world_size):  # noqa: C901
-    name = c.get("name", f"{getuser()}-{datetime.now():%y%m%d-%H%M%S}")
-
     prints0(f"Running with arguments:\n{c}")
 
     # start from the beginning to track every gpu memory allocation
@@ -78,8 +76,10 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     )
 
     # Get xid/name from rank0 to make sure it's consistent across hosts (if it has timestamp)
-    xid, name = u.broadcast_object_from(rank=0, obj=(c.get("xid", ""), name))
-    workdir = "workdirs" if xid or c.nsteps >= 50 else "workdirs-dbg"
+    xid = c.get("xid", f"{datetime.now():%y%m%d_%H%M%S}")
+    name = c.get("name", f"{getuser()}-{xid}") + (f"-{c.wid}" if "wid" in c else "")
+    xid, name = u.broadcast_object_from(rank=0, obj=(xid, name))
+    workdir = "workdirs" if c.nsteps >= 50 else "workdirs-dbg"
     workdir = pjoin("/checkpoint/rigi/bv2/", workdir, xid, name)
     prints0(f"Workdir: {u.BLUE}{workdir}{u.RESET}")
 
