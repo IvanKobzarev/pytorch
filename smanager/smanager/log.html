@@ -136,12 +136,65 @@
             .ansi-black { color: #666666; }
             .ansi-white { color: #ffffff; }
         }
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-left: 16px;
+        }
+        .filter-group label {
+            color: var(--muted);
+            font-size: 12px;
+        }
+        .filter-input {
+            font-family: ui-monospace, monospace;
+            font-size: 12px;
+            padding: 4px 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg);
+            color: var(--text);
+            width: 180px;
+        }
+        .filter-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .filter-input.invalid {
+            border-color: #ef4444;
+        }
+        .regex-toggle {
+            font-family: ui-monospace, monospace;
+            font-size: 11px;
+            padding: 4px 6px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg);
+            color: var(--muted);
+            cursor: pointer;
+        }
+        .regex-toggle:hover {
+            border-color: var(--accent);
+        }
+        .regex-toggle.active {
+            background: var(--accent);
+            color: var(--bg);
+            border-color: var(--accent);
+        }
+        .log-line.hidden {
+            display: none;
+        }
     </style>
 </head>
 <body>
     <div class="header">
         <h1><span style="color:var(--accent)">s</span>Manager <span style="font-size: 10px; opacity: 0.3;">v{{VERSION}}</span></h1>
         <span>Log for job <span class="jid" id="jidDisplay"></span></span>
+        <div class="filter-group">
+            <label>filter:</label>
+            <input type="text" class="filter-input" id="filterInput" placeholder="[rank0]">
+            <button class="regex-toggle" id="regexToggle" title="Toggle regex mode">.*</button>
+        </div>
         <span class="info" id="lineCount"></span>
     </div>
     <div class="content" id="content">
@@ -163,6 +216,8 @@
         const ANSI_STYLES = {
             1: 'ansi-bold', 2: 'ansi-dim', 3: 'ansi-italic', 4: 'ansi-underline',
         };
+
+        let rawLines = [];
 
         function parseAnsi(text) {
             // First escape HTML
@@ -224,6 +279,7 @@
                 if (!resp.ok) throw new Error('Log not found');
                 const text = await resp.text();
                 const lines = text.split('\n');
+                rawLines = lines;
 
                 document.getElementById('lineCount').textContent = `${lines.length} lines`;
 
@@ -255,6 +311,82 @@
         // Handle hash changes (clicking line numbers)
         window.addEventListener('hashchange', () => {
             document.querySelectorAll('.log-line.selected').forEach(el => el.classList.remove('selected'));
+        });
+
+        // Filter functionality
+        const filterInput = document.getElementById('filterInput');
+        const regexToggle = document.getElementById('regexToggle');
+        let regexMode = false;
+        let debounceTimer = null;
+
+        regexToggle.addEventListener('click', () => {
+            regexMode = !regexMode;
+            regexToggle.classList.toggle('active', regexMode);
+            filterInput.classList.remove('invalid');
+            if (!regexMode) applyFilter();
+            else validateRegex();
+        });
+
+        function validateRegex() {
+            const pattern = filterInput.value;
+            if (!pattern) {
+                filterInput.classList.remove('invalid');
+                return true;
+            }
+            try {
+                new RegExp(pattern);
+                filterInput.classList.remove('invalid');
+                return true;
+            } catch {
+                filterInput.classList.add('invalid');
+                return false;
+            }
+        }
+
+        function applyFilter() {
+            const pattern = filterInput.value;
+            const lines = document.querySelectorAll('.log-line');
+            let visibleCount = 0;
+
+            if (!pattern) {
+                lines.forEach(el => { el.classList.remove('hidden'); visibleCount++; });
+            } else if (regexMode) {
+                if (!validateRegex()) return;
+                const re = new RegExp(pattern);
+                lines.forEach((el, i) => {
+                    const matches = re.test(rawLines[i] || '');
+                    el.classList.toggle('hidden', !matches);
+                    if (matches) visibleCount++;
+                });
+            } else {
+                lines.forEach((el, i) => {
+                    const matches = (rawLines[i] || '').includes(pattern);
+                    el.classList.toggle('hidden', !matches);
+                    if (matches) visibleCount++;
+                });
+            }
+
+            const total = lines.length;
+            document.getElementById('lineCount').textContent = pattern
+                ? `${visibleCount}/${total} lines`
+                : `${total} lines`;
+        }
+
+        filterInput.addEventListener('input', () => {
+            if (regexMode) {
+                validateRegex();
+            } else {
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(applyFilter, 500);
+            }
+        });
+
+        filterInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && regexMode) applyFilter();
+        });
+
+        filterInput.addEventListener('blur', () => {
+            if (regexMode) applyFilter();
         });
     </script>
 </body>
