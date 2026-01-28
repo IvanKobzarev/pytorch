@@ -629,7 +629,7 @@ def get_config():
     c.evals.pplx_val.data.n = 150  # "val split" size
     c.evals.pplx_val.data.tokenizer.first_N = lambda: c.data.tokenizer.first_N
     c.evals.pplx_val.iter.maxtok = lambda: c.maxtok
-    c.evals.pplx_val.iter.eagerness = 1
+    c.evals.pplx_val.iter.eagerness = 16
 
     return c
 
@@ -650,6 +650,12 @@ if __name__ == "__main__":
 
     if not sys.stdout.isatty():  # Don't squeeze tables or use colors in logs!
         rich.reconfigure(width=500, color_system=None)
+
+    # We need to "warmup" the einops backend cache; if we don't, then einops
+    # has a multi-threading race-condition that makes it fail in our input pipeline.
+    import einops
+    einops._backends.get_backend(np.empty((1,1), np.uint8))
+    einops.rearrange(np.empty((1,1), np.uint8), 'a b -> a b')
 
     prints = partial(print_stamped, rank=rank)
     print0 = print if rank == 0 else lambda *args, **kwargs: None

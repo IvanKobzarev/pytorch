@@ -1,13 +1,7 @@
-import signal
 from itertools import islice
-from multiprocessing import Pool
+from multiprocessing.pool import ThreadPool
 
 import numpy as np
-
-
-def _process_setup():
-    signal.signal(signal.SIGTERM, signal.SIG_DFL)  # Reset so we don't use the train.py one.
-    signal.signal(signal.SIGINT, signal.SIG_IGN)  # Ignore so we don't get massive spam on Ctrl+C.
 
 
 def parallel_prefetch(seedgen, workfn, n_parallel=16):
@@ -17,11 +11,9 @@ def parallel_prefetch(seedgen, workfn, n_parallel=16):
             yield workfn(seed)
         return
 
-    with Pool(n_parallel, initializer=_process_setup) as pool:
+    with ThreadPool(n_parallel) as pool:
         # Prefill:
-        futures = [
-            pool.apply_async(workfn, (seed,)) for seed in islice(seedgen, n_parallel)
-        ]
+        futures = [pool.apply_async(workfn, (seed,)) for seed in islice(seedgen, n_parallel)]
 
         # Keep consuming one and filling up next one, until we're all out of jobs.
         # NOTE: always following FIFO order, not first-ready, so we're deterministic.

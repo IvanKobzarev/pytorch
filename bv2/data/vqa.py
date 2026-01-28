@@ -20,12 +20,12 @@ PATH = "/checkpoint/rigi/data/{split}.bag"
 
 class Dataset:
     def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, rand_resize=None, nreg=0, greyout_frac=0.0, tokenizer=None, qfmt="{q}", lower_q=False, lower_a=False, seed=0, epochs=None):
-        self.fspec = basepath.format(split=split)
+        self.reader = get_bagz_reader(basepath.format(split=split))
         self.ps = dict(ph=ps, pw=ps)
         self.max_patches = max_patches
         self.rand_resize = rand_resize
         self.nreg = nreg
-        self.ttkw = tokenizer or {}
+        self.tt = get_tiktoken(**tokenizer or {})
         self.greyout_frac = greyout_frac
         self.data_seed = seed
         self.epochs = epochs
@@ -33,21 +33,11 @@ class Dataset:
         self.lower_q = lower_q
         self.lower_a = lower_a
 
-    @property  # Not a cached_property because BagzReader is not picklable.
-    def reader(self):  # which would make the whole class unpicklable.
-        return get_bagz_reader(self.fspec)  # But this is functools.cache'd per process.
-
-    @property
-    def tt(self):  # Same story as for the bagz reader above.
-        return get_tiktoken(**self.ttkw)
-
     def ground_truth(self, exid):
         with ZipFile(BytesIO(self.reader[exid])) as zf:
             return json.load(zf.open("data.json"))
 
     def make_example(self, exid, epoch):
-        # NOTE: Could further optimize by having each rank go only to a subset of all indices.
-        # But let's keep things simple as long as they are fast enough!
         with ZipFile(BytesIO(self.reader[exid])) as zf:
             data = json.load(zf.open("data.json"))
             img = Image.open(zf.open("image"))

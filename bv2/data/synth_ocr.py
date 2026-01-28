@@ -90,7 +90,7 @@ class Dataset:
         self.add_hw = add_hw
         self.tiptoi = tiptoi
         self.render_kw = kw
-        self.ttkw = tokenizer or {}
+        self.tt = get_tiktoken(**tokenizer or {})
         self.data_seed = seed
         self.n = n
 
@@ -135,10 +135,6 @@ class Dataset:
 
     def vocab_size(self):
         return self.tt.n_vocab
-
-    @property  # Not a cached_property because we don't want to pickle/unpickle tokenizer.
-    def tt(self):
-        return get_tiktoken(**self.ttkw)  # But this is functools.cache'd per process.
 
     def vis_data_wandb(self, data):
         return vis_image_text_wandb(data, self.tt, ph=self.ps, pw=self.ps)

@@ -23,7 +23,7 @@ class Dataset:
         self.add_row_sep = add_row_sep
         self.add_hw = add_hw
         self.tiptoi = tiptoi
-        self.ttkw = tokenizer or {}
+        self.tt = get_tiktoken(**tokenizer or {})
         self.data_seed = seed
         self.n = n
 
@@ -94,10 +94,6 @@ class Dataset:
             # NOTE: for attn_regions, 0 = AR, >0 = dense region ID.
             "id": exid,
         })  # fmt: skip
-
-    @property  # Not a cached_property because we don't want to pickle/unpickle tokenizer.
-    def tt(self):
-        return get_tiktoken(**self.ttkw)  # But this is functools.cache'd per process.
 
     def draw_bbox(self, image, x1, y1, x2, y2, color="red", width=2):
         image = Image.fromarray(np.array(image))  # Make a copy for sure.

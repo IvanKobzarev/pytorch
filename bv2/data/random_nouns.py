@@ -20,7 +20,7 @@ def render(seed, tiktoken, *, min_nouns=128, max_nouns=256):
 
 class Dataset:
     def __init__(self, tokenizer=None, seed=0, n=None, **kw):
-        self.ttkw = tokenizer or {}
+        self.tt = get_tiktoken(**tokenizer or {})
         self.render_kw = kw
         self.data_seed = seed
         self.n = n
@@ -38,10 +38,6 @@ class Dataset:
             # NOTE: for attn_regions, 0 = AR, >0 = dense region ID.
             "id": exid,
         })  # fmt: skip
-
-    @property  # Not a cached_property because we don't want to pickle/unpickle tokenizer.
-    def tt(self):
-        return get_tiktoken(**self.ttkw)  # But this is functools.cache'd per process.
 
     def vocab_size(self):
         return self.tt.n_vocab

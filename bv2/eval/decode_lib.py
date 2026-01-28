@@ -106,7 +106,7 @@ def decode_batch(predict_fn, batch, *, decode_idx, rng,
 
 
 def decoding_iterator(predict_fn, ds, *, max_prefix, max_decode, device, batch_size,
-                      seed=0, T=1.0, omit_eos=False, rank=0, world_size=1):
+                      seed=0, T=1.0, omit_eos=False, rank=0, world_size=1, eagerness=24):
     """Infinite iterator over data that runs decoding (marks padded examples by a boolean output).
 
     Performs batching under the hood, but yields flat sequence of examples.
@@ -114,7 +114,7 @@ def decoding_iterator(predict_fn, ds, *, max_prefix, max_decode, device, batch_s
 
     exid_gen = ds.make_exids(seed=seed, rank=rank, world_size=world_size)
     make_ex = functools.partial(_make_ex, ds=ds, max_prefix=max_prefix, max_decode=max_decode)
-    ex_iter = parallel_prefetch(iter(exid_gen), make_ex)
+    ex_iter = parallel_prefetch(iter(exid_gen), make_ex, eagerness)
 
     # Since examples can be filtered out, we iterate until we get a valid example
     dummy_ex = next(ex for ex in map(make_ex, ds.make_exids(seed=seed)) if ex is not None)
