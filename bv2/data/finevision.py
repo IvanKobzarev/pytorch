@@ -27,26 +27,18 @@ class Dataset:
                 continue
             paths.append(os.path.join(base_path, name, bag_pattern))
 
-        self.fspec = ",".join(paths)
+        self.reader = get_bagz_reader(",".join(paths))
         self.ps = {"ph": ps, "pw": ps}
         self.max_patches = max_patches
         self.rand_resize = rand_resize
         self.nreg = nreg
-        self.ttkw = tokenizer or {}
+        self.tt = get_tiktoken(**tokenizer or {})
         self.greyout_frac = greyout_frac
         self.data_seed = seed
         self.epochs = epochs
 
     def vis_data_wandb(self, data):
         return vis_image_text_wandb(data, self.tt, **self.ps)
-
-    @property  # Not a cached_property because BagzReader is not picklable.
-    def reader(self):  # which would make the whole class unpicklable.
-        return get_bagz_reader(self.fspec)  # But this is functools.cache'd per process.
-
-    @property
-    def tt(self):  # Same story as for the bagz reader above.
-        return get_tiktoken(**self.ttkw)
 
     def make_example(self, exid, epoch):
         with ZipFile(BytesIO(self.reader[exid])) as zf:
