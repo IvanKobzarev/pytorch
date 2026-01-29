@@ -31,7 +31,7 @@ from bv2.simple_input import iter_packed_examples, parallel_prefetch, to_len
 
 @u.suppress_warnings("`isinstance(treespec, LeafSpec)` is deprecated", FutureWarning)
 @u.suppress_warnings("`isinstance(treespec, TreeSpec)` is deprecated", FutureWarning)
-def data_iter(ds, *, maxtok, device, seed=0, eagerness=16,
+def data_iter(ds, *, maxtok, device, seed=0, eagerness=16, device_eagerness=1,
               rank=0, world_size=1, resume={}, pad_after=True):
     make_exids = partial(ds.make_exids, seed=seed, rank=rank, world_size=world_size, **resume)
 
@@ -89,10 +89,16 @@ def data_iter(ds, *, maxtok, device, seed=0, eagerness=16,
         }
         return seq
 
-    # TODO: To try asap now that it's threading instead of processing:
-    #       prefetch one to_gpu and/or one add_flexmasks!
-    # yield from parallel_prefetch(cpu_data_gen(), lambda seq: add_flexmasks(to_gpu(seq)), n_parallel=1)
-    yield from (add_flexmasks(to_gpu(seq)) for seq in cpu_data_gen())
+    # As long as we're in the same address space, we can also prefetch
+    # transfer to GPU, and flexmasks computation (on GPU). Especially the
+    # relatively heavy mask computation on GPU might interfere with training.
+    # It indeed does (see traintime), but the overall steptime is still better:
+    # Code - Prefetch togpu: med steptime 2.663, med traintime 2.525
+    # Code - Prefetch both:  med steptime 2.653, med traintime 2.522
+    # FiVi - Prefetch togpu: med steptime 1.821, med traintime 1.477
+    # FiVi - Prefetch both:  med steptime 1.814, med traintime 1.488
+    yield from parallel_prefetch(
+        cpu_data_gen(), lambda seq: add_flexmasks(to_gpu(seq)), n_parallel=device_eagerness)
 
 
 create_block_mask = torch.compile(partial(create_block_mask, B=None, H=None))
