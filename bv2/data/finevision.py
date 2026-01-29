@@ -4,19 +4,19 @@ import re
 from io import BytesIO
 from zipfile import ZipFile
 
+import cv2
 import numpy as np
-from PIL import Image
 
 import bv2.data.dpack as d
 import bv2.data.finevision_info as fvi
 import bv2.utils as u
+from bv2.data import pp
 from bv2.data.common import cycle_qas, get_bagz_reader, shuffled_iota_exids, vis_image_text_wandb
-from bv2.data.pp import patchify, rand_resize, sanity_check
 from bv2.data.tokenizer import get_tiktoken
 
 
 class Dataset:
-    def __init__(self, ps=16, max_patches=16_384, rand_resize=None, nreg=0, include=[".*"], exclude=[], tokenizer=None, greyout_frac=0.0, seed=0, epochs=None):
+    def __init__(self, ps=16, max_patches=16_384, rand_max_patches=None, nreg=0, include=[".*"], exclude=[], tokenizer=None, greyout_frac=0.0, seed=0, epochs=None):
         base_path = "/checkpoint/rigi/data/FineVision-1.0.1"
 
         paths = []
@@ -30,7 +30,7 @@ class Dataset:
         self.reader = get_bagz_reader(",".join(paths))
         self.ps = {"ph": ps, "pw": ps}
         self.max_patches = max_patches
-        self.rand_resize = rand_resize
+        self.rand_max_patches = rand_max_patches or {}
         self.nreg = nreg
         self.tt = get_tiktoken(**tokenizer or {})
         self.greyout_frac = greyout_frac
@@ -45,9 +45,8 @@ class Dataset:
             data = json.load(zf.open("data.json"))
 
             def _read_img(f):
-                img = Image.open(zf.open(f))
-                img.load()
-                return img if img.mode == "RGB" else img.convert("RGB")
+                img = cv2.imdecode(np.frombuffer(zf.open(f).read(), np.uint8), cv2.IMREAD_COLOR)
+                return img[:, :, ::-1]  # BGR -> RGB
 
             images = []
             if "image" in zf.namelist():
@@ -69,10 +68,12 @@ class Dataset:
         all_patches, all_positions = [], []
         for i, img in enumerate(images):
             key = (self.data_seed, exid, epoch, i)
-            img = rand_resize(img, self.max_patches, key=(key, "resize"), **self.rand_resize or {}, **self.ps)
+            img = pp.reasonable_resize(img, pp.rand_max_patches(
+                img.shape[:2], self.max_patches, key=(key, "resize"), **self.rand_max_patches, **self.ps),
+                warning_exid=f"finevision/{exid}/{i} ({data['source'][0]})")
             if u.rng(key, "greyout").random() < self.greyout_frac:
-                img.paste((128, 128, 128), box=(0, 0) + img.size)
-            patches, positions = patchify(img, **self.ps)
+                img[...] = 128
+            patches, positions = pp.patchify(img, **self.ps)
             ny, nx, ph, pw, c = patches.shape
             patches_flat = patches.reshape(ny * nx, ph, pw, c)
             positions_flat = positions.reshape(ny * nx, 4)
@@ -107,7 +108,7 @@ class Dataset:
 
         d.pack_text([suffix, self.tt.eos], positions=txtpos[-(nsuf + 1) :], out=tokens[-(nsuf + 1) :])
 
-        return sanity_check({
+        return pp.sanity_check({
             "tokens": tokens,
             "loss_weights":  np.r_[0, [0] * npre, 0,  [0] * nimg, [0] * nreg, [1] * nsuf, 1].astype(np.int64),
             "attn_regions":  np.r_[1, [1] * npre, 1,  [1] * nimg, [1] * nreg, [0] * nsuf, 0].astype(np.int64),

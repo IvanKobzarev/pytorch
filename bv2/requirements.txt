@@ -4,6 +4,7 @@ editdistance
 einops
 ipdb
 numpy
+opencv-python-headless
 pillow
 plattli>=0.4.1
 pytest

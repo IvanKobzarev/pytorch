@@ -1,8 +1,8 @@
 from functools import cache
 
+import cv2
 import numpy as np
 from einops import rearrange
-from PIL import Image
 
 import bv2.utils as u
 
@@ -60,8 +60,8 @@ def unpatchify(patches, positions):
     return img
 
 
-def resize_max_patches(img, max_patches, *, ph=16, pw=16):
-    orig_w, orig_h = target_w, target_h = img.size
+def max_patches(hw, max_patches, *, ph=16, pw=16):
+    orig_h, orig_w = target_h, target_w = hw
 
     # First, get w/h below target pixel area if needed:
     orig_pixels = orig_w * orig_h
@@ -77,29 +77,35 @@ def resize_max_patches(img, max_patches, *, ph=16, pw=16):
     if target_h % ph != 0:
         target_h = max((target_h // ph) * ph, ph)
 
-    target = (target_w, target_h)
-    if target == img.size:
-        return img
-
-    # Lanczos used to be called ANTIALIAS in pillow. However, it's not quite the
-    # same as TF and TV's linear+antialias. Let's see if it's a bottleneck.
-    return img.resize(target, Image.LANCZOS)
+    return (target_h, target_w)
 
 
 @cache
-def _patch_vals(min_patches, max_patches, exp, mode_patches=None):
-    vals = np.arange(min_patches, max_patches + 1)
-    if mode_patches:
-        probs = np.float_power(abs(vals - mode_patches) + 1.0, -exp)
+def _patch_vals(nmin, nmax, exp, mode=None):
+    vals = np.arange(nmin, nmax + 1)
+    if mode:
+        probs = np.float_power(abs(vals - mode) + 1.0, -exp)
     else:
         probs = np.float_power(vals, -exp)  # To avoid int neg power issues.
     probs /= probs.sum()
     return probs, vals
 
 
-def rand_resize(img, max_patches, exp=None, key=None, min_patches=64, mode_patches=None, *, ph=16, pw=16):
+def rand_max_patches(hw, nmax, exp=None, key=None, nmin=64, mode=None, *, ph=16, pw=16):
     if exp is not None:
-        probs, vals = _patch_vals(min_patches, max_patches, exp, mode_patches)
-        max_patches = u.rng(key, "choice").choice(vals, p=probs)
+        probs, vals = _patch_vals(nmin, nmax, exp, mode)
+        nmax = u.rng(key, "choice").choice(vals, p=probs)
 
-    return resize_max_patches(img, max_patches, ph=ph, pw=pw)
+    return max_patches(hw, nmax, ph=ph, pw=pw)
+
+
+def reasonable_resize(img, hw, warning_exid=None):
+    if hw[0] < img.shape[0] or hw[1] < img.shape[1]:
+        # AREA is the only reasonable downscale: https://lucasb.eyer.be/a/vit_cnn_speed.html
+        return cv2.resize(img, hw[::-1], interpolation=cv2.INTER_AREA)  # Takes (w, h) for (h, w) imgs!
+        # TODO: For big downscales (>2x) this can be sped-up by doing halvings first.
+    elif hw == img.shape[:2]:
+        return img
+    else:
+        print(f"Warning: upscaling image from {img.shape=} to {hw=}. Exid: {warning_exid}")
+        return cv2.resize(img, hw[::-1], interpolation=cv2.INTER_LINEAR)

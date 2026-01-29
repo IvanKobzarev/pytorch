@@ -20,8 +20,8 @@ def get_config():
         "textvqa": 21953//2, "textvqa_fmt": 21953//2,
     }
     c.data.common.max_patches = 784  # (448/16)^2 = 784; (2048/16)^2 = 16_384
-    c.data.common.rand_resize.exp = None  # Disables this.
-    c.data.common.rand_resize.mode_patches = None
+    c.data.common.rand_max_patches.exp = None  # Disables this.
+    c.data.common.rand_max_patches.mode = None
     c.data.common.nreg = lambda: c.model.reg.nreg
     c.data.common.greyout_frac = 0.03
 
@@ -148,8 +148,8 @@ def nosweep():
         yield f"{lr=}", "c.data.common.max_patches=3136"
 
         # Randomized max-patches
-        for exp, mode_patches in [
+        for exp, mode in [
             (1.616, None),  # 448px² in expectation
             (1.12, 196),  # 224px² as mode, 448px² in expectation
         ]:
-            yield f"{lr=}", f"{exp=}", f"{mode_patches=}", "c.data.common.max_patches=16_384"
+            yield f"{lr=}", f"{exp=}", f"{mode=}", "c.data.common.max_patches=16_384"
