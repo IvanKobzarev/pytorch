@@ -83,7 +83,6 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     workdir = pjoin("/checkpoint/rigi/bv2/", workdir, xid, name)
     prints0(f"Workdir: {u.BLUE}{workdir}{u.RESET}")
 
-    # Now that we know the final workdir, dump some info in it and start wandb with it.
     if rank == 0:
         os.makedirs(workdir, exist_ok=True)
         with open(pjoin(workdir, "config.json"), "w+") as f:
@@ -152,30 +151,23 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     # Potentially resume/fork from a checkpoint, if not, init stuff.
     first_step, tokens_seen, examples_seen = 0, 0, 0
-    resume_data, resume_metrics = {}, {}
+    resume_data = {}
 
     # Checkpoint loading priority: resume > fork > init
     ckpt_path = c.get("fork") or c.get("init")
-    if is_resuming := os.path.exists(pjoin(workdir, "ckpt-latest")):
+    if os.path.exists(pjoin(workdir, "ckpt-latest")):  # := is_resuming
         ckpt_path = pjoin(workdir, "ckpt-latest")
 
     if ckpt_path:
         if extras := load_ckpt(ckpt_path, model, optim, weights_only=bool(c.get("init"))):
             first_step, resume_data = extras["step"], extras["data"]
             tokens_seen, examples_seen = extras["tokens_seen"], extras["examples_seen"]
-            if is_resuming:
-                resume_metrics = extras.get("metrics", {})
 
     mw = bv2.metrics.MultiWriter(
         bytes=bv2.metrics.BytesWriter(rank, workdir, first_step),
-        wandb=bv2.metrics.WandbWriter(
-            c.to_dict(), rank, name, workdir, project="bv2" if c.nsteps >= 50 else "bv2-dev",
-            resume=resume_metrics.get("wandb"), first_step=first_step,
-        ),
         plattli=bv2.metrics.PlattliWriter(rank, workdir, first_step),
     )
-    # Log once more here for two reasons: (1) track in wandb and (2) after ckpt resume.
-    if rank == 0:
+    if rank == 0:  # Log once more after ckpt resume.
         summary_table(model, stats=c.get("param_stats", False))
     prints0(model)
 
@@ -202,6 +194,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         fn = torch.compile(u.clone_function(_fwd, name_suffix=eval_key), dynamic=False)
         fn = u.suppress_warnings("`isinstance(treespec, LeafSpec)` is deprecated", FutureWarning)(fn)
         fn = u.suppress_warnings("`isinstance(treespec, TreeSpec)` is deprecated", FutureWarning)(fn)
+        fn = u.suppress_warnings("remat_using_tags_for_fwd_loss_bwd_graph: Graph has recomputable ops but no backward region.", UserWarning)(fn)  # Fixed in https://github.com/pytorch/pytorch/pull/173528
         fn = record_function(f"eval_fwd_{eval_key}")(fn)
         return fn
 
@@ -370,12 +363,6 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         if c.nsteps >= 50 and step == 8:
             with open(pjoin(workdir, f"data_r{rank}.pt"), "wb") as f:
                 torch.save({k: v for k, v in data.items() if k != "flex_masks"}, f)
-            if hasattr(ds, "vis_data_wandb"):
-                mw.log({f"vis/data{step}": ds.vis_data_wandb(data)})
-
-        if step % 1000 == 0 and hasattr(ds, "vis_output_wandb"):
-            pred = extras["predictions"].detach().cpu()
-            mw.log({f"vis/output{step}": ds.vis_output_wandb(data, pred)})
 
         distr.barrier()  # Sync to get accurate datawait timing.
         t_prev_step_end = perf_counter()
