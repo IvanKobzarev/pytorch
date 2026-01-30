@@ -971,6 +971,189 @@ def code_browser_page(xid: str, file_path: str = ""):
     return Response(content=html, media_type="text/html")
 
 
+def _get_workdir(xid: str) -> Path:
+    """Get and validate the workdir for an XID."""
+    wd_path = _find_xid_path(xid)
+    if not wd_path or not wd_path.exists():
+        raise HTTPException(status_code=404, detail=f"Workdir not found for XID {xid}")
+    return wd_path
+
+
+def _is_text_file(path: Path) -> bool:
+    """Check if a file is text (viewable) or binary (download-only)."""
+    import mimetypes
+    mime, _ = mimetypes.guess_type(str(path))
+    if mime and mime.startswith('text/'):
+        return True
+    # Common text file extensions not always detected
+    text_exts = {'.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
+                 '.sh', '.bash', '.py', '.js', '.ts', '.md', '.rst', '.txt',
+                 '.log', '.csv', '.xml', '.html', '.css', '.sql', '.env'}
+    if path.suffix.lower() in text_exts:
+        return True
+    # Try reading first few bytes to check for binary content
+    try:
+        with open(path, 'rb') as f:
+            chunk = f.read(8192)
+            # Binary if contains null bytes
+            if b'\x00' in chunk:
+                return False
+            # Try decoding as utf-8
+            try:
+                chunk.decode('utf-8')
+                return True
+            except UnicodeDecodeError:
+                return False
+    except:
+        return False
+
+
+def _build_files_tree(path: Path, base: Path, depth: int = -1) -> list:
+    """Build file tree with size info for workdir browsing.
+
+    Args:
+        path: Current directory to list
+        base: Base path for computing relative paths
+        depth: Max recursion depth. -1 for unlimited, 0 for no children, 1 for one level, etc.
+    """
+    items = []
+    try:
+        for entry in sorted(path.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
+            rel_path = str(entry.relative_to(base))
+            if entry.is_dir():
+                children = [] if depth == 0 else _build_files_tree(entry, base, depth - 1 if depth > 0 else -1)
+                items.append({
+                    "name": entry.name,
+                    "path": rel_path,
+                    "type": "dir",
+                    "children": children
+                })
+            else:
+                try:
+                    size = entry.stat().st_size
+                except:
+                    size = 0
+                items.append({
+                    "name": entry.name,
+                    "path": rel_path,
+                    "type": "file",
+                    "size": size
+                })
+    except PermissionError:
+        pass
+    return items
+
+
+@app.get("/api/xid/{xid}/files/tree")
+def get_files_tree(xid: str, depth: int = 1):
+    """Get file tree for XID's workdir. Use depth=1 for lazy loading."""
+    wd_path = _get_workdir(xid)
+    return {"xid": xid, "tree": _build_files_tree(wd_path, wd_path, depth)}
+
+
+@app.get("/api/xid/{xid}/files/tree/{wuname:path}")
+def get_wu_files_tree(xid: str, wuname: str, depth: int = 1):
+    """Get file tree for a specific work-unit's directory. Use depth=1 for lazy loading."""
+    wd_path = _get_workdir(xid)
+    wu_path = _safe_path(wd_path, wuname)
+    if not wu_path.exists() or not wu_path.is_dir():
+        raise HTTPException(status_code=404, detail=f"Work-unit directory not found: {wuname}")
+    return {"xid": xid, "wuname": wuname, "tree": _build_files_tree(wu_path, wu_path, depth)}
+
+
+@app.get("/api/xid/{xid}/files/content/{file_path:path}")
+def get_files_content(xid: str, file_path: str):
+    """Get file content - text for viewable files, error for binary."""
+    wd_path = _get_workdir(xid)
+    full_path = _safe_path(wd_path, file_path)
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+    if not full_path.is_file():
+        raise HTTPException(status_code=400, detail=f"Not a file: {file_path}")
+    # Size limit: 10MB for text display
+    max_size = 10 * 1024 * 1024
+    file_size = full_path.stat().st_size
+    if file_size > max_size:
+        raise HTTPException(status_code=400, detail=f"File too large for inline display ({file_size // 1024 // 1024}MB). Use download instead.")
+    if not _is_text_file(full_path):
+        raise HTTPException(status_code=400, detail="Binary file. Use download instead.")
+    try:
+        content = full_path.read_text(errors="replace")
+        return Response(content=content, media_type="text/plain; charset=utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read file: {e}")
+
+
+@app.get("/api/xid/{xid}/files/download/{file_path:path}")
+def download_file(xid: str, file_path: str):
+    """Force download a file regardless of type."""
+    wd_path = _get_workdir(xid)
+    full_path = _safe_path(wd_path, file_path)
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+    if not full_path.is_file():
+        raise HTTPException(status_code=400, detail=f"Not a file: {file_path}")
+    return FileResponse(
+        path=full_path,
+        filename=full_path.name,
+        media_type="application/octet-stream"
+    )
+
+
+def _resolve_wu_dir(xid: str, wid) -> str:
+    """Resolve WID to actual directory name within the XID workdir.
+
+    Returns the directory name (not full path) or empty string for XID root.
+    Priority:
+    1. Folder with exact work-unit name (from config.json wid match)
+    2. Folder ending in '-{wid}'
+    3. Fallback to XID root
+    """
+    wd_path = _get_workdir(xid)
+    wid_str = str(wid)
+
+    # First, check all subdirs for config.json with matching wid
+    for subdir in wd_path.iterdir():
+        if not subdir.is_dir():
+            continue
+        config_file = subdir / "config.json"
+        if config_file.exists():
+            try:
+                config = json.loads(config_file.read_text())
+                if str(config.get("wid")) == wid_str:
+                    return subdir.name
+            except:
+                pass
+
+    # Second, look for folder ending in '-{wid}'
+    for subdir in wd_path.iterdir():
+        if subdir.is_dir() and subdir.name.endswith(f"-{wid_str}"):
+            return subdir.name
+
+    # Fallback to XID root
+    return ""
+
+
+@app.get("/files/{xid}/wu/{wid}")
+def files_browser_wu_redirect(xid: str, wid: str):
+    """Redirect to the correct workdir path for a work-unit."""
+    from fastapi.responses import RedirectResponse
+    dir_name = _resolve_wu_dir(xid, wid)
+    if dir_name:
+        return RedirectResponse(url=f"/files/{xid}/{dir_name}", status_code=302)
+    return RedirectResponse(url=f"/files/{xid}", status_code=302)
+
+
+@app.get("/files/{xid}")
+@app.get("/files/{xid}/{file_path:path}")
+def files_browser_page(xid: str, file_path: str = ""):
+    """Serve the files browser page for an XID's workdir."""
+    _get_workdir(xid)
+    html = (SCRIPT_DIR / "files.html").read_text()
+    html = html.replace("{{VERSION}}", __version__)
+    return Response(content=html, media_type="text/html")
+
+
 @app.get("/log/{jid}")
 def log_viewer_page(jid: int):
     """Serve the log viewer page for a job."""

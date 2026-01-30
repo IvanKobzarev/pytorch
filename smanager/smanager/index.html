@@ -1560,7 +1560,7 @@
                     <tr>
                         <th style="width:2em"><input type="checkbox" id="selectAllCheckbox" onclick="toggleAllVisibleRows()" /></th>
                         <th style="width:3em">WID</th>
-                        <th style="width:6em">JID/Logs</th>
+                        <th style="width:8em">JID/Logs</th>
                         <th style="width:2em" title="Restarts">R</th>
                         <th style="width:2em" title="Status">St</th>
                         <th style="width:2em" title="Requeue">Rq</th>
@@ -1611,7 +1611,7 @@
                     <tr data-jid="${wu.jid}" data-wid="${wu.wid}" data-nsteps="${wu.nsteps || 0}">
                         <td class="text-center"><input type="checkbox" class="row-select" onchange="updateRowSelection(this)" /></td>
                         <td class="mono text-right">${widDisplay}</td>
-                        <td class="mono"><a href="${serverUrl}/log/${wu.jid}" target="_blank" title="View Slurm log">${wu.jid}</a><span class="copy-btn" onclick="navigator.clipboard.writeText('${wu.jid}')" title="Copy">⎘</span></td>
+                        <td class="mono"><a href="${serverUrl}/log/${wu.jid}" target="_blank" title="View Slurm log">${wu.jid}</a><span class="copy-btn" onclick="navigator.clipboard.writeText('${wu.jid}')" title="Copy JID">⎘</span><span class="code-btn" onclick="window.open('${serverUrl}/files/${data.xid}/wu/${wu.wid}', '_blank')" title="Browse workdir">🗁</span></td>
                         <td class="mono text-center">${wu.restarts}</td>
                         <td class="text-center" title="${wu.status} (exit: ${wu.exit_code})">${statusEmoji}</td>
                         <td class="text-center">${requeueBtn}</td>
