@@ -1,6 +1,10 @@
+import functools
+import gc
 import io
 import json
 import os
+
+import psutil
 
 
 def only_on_rank0(func):
@@ -186,3 +190,62 @@ class MultiWriter:
 
     def save_ckpt(self):
         return {name: w.save_ckpt() for name, w in self.writers.items() if w is not None}
+
+
+@functools.cache
+def _get_gpu_handle(gpu_index=0):
+    import pynvml
+    pynvml.nvmlInit()
+    return pynvml.nvmlDeviceGetHandleByIndex(gpu_index), pynvml
+
+
+def log_system_metrics(logger, gpu_index=0, prefix="sys"):
+    """Log system metrics (CPU, RAM, GPU, disk, network) with given prefix."""
+    # CPU
+    load_1m, load_5m, load_15m = os.getloadavg()
+    logger.log({
+        f"{prefix}/cpu_percent": psutil.cpu_percent(),
+        f"{prefix}/cpu_load_1m": load_1m,
+        f"{prefix}/cpu_load_5m": load_5m,
+        f"{prefix}/cpu_load_15m": load_15m,
+    })
+
+    # RAM
+    mem = psutil.virtual_memory()
+    logger.log({
+        f"{prefix}/ram_used_gb": mem.used / 1e9,
+        f"{prefix}/ram_percent": mem.percent,
+    })
+    logger.log({f"{prefix}/pygc_gen{i}": n for i, n in enumerate(gc.get_count())})
+
+    # Disk I/O
+    disk = psutil.disk_io_counters()
+    logger.log({
+        f"{prefix}/disk_read_gb": disk.read_bytes / 1e9,
+        f"{prefix}/disk_write_gb": disk.write_bytes / 1e9,
+    })
+
+    # Network I/O
+    net = psutil.net_io_counters()
+    logger.log({
+        f"{prefix}/net_sent_gb": net.bytes_sent / 1e9,
+        f"{prefix}/net_recv_gb": net.bytes_recv / 1e9,
+    })
+
+    # GPU (skip if pynvml not available)
+    try:
+        handle, pynvml = _get_gpu_handle(gpu_index)
+    except ImportError:
+        return
+    gpu_power = pynvml.nvmlDeviceGetPowerUsage(handle) / 1000  # mW to W
+    gpu_power_limit = pynvml.nvmlDeviceGetPowerManagementLimit(handle) / 1000
+    gpu_util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+    logger.log({
+        f"{prefix}/gpu_power_w": gpu_power,
+        f"{prefix}/gpu_power_percent": 100 * gpu_power / gpu_power_limit,
+        f"{prefix}/gpu_temp_c": pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU),
+        f"{prefix}/gpu_util_percent": gpu_util.gpu,
+        f"{prefix}/gpu_mem_util_percent": gpu_util.memory,
+        f"{prefix}/gpu_clock_sm_mhz": pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_SM),
+        f"{prefix}/gpu_clock_mem_mhz": pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_MEM),
+    })

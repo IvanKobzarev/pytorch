@@ -1,2 +1,3 @@
 -r requirements.txt
 -r requirements-torch-gpu-nightly.txt
+nvidia-ml-py

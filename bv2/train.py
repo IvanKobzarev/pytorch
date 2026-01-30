@@ -209,7 +209,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     def run_evals(step):
         """Run evaluations for a given step if conditions are met."""
         teval0, ran_eval = perf_counter(), False
-        for ev_name in c.get("evals", {}):
+        for ev_name in c.get("evals") or {}:
             ev = c.evals[ev_name]
             is_step = (step == 2 or (step > 2 and step % ev.steps == 0)) if isinstance(ev.steps, int) else step in ev.steps
             if u.about_to_get_killed() or not (is_step or step == c.nsteps):  # Always run on last step.
@@ -323,11 +323,13 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         distr.barrier()
         train_times.append(perf_counter() - t_step_start)
         peak_mems.append(torch.cuda.max_memory_allocated() / 1024**2)  # MiB
-        mw.log({"chrono/peakmem": peak_mems[-1]})
         mw.log({"chrono/traintime": train_times[-1]})
         mw.log({"chrono/steptime": t_step_start - t_prev_step_start})
         mw.log({"chrono/proctime": perf_counter() - t0})
         mw.log({"chrono/datawait": t_step_start - t_prev_step_end})
+        mw.log({"sys/gpu_peak_mem_gb": peak_mems[-1] / 1024})
+        if step % 10 == 0 and rank == 0:
+            bv2.metrics.log_system_metrics(mw, gpu_index=0, prefix="sys")
 
         # And grad-norms are for this step, but we only get them after the update ran, i.e. here.
         if step < 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
