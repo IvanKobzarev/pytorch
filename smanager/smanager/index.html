@@ -1882,7 +1882,7 @@
                     hotTable.querySelectorAll(`tbody tr[data-qos="${qos}"]`).forEach(row => {
                         if (row.dataset.server === server) {
                             row.classList.add('highlight-full');
-                        } else {
+                        } else if (qos.toLowerCase().includes('high')) {
                             row.classList.add('highlight-muted');
                         }
                     });
