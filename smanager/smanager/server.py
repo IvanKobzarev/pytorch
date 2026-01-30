@@ -74,6 +74,12 @@ class ZstdMiddleware:
             await self.app(scope, receive, send)
             return
 
+        # Skip compression for file downloads (they should stream directly)
+        path = scope.get("path", "")
+        if "/files/download/" in path:
+            await self.app(scope, receive, send)
+            return
+
         # Check Accept-Encoding header
         headers = dict(scope.get("headers", []))
         accept_encoding = headers.get(b"accept-encoding", b"").decode()
@@ -1087,16 +1093,29 @@ def get_files_content(xid: str, file_path: str):
 @app.get("/api/xid/{xid}/files/download/{file_path:path}")
 def download_file(xid: str, file_path: str):
     """Force download a file regardless of type."""
+    from starlette.responses import StreamingResponse
     wd_path = _get_workdir(xid)
     full_path = _safe_path(wd_path, file_path)
     if not full_path.exists():
         raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
     if not full_path.is_file():
         raise HTTPException(status_code=400, detail=f"Not a file: {file_path}")
-    return FileResponse(
-        path=full_path,
-        filename=full_path.name,
-        media_type="application/octet-stream"
+
+    file_size = full_path.stat().st_size
+
+    def iter_file():
+        chunk_size = 1024 * 1024  # 1MB chunks for better throughput
+        with open(full_path, 'rb') as f:
+            while chunk := f.read(chunk_size):
+                yield chunk
+
+    return StreamingResponse(
+        iter_file(),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{full_path.name}"',
+            "Content-Length": str(file_size),
+        }
     )
 
 
