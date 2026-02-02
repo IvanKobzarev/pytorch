@@ -842,6 +842,7 @@ def get_xid_info(xid: str):
             "restarts": sacct.get("restart_cnt", 0),
             "exit_code": sacct.get("exit_code", {}).get("return_code", {}).get("number", 0),
             "status": status.get(wid, "UNKNOWN"),
+            "reason": jobs_by_jid.get(str(jid), {}).get("REASON", ""),
             "nsteps": config.get("nsteps"),
             "config_args": sws_args,
             "name": config.get("name", ""),

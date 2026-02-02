@@ -1647,13 +1647,19 @@
                     ? `<span class="warning-text" title="${warningTooltip}">${wu.wid} ⚠</span>`
                     : wu.wid;
 
+                // Status tooltip: show reason for pending jobs, exit code for others
+                const isPending = ['PENDING', 'REQUEUE_HOLD'].includes(wu.status);
+                const statusTooltip = isPending && wu.reason
+                    ? `${wu.status} (${wu.reason})`
+                    : `${wu.status} (exit: ${wu.exit_code})`;
+
                 html += `
                     <tr data-jid="${wu.jid}" data-wid="${wu.wid}" data-nsteps="${wu.nsteps || 0}">
                         <td class="text-center"><input type="checkbox" class="row-select" onchange="updateRowSelection(this)" /></td>
                         <td class="mono text-right">${widDisplay}</td>
                         <td class="mono"><a href="${serverUrl}/log/${wu.jid}" target="_blank" title="View Slurm log">${wu.jid}</a><span class="copy-btn" onclick="navigator.clipboard.writeText('${wu.jid}')" title="Copy JID">⎘</span><span class="code-btn fa-icon" onclick="window.open('${serverUrl}/files/${data.xid}/wu/${wu.wid}', '_blank')" title="Browse workdir">🗁</span></td>
                         <td class="mono text-center">${wu.restarts}</td>
-                        <td class="text-center" title="${wu.status} (exit: ${wu.exit_code})"><span class="status-emoji">${statusEmoji}</span></td>
+                        <td class="text-center" title="${statusTooltip}"><span class="status-emoji">${statusEmoji}</span></td>
                         <td class="text-center">${requeueBtn}</td>
                         <td class="text-center">${actionBtn}</td>
                         <td class="mono text-right" data-wid="${wu.wid}" data-field="progress">-</td>
