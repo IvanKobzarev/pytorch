@@ -900,7 +900,7 @@
                 { key: false, cls: 'bg-fail', label: 'Fail' },
                 { key: 'FAILED', cls: 'bg-fail', label: 'Failed' },
                 { key: 'TIMEOUT', cls: 'bg-fail', label: 'Timeout' },
-                { key: 'CANCELLED_FAIL', cls: 'bg-cancel', label: 'Cancelled' },
+                { key: 'CANCELLED_FAIL', cls: 'bg-fail', label: 'Cancelled' },
                 { key: 'CANCELLED', cls: 'bg-cancel-clean', label: 'Stopped' },
                 { key: true, cls: 'bg-done', label: 'Done' },
                 { key: 'COMPLETED', cls: 'bg-done', label: 'Completed' },
@@ -973,6 +973,7 @@
                     // Compute states: use DONE files for finished, Slurm for in-progress
                     const wus = info.wus || {};
                     const slurmStates = info.states || {};
+                    const finishedStates = info.finished_states || {};
 
                     // Count WUs by DONE file status
                     const nDone = Object.values(wus).filter(v => v === true).length;
@@ -991,12 +992,18 @@
                     const nActualDone = info.actual_done_count || 0;
                     const nActualRunning = nRunning - nDoneIsh;
 
-                    // Failed = WUs without DONE file that are not in-progress
-                    const nFail = Math.max(0, nNotDone - nInProgress);
+                    // Count finished states from sacct (CANCELLED, CANCELLED_FAIL, FAILED, etc.)
+                    const nFinished = Object.values(finishedStates).reduce((a, b) => a + b, 0);
+                    // Failed = remaining WUs without DONE file that aren't in-progress or finished
+                    const nFail = Math.max(0, nNotDone - nInProgress - nFinished);
 
                     // Build states object for display
                     const states = {};
                     if (nFail > 0) states[false] = nFail;
+                    // Add finished states from sacct (CANCELLED, CANCELLED_FAIL, FAILED, TIMEOUT, etc.)
+                    for (const [state, count] of Object.entries(finishedStates)) {
+                        if (count > 0) states[state] = count;
+                    }
                     if (nActualDone > 0) states[true] = nActualDone;
                     if (nDoneIsh > 0) states['DONE_ISH'] = nDoneIsh;
                     if (nCompleting > 0) states.COMPLETING = nCompleting;

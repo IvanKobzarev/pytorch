@@ -261,10 +261,12 @@ def _extra_info(xid_info):
     # Without explicit xid-jid mapping, we must load DONE workdir configs to get their JID and compare to running jobs.
     info["done_ish_count"] = 0
     info["actual_done_count"] = 0
+    info["finished_states"] = {}  # Track finished job states from sacct (CANCELLED, FAILED, etc.)
 
     if "jobs" in info and info.get("wus"):
         jobs_by_jid = {job.get("JOBID", ""): job for job in info["jobs"] if job.get("JOBID")}
         done_wuwd_names = [name for name, is_done in info["wus"].items() if is_done]
+        not_done_wuwd_names = [name for name, is_done in info["wus"].items() if not is_done]
 
         if done_wuwd_names:
             try:
@@ -289,6 +291,36 @@ def _extra_info(xid_info):
                 info["actual_done_count"] = actual_done
             except Exception as e:
                 log.warning("Failed to calculate done_ish for %s: %s", xid, e)
+
+        # Query sacct for not-done jobs that aren't in squeue to get their actual finished state
+        if not_done_wuwd_names:
+            try:
+                config_args = [(wd_path, wuwd_name) for wuwd_name in not_done_wuwd_names]
+                config_results = list(executor.map(_load_config_only, config_args))
+                # Get JIDs for jobs not in squeue
+                jids_to_check = []
+                for wuwd_name, config in config_results:
+                    jid = config.get("jid")
+                    if jid and str(jid) not in jobs_by_jid:
+                        jids_to_check.append(jid)
+                # Query sacct for these JIDs
+                if jids_to_check:
+                    sacct_results = list(executor.map(load_sacct, jids_to_check))
+                    finished_states = {}
+                    for sacct in sacct_results:
+                        if not sacct:
+                            continue
+                        state = sacct.get('state', {}).get('current', [None])[-1]
+                        exit_code = sacct.get('exit_code', {}).get('return_code', {}).get('number', 0)
+                        # Map to display state
+                        if state == 'CANCELLED':
+                            display_state = 'CANCELLED' if exit_code == 0 else 'CANCELLED_FAIL'
+                        else:
+                            display_state = state or 'UNKNOWN'
+                        finished_states[display_state] = finished_states.get(display_state, 0) + 1
+                    info["finished_states"] = finished_states
+            except Exception as e:
+                log.warning("Failed to get finished states for %s: %s", xid, e)
 
     info["name"] = extract_common_name(workdir_names, xid)
     # Count WUs with duplicate workdirs (warning_count)
