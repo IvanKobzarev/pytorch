@@ -171,6 +171,7 @@
         .state-bar > span { height: 100%; }
         .bg-fail { background: #ef4444; }
         .bg-cancel { background: #9ca3af; }
+        .bg-cancel-clean { background: #4b5563; }
         .bg-done { background: #22c55e; }
         .bg-done-ish { background: #14b8a6; }
         .bg-end { background: #86efac; }
@@ -511,6 +512,7 @@
             FAILED: { icon: 'Fail', cls: 'status-fail' },
             TIMEOUT: { icon: 'Time', cls: 'status-fail' },
             CANCELLED: { icon: 'Canc', cls: 'status-hold' },
+            CANCELLED_FAIL: { icon: 'Canc', cls: 'status-fail' },
             UNKNOWN: { icon: '???', cls: '' },
             true: { icon: 'Done', cls: 'status-done' },
             false: { icon: 'Fail', cls: 'status-fail' },
@@ -518,7 +520,8 @@
 
         const STATE_EMOJIS = {
             RUNNING: '🏃', PENDING: '⏳', REQUEUE_HOLD: '🚫', COMPLETING: '🌇',
-            DONE: '✅', DONE_ISH: '🌄', FAILED: '❌', UNKNOWN: '😕', TIMEOUT: '⏰', CANCELLED: '🛑'
+            DONE: '✅', DONE_ISH: '🌄', FAILED: '❌', UNKNOWN: '😕', TIMEOUT: '⏰', CANCELLED: '■',
+            CANCELLED_FAIL: '🛑'
         };
 
         let servers = [];
@@ -897,7 +900,8 @@
                 { key: false, cls: 'bg-fail', label: 'Fail' },
                 { key: 'FAILED', cls: 'bg-fail', label: 'Failed' },
                 { key: 'TIMEOUT', cls: 'bg-fail', label: 'Timeout' },
-                { key: 'CANCELLED', cls: 'bg-cancel', label: 'Cancelled' },
+                { key: 'CANCELLED_FAIL', cls: 'bg-cancel', label: 'Cancelled' },
+                { key: 'CANCELLED', cls: 'bg-cancel-clean', label: 'Stopped' },
                 { key: true, cls: 'bg-done', label: 'Done' },
                 { key: 'COMPLETED', cls: 'bg-done', label: 'Completed' },
                 { key: 'COMPLETING', cls: 'bg-end', label: 'Completing' },
@@ -1578,7 +1582,8 @@
 
             for (const wu of wus) {
                 const statusInfo = STATE_ICONS[wu.status] || { icon: wu.status, cls: '' };
-                const statusEmoji = STATE_EMOJIS[wu.status] || '❓';
+                const effectiveStatus = (wu.status === 'CANCELLED' && wu.exit_code !== 0) ? 'CANCELLED_FAIL' : wu.status;
+                const statusEmoji = STATE_EMOJIS[effectiveStatus] || '❓';
                 const configArgs = (wu.config_args || []).map(a => {
                     const [lhs, rhs] = a.split('=', 2);
                     return `${lhs}=<em>${rhs}</em>`;
