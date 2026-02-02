@@ -9,6 +9,20 @@
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23121417'/><text x='50%25' y='65%25' font-size='14' text-anchor='middle' fill='%234bc0c8' font-family='serif'>s</text></svg>">
     <title>sManager</title>
     <style>
+        @font-face {
+            font-family: 'Font Awesome 7 Free';
+            font-style: normal;
+            font-weight: 900;
+            font-display: block;
+            src: url("/fonts/fa-solid-900.woff2") format("woff2");
+        }
+        @font-face {
+            font-family: 'Font Awesome 7 Free';
+            font-style: normal;
+            font-weight: 400;
+            font-display: block;
+            src: url("/fonts/fa-regular-400.woff2") format("woff2");
+        }
         :root {
             --bg: #ffffff;
             --text: #333333;
@@ -19,7 +33,8 @@
             --input-bg: #ffffff;
             --accent: #4bc0c8;
             --muted: #666666;
-            --font-symbols: 'Noto Sans Symbols', 'Noto Sans Symbols 2', sans-serif;
+            --font-symbols: 'Noto Sans Symbols', 'Noto Sans Symbols 2', 'Font Awesome 7 Free', sans-serif;
+            --font-fa: 'Font Awesome 7 Free', sans-serif;
         }
         [data-theme="dark"] {
             --bg: #121417;
@@ -307,6 +322,10 @@
         .copy-btn, .code-btn, .stop-btn, .action-btn, .rq-btn, .fav-btn, .del-btn, .archive-btn, .fav-toggle, .bulk-action-btn, .config-view-btn, .status-emoji, .warning-text, .col-fav, .col-rq, .col-del, .col-archive, .col-flattli {
             font-family: var(--font-symbols);
         }
+        /* FontAwesome icons (regular weight) */
+        .fa-icon { font-family: var(--font-fa); font-weight: 400; }
+        /* FontAwesome icons (bold/solid weight) */
+        .fa-icon-bold { font-family: var(--font-fa); font-weight: 900; }
         .fav-toggle.active { opacity: 1; color: #ef4444; }
         .col-fav { width: 1.6em; }
         .col-rq { width: 1.6em; }
@@ -1176,7 +1195,7 @@
                     <td class="text-center"><span class="fav-btn ${favorites.has(r.xid) ? 'active' : ''}" onclick="toggleFavorite('${r.xid}')">${favorites.has(r.xid) ? '❤︎' : '♡'}</span></td>
                     <td class="text-center"><span class="rq-btn" onclick="requeueXid('${serverUrl}', '${r.xid}')" title="Requeue all jobs">↶</span></td>
                     <td class="text-center"><span class="rq-btn" onclick="openFlattli('${r.xid}')" title="Open run in Flättlibrettli">📉︎</span></td>
-                    <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="code-btn" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span><span class="stop-btn" onclick="stopXid('${serverUrl}', '${r.xid}')" title="Stop (scancel -n ${r.xid})">⏹</span></td>
+                    <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="code-btn fa-icon" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span><span class="stop-btn fa-icon" onclick="stopXid('${serverUrl}', '${r.xid}')" title="Stop (scancel -n ${r.xid})">⏹</span></td>
                     <td class="user-cell ${userClass}" data-user="${r.user}">${r.user}</td>
                     <td>${formatStates(r.states)}</td>
                     <td class="mono">${wusDisplay}</td>
@@ -1259,7 +1278,7 @@
                     <td class="text-center">${delBtn}</td>
                     <td class="text-center">${archiveBtn}</td>
                     <td class="text-center"><span class="rq-btn" onclick="openFlattli('${r.xid}')" title="Open run in Flättlibrettli">📉︎</span></td>
-                    <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="code-btn" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span></td>
+                    <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="code-btn fa-icon" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span></td>
                     <td class="${userClass}">${r.user}</td>
                     <td class="mono">
                         ${r.fail ? `<span class="status-fail">${r.fail}</span>` : ''}${r.fail && r.done ? '+' : ''}${r.done ? `<span class="status-done">${r.done}</span>` : ''}${warningIndicator}
@@ -1632,7 +1651,7 @@
                     <tr data-jid="${wu.jid}" data-wid="${wu.wid}" data-nsteps="${wu.nsteps || 0}">
                         <td class="text-center"><input type="checkbox" class="row-select" onchange="updateRowSelection(this)" /></td>
                         <td class="mono text-right">${widDisplay}</td>
-                        <td class="mono"><a href="${serverUrl}/log/${wu.jid}" target="_blank" title="View Slurm log">${wu.jid}</a><span class="copy-btn" onclick="navigator.clipboard.writeText('${wu.jid}')" title="Copy JID">⎘</span><span class="code-btn" onclick="window.open('${serverUrl}/files/${data.xid}/wu/${wu.wid}', '_blank')" title="Browse workdir">🗁</span></td>
+                        <td class="mono"><a href="${serverUrl}/log/${wu.jid}" target="_blank" title="View Slurm log">${wu.jid}</a><span class="copy-btn" onclick="navigator.clipboard.writeText('${wu.jid}')" title="Copy JID">⎘</span><span class="code-btn fa-icon" onclick="window.open('${serverUrl}/files/${data.xid}/wu/${wu.wid}', '_blank')" title="Browse workdir">🗁</span></td>
                         <td class="mono text-center">${wu.restarts}</td>
                         <td class="text-center" title="${wu.status} (exit: ${wu.exit_code})"><span class="status-emoji">${statusEmoji}</span></td>
                         <td class="text-center">${requeueBtn}</td>

@@ -394,6 +394,16 @@ def serve_index():
     return Response(content=html, media_type="text/html")
 
 
+@app.get("/fonts/{filename}")
+def serve_font(filename: str):
+    if not filename.endswith(".woff2"):
+        raise HTTPException(status_code=404, detail="Not found")
+    font_path = SCRIPT_DIR / filename
+    if not font_path.exists():
+        raise HTTPException(status_code=404, detail="Font not found")
+    return Response(content=font_path.read_bytes(), media_type="font/woff2")
+
+
 @app.get("/api/overview")
 def get_overview():
     """Get overview of hot (active) experiments only - fast path.
