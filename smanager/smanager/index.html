@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Symbols+2&family=Noto+Sans+Symbols:wght@100..900&display=swap" rel="stylesheet">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23121417'/><text x='50%25' y='65%25' font-size='14' text-anchor='middle' fill='%234bc0c8' font-family='serif'>s</text></svg>">
     <title>sManager</title>
     <style>
@@ -16,6 +19,7 @@
             --input-bg: #ffffff;
             --accent: #4bc0c8;
             --muted: #666666;
+            --font-symbols: 'Noto Sans Symbols', 'Noto Sans Symbols 2', sans-serif;
         }
         [data-theme="dark"] {
             --bg: #121417;
@@ -299,11 +303,16 @@
         .archive-btn:hover { opacity: 1 !important; }
         .fav-toggle { cursor: pointer; font-size: 16px; opacity: 0.4; }
         .fav-toggle:hover { opacity: 0.7; }
+        /* Use symbol font for all icon buttons and symbol text */
+        .copy-btn, .code-btn, .stop-btn, .action-btn, .rq-btn, .fav-btn, .del-btn, .archive-btn, .fav-toggle, .bulk-action-btn, .config-view-btn, .status-emoji, .warning-text, .col-fav, .col-rq, .col-del, .col-archive, .col-flattli {
+            font-family: var(--font-symbols);
+        }
         .fav-toggle.active { opacity: 1; color: #ef4444; }
         .col-fav { width: 1.6em; }
         .col-rq { width: 1.6em; }
         .col-del { width: 1.6em; }
         .col-archive { width: 1.6em; }
+        .col-flattli { width: 1.6em; }
         .col-xid { width: 11.5em; }
         .col-usr { width: 5em; }
         .col-states { width: 110px; }
@@ -373,7 +382,7 @@
                     <tr>
                         <th class="col-fav">♡</th>
                         <th class="col-rq">↶</th>
-                        <th style="width:1.6em" title="Open run in Flättlibrettli">📉︎</th>
+                        <th class="col-flattli" title="Open run in Flättlibrettli">📉︎</th>
                         <th class="col-xid">XID</th>
                         <th class="col-usr">User</th>
                         <th class="col-states">States</th>
@@ -1429,7 +1438,7 @@
                     <td class="mono">${r.jobId}</td>
                     <td>${r.name}</td>
                     <td>${r.user}</td>
-                    <td>${stateEmoji(r.state)} ${r.state}</td>
+                    <td><span class="status-emoji">${stateEmoji(r.state)}</span> ${r.state}</td>
                     <td class="mono">${r.time}</td>
                     <td class="mono text-right">${r.cpus}</td>
                     <td>${r.qos}</td>
@@ -1625,7 +1634,7 @@
                         <td class="mono text-right">${widDisplay}</td>
                         <td class="mono"><a href="${serverUrl}/log/${wu.jid}" target="_blank" title="View Slurm log">${wu.jid}</a><span class="copy-btn" onclick="navigator.clipboard.writeText('${wu.jid}')" title="Copy JID">⎘</span><span class="code-btn" onclick="window.open('${serverUrl}/files/${data.xid}/wu/${wu.wid}', '_blank')" title="Browse workdir">🗁</span></td>
                         <td class="mono text-center">${wu.restarts}</td>
-                        <td class="text-center" title="${wu.status} (exit: ${wu.exit_code})">${statusEmoji}</td>
+                        <td class="text-center" title="${wu.status} (exit: ${wu.exit_code})"><span class="status-emoji">${statusEmoji}</span></td>
                         <td class="text-center">${requeueBtn}</td>
                         <td class="text-center">${actionBtn}</td>
                         <td class="mono text-right" data-wid="${wu.wid}" data-field="progress">-</td>
