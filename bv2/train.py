@@ -3,6 +3,7 @@ pip install -U -r bv2/requirements.txt
 torchrun --nproc_per_node=gpu -m bv2.train
 """
 
+import gc
 import json
 import os
 import re
@@ -56,6 +57,11 @@ torch.set_deterministic_debug_mode("error")  # raises error on non-determinism
 
 def main(c, rank, local_rank, world_size):  # noqa: C901
     prints0(f"Running with arguments:\n{c}")
+
+    # We want to control GC collection, exactly once per step.
+    # Otherwise, different processes pause the world for collection at different times,
+    # which introduces a "spike" in timing each time one process does a big (300+ms) collection.
+    gc.disable()
 
     # start from the beginning to track every gpu memory allocation
     # otherwise we lost cpp tracestack for model initialization
@@ -222,6 +228,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             mw.log({f"chrono/evals/{ev_name}": perf_counter() - tev0})
         if ran_eval:
             mw.log({"chrono/evaltime": perf_counter() - teval0})
+            gc.collect(2)  # Let's also use eval as opportunity to run a full GC collection.
 
     per_src_examples_seen, per_src_tokens_seen = Counter(), Counter()
     for step, data in zip(
@@ -324,6 +331,16 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         if step % 10 == 0 and rank == 0:
             bv2.metrics.log_system_metrics(mw, gpu_index=0, prefix="sys")
 
+        # Do controlled garbage collection to control for lag spikes.
+        # gen0 cost about 3-6ms per step, gen2 about 300-500. gen0 every 10 steps 10x its cost => not useful.
+        gc_t0 = perf_counter()
+        gc_n  = gc.collect(0)
+        mw.log({  # Adding a timing barrier would add a few ms, so we time rank0 only.
+            "chrono/gctime": perf_counter() - gc_t0,
+            "sys/rank0/gc_ncollected": gc_n,
+            # **{f"sys/gc_nobj_{i}": len(gc.get_objects(i)) for i in (0, 1, 2)},  # Expensive
+        })
+
         # And grad-norms are for this step, but we only get them after the update ran, i.e. here.
         if step < 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
             mw.log({f"gnorm/{n}": global_reduce(p.grad, "norm") for n, p in model.named_parameters()})
@@ -346,7 +363,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         if u.about_to_get_killed():  # We checkpointed, yay, quick, byebye.
             break
 
-        if c.nsteps >= 50 and step == 2:
+        if prof and step == 2:
             # dumping first 3 iterations from init are enough to include optim states.
             # Otherwise the .pkl becomes too big and freezes chrome.
             # Drag .pkl file to https://docs.pytorch.org/memory_viz
@@ -515,6 +532,8 @@ def maybe_save_ckpt(step, save_steps, keep_steps, model, optim, workdir, extras=
     should_save = (step % save_steps == 0) if isinstance(save_steps, int) else step in save_steps
     if not (u.about_to_get_killed() or should_save):
         return
+
+    gc.collect(2)  # A good opportunity to run a full GC collection.
 
     path = pjoin(workdir, f"ckpt-{step:06d}")
     prints0(f"Checkpointing to {path}")
