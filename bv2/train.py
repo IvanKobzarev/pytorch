@@ -656,6 +656,12 @@ if __name__ == "__main__":
         rank = local_rank = 0
         world_size = 1
 
+    # Add rank to cache dir to avoid race-condition on the lock.
+    # It means ranks don't share the compile cache, but it also
+    # means we don't get the following startup crash randomly anymore:
+    # torch._inductor.exc.InductorError: Timeout: The file lock [...] could not be acquired.
+    os.environ["TORCHINDUCTOR_CACHE_DIR"] = f"/tmp/torchinductor_{getuser()}_rank{local_rank}"
+
     if not sys.stdout.isatty():  # Don't squeeze tables or use colors in logs!
         rich.reconfigure(width=500, color_system=None)
 
