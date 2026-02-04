@@ -12,6 +12,13 @@ from bv2.data.tokenizer import get_tiktoken
 PATH = {
     "train": "/checkpoint/rigi/data/deduped_code/train@256.bag",
     "val": "/checkpoint/rigi/data/deduped_code/val@32.bag",
+    "codewall_train_0.25M": "/checkpoint/rigi/data/codewall/0.25M_256_in_64k/train.bag",
+    "codewall_train_0.5M": "/checkpoint/rigi/data/codewall/0.5M_256_in_64k/train.bag",
+    "codewall_train_1M": "/checkpoint/rigi/data/codewall/1M_256_in_64k/train.bag",
+    "codewall_train_2M": "/checkpoint/rigi/data/codewall/2M_256_in_64k/train.bag",
+    "codewall_train_4M": "/checkpoint/rigi/data/codewall/4M_256_in_64k/train.bag",
+    "codewall_train_16M": "/checkpoint/rigi/data/codewall/16M_256_in_64k/train.bag",
+    "codewall_val": "/checkpoint/rigi/data/codewall/val_256_in_64k/val.bag",
 }
 
 
