@@ -9,6 +9,7 @@ def get_config():
     c = sws.Config()
     c.seed = 0
 
+    c.cache = True
     c.maxtok = 32_768
 
     c.data.name = "mix"
@@ -26,7 +27,8 @@ def get_config():
     c.data.common.nreg = lambda: c.model.reg.nreg
     c.data.common.greyout_frac = 0.03
 
-    fv.add_to_config_(c.data, exclude=("docvqa", "infographic_vqa", "st_vqa", "textvqa", *fv.RIGI_EXCLUDES))
+    fv.add_to_config_(c.data, allow_caching=lambda: c.cache,
+                      exclude=("docvqa", "infographic_vqa", "st_vqa", "textvqa", *fv.RIGI_EXCLUDES))
 
     CUSTOM_QFMT = {  # NOTE: Not using suffix here anymore, since not using FV for these.
         # TODO: Adapt max decode settings for this!
@@ -41,6 +43,7 @@ def get_config():
     for name in ("docvqa", "infovqa", "stvqa", "textvqa"):
         c.data[name].name = "vqa"
         c.data[name].split = f"{name}/train"
+        c.data[name].cache = lambda: c.cache
 
         c.data[f"{name}_fmt"].name = "vqa"
         c.data[f"{name}_fmt"].split = f"{name}/train"
@@ -48,6 +51,7 @@ def get_config():
         c.data[f"{name}_fmt"].qfmt = CUSTOM_QFMT[name]
         c.data[f"{name}_fmt"].lower_q = True
         c.data[f"{name}_fmt"].lower_a = True
+        c.data[f"{name}_fmt"].cache = lambda: c.cache
 
     # 784 patches: 35m examples / 100k steps
     # 16384 patches: 13m examples / 100k steps
@@ -70,6 +74,7 @@ def get_config():
         k.name = "vqa"
         k.split = name
         k.epochs = 1
+        k.cache = lambda: c.cache
         k.max_patches = max_p or (lambda: min(c.data.common.max_patches, 3136))
         k.nreg = lambda: c.model.reg.nreg
         k.greyout_frac = 1.0 if blind else 0.0

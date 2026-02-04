@@ -13,12 +13,14 @@ def weights(fmt="{d}", include=(), exclude=(), sum_to=None):
     return {fmt.format(d=s): NUM_EXAMPLES[s] * reweight for s in which_ones}
 
 
-def add_to_config_(c, fmt="{d}", include=(), exclude=(), **extra_settings):
+def add_to_config_(c, fmt="{d}", include=(), exclude=(), allow_caching=True, dont_cache=()):
     from re import escape
     for s in include or list(NUM_EXAMPLES):
-        if s not in exclude:
-            c[fmt.format(d=s)].name = "finevision"  # TODO switch to vqa and others.
-            c[fmt.format(d=s)].include = [escape(s)]
+        if s in exclude:
+            continue
+        c[fmt.format(d=s)].name = "finevision"  # TODO switch to vqa and others.
+        c[fmt.format(d=s)].include = [escape(s)]
+        c[fmt.format(d=s)].cache = allow_caching if s not in dont_cache else False
 
 
 NUM_EXAMPLES = {

@@ -4,6 +4,7 @@ import numpy as np
 import sackli
 
 import bv2.utils as u
+from fscache import Cached
 
 
 def iota_exids(n=None, start_offset=0, rank=0, world_size=1):
@@ -64,13 +65,21 @@ def cycle_qas(qas, epoch, seed):
 
 
 @cache
-def get_sackli_reader(fspec, cache_limits=True):
+def get_sackli_reader(fspec, cache_items=False, cache_limits=True):
     # NOTE1: See this file for the full definition of `fspec`:
     # https://github.com/google-deepmind/bagz/blob/main/src/file/file_system/shard_spec.h
 
-    return sackli.Reader(fspec, sackli.Reader.Options(
+    r = sackli.Reader(fspec, sackli.Reader.Options(
         limits_storage=sackli.LimitsStorage.IN_MEMORY if cache_limits else sackli.LimitsStorage.ON_DISK,
         access_pattern=sackli.AccessPattern.RANDOM,  # No prefetching please.
         cache_policy=sackli.CachePolicy.DIRECT_IO,  # Avoid any page caches whatsoever.
         max_parallelism=1,  # We do our own prefetch, and don't read ranges.
-    ))  # fmt: skip
+    ))
+
+    if cache_items:
+        r = Cached(r, fspec)
+
+    if cache_limits:
+        _ = r[0]  # Get limits into RAM once, before all threads do it simultaneously.
+
+    return r

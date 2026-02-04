@@ -13,4 +13,4 @@ extend-select = ["TID251"]  # flake8-tidy-imports, which bans using specific API
 
 
 [tool.ruff.lint.isort]
-known-first-party = ["bv2"]
+known-first-party = ["bv2", "fscache"]

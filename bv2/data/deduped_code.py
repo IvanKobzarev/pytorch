@@ -23,9 +23,9 @@ PATH = {
 
 
 class Dataset:
-    def __init__(self, split, first_N=float("inf"), tokenizer=None, seed=0, epochs=None):
+    def __init__(self, split, first_N=float("inf"), tokenizer=None, seed=0, epochs=None, cache=False):
         # Idea: here or in pp: randomize sub-seqlen, because many are >32k!
-        self.reader = get_sackli_reader(PATH[split])
+        self.reader = get_sackli_reader(PATH[split], cache)
         self.tt = get_tiktoken(**tokenizer or {})
         self.first_N = first_N
         self.epochs = epochs

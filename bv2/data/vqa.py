@@ -19,9 +19,9 @@ PATH = "/checkpoint/rigi/data/{split}.bag"
 
 
 class Dataset:
-    def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, rand_max_patches=None, nreg=0, greyout_frac=0.0, tokenizer=None, qfmt="{q}", lower_q=False, lower_a=False, seed=0, epochs=None):
+    def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, rand_max_patches=None, nreg=0, greyout_frac=0.0, tokenizer=None, qfmt="{q}", lower_q=False, lower_a=False, seed=0, epochs=None, cache=False):
         self._name = f"vqa({split})"
-        self.reader = get_sackli_reader(basepath.format(split=split))
+        self.reader = get_sackli_reader(basepath.format(split=split), cache)
         self.ps = dict(ph=ps, pw=ps)
         self.max_patches = max_patches
         self.rand_max_patches = rand_max_patches or {}

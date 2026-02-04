@@ -117,3 +117,4 @@ if __name__ == "__main__":
     test_iota_exids()
     test_shuffled_iota_exids()
     test_cycle_qas()
+    print("All tests passed!")

@@ -16,7 +16,7 @@ from bv2.data.tokenizer import get_tiktoken
 
 
 class Dataset:
-    def __init__(self, ps=16, max_patches=16_384, rand_max_patches=None, nreg=0, include=[".*"], exclude=[], tokenizer=None, greyout_frac=0.0, seed=0, epochs=None):
+    def __init__(self, ps=16, max_patches=16_384, rand_max_patches=None, nreg=0, include=[".*"], exclude=[], tokenizer=None, greyout_frac=0.0, seed=0, epochs=None, cache=False):
         base_path = "/checkpoint/rigi/data/FineVision-1.0.1"
         self._name = f"finevision({','.join(include)})"
 
@@ -28,7 +28,7 @@ class Dataset:
                 continue
             paths.append(os.path.join(base_path, name, bag_pattern))
 
-        self.reader = get_sackli_reader(",".join(paths))
+        self.reader = get_sackli_reader(",".join(paths), cache)
         self.ps = {"ph": ps, "pw": ps}
         self.max_patches = max_patches
         self.rand_max_patches = rand_max_patches or {}
