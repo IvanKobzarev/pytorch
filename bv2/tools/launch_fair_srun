@@ -28,7 +28,8 @@ export NCCL_DEBUG=WARN  # quiet NCCL a bit
 echo $CONDA_PREFIX
 pwd
 
-# The --kill-on-bad-exit option makes it such that if one task dies, all are killed.
+srun --ntasks-per-node=1 --ntasks="$SLURM_JOB_NUM_NODES" nvidia-smi topo -m
+
 # The --unbuffered is needed if we want to live-tail the stdout/stderr logfile, otherwise it buffers aggressively.
 srun \
   --unbuffered \
