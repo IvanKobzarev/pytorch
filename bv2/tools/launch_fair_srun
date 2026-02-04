@@ -36,4 +36,4 @@ srun \
   --kill-on-bad-exit=1 \
   --ntasks-per-node="${NTASKS_PER_NODE}" \
   --cpus-per-task="$((SLURM_CPUS_ON_NODE / NTASKS_PER_NODE))" \
-  python "$@" c.jid:="$SLURM_JOB_ID"
+  python "$@" c.jid:="$SLURM_JOB_ID" c.gpus:="$((SLURM_GPUS_PER_NODE * SLURM_JOB_NUM_NODES))" c.gpu:="$SLURM_JOB_PARTITION"

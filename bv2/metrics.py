@@ -199,7 +199,7 @@ def _get_gpu_handle(gpu_index=0):
     return pynvml.nvmlDeviceGetHandleByIndex(gpu_index), pynvml
 
 
-def log_system_metrics(logger, gpu_index=0, prefix="sys"):
+def log_system_metrics(logger, gpu_index=0, prefix="sys/rank0"):
     """Log system metrics (CPU, RAM, GPU, disk, network) with given prefix."""
     # CPU
     load_1m, load_5m, load_15m = os.getloadavg()
@@ -216,7 +216,7 @@ def log_system_metrics(logger, gpu_index=0, prefix="sys"):
         f"{prefix}/ram_used_gb": mem.used / 1e9,
         f"{prefix}/ram_percent": mem.percent,
     })
-    logger.log({f"{prefix}/pygc_gen{i}": n for i, n in enumerate(gc.get_count())})
+    logger.log({f"{prefix}/gc_count{i}": n for i, n in enumerate(gc.get_count())})
 
     # Disk I/O
     disk = psutil.disk_io_counters()
