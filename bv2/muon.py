@@ -34,9 +34,9 @@ class Muon(torch.optim.Optimizer):
         muon_nesterov=True,
         ns_steps=5,
         ns_eps=1e-7,
-        beta1=0.9,
-        beta2=0.99,
-        eps=1e-8):
+        adam_beta1=0.9,
+        adam_beta2=0.99,
+        adam_eps=1e-8):
 
         defaults = dict(
             use_muon=True,
@@ -45,9 +45,9 @@ class Muon(torch.optim.Optimizer):
             muon_nesterov=muon_nesterov,
             ns_steps=ns_steps,
             ns_eps=ns_eps,
-            adam_beta1=beta1,
-            adam_beta2=beta2,
-            adam_eps=eps,
+            adam_beta1=adam_beta1,
+            adam_beta2=adam_beta2,
+            adam_eps=adam_eps,
         )
 
         return super().__init__(params, defaults)
