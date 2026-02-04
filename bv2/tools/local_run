@@ -24,6 +24,10 @@ trap 'echo "Got SIGTERM, forwarding to children"; forward_sig TERM; wait' TERM
 # Optional: quiet NCCL a bit
 export NCCL_DEBUG=WARN
 
+# Optional: quiet torch profiler unwind exit spam
+export KINETO_LOG_LEVEL=5
+export TORCH_CPP_LOG_LEVEL=ERROR
+
 if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
   NGPUS=$(( $(tr -cd ',' <<<"$CUDA_VISIBLE_DEVICES" | wc -c) + 1 ))
 else
