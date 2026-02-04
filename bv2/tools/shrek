@@ -2,11 +2,14 @@
 
 # NOTE both do not end with a slash.
 SRC="${1:-$HOME/rigi/bv2}"
-DST="${2:-fair-sc-3:~/rigi/bv2}"
+DST1="${2:-fair-sc:~/rigi/bv2}"
+DST2="$3"
+[[ $# -le 1 ]] && DST2="fair-sc-3:~/rigi/bv2"
 
 # ENSURE that both do not end with a slash.
 SRC="${SRC%/}"
-DST="${DST%/}"
+DST1="${DST1%/}"
+DST2="${DST2%/}"
 # However, below we'll always USE SRC with a slash and DST without.
 
 # Put common excludes in an array (easy to extend)
@@ -17,7 +20,8 @@ EXCLUDES=(
 )
 
 sync_once() {
-  rsync -az --delete --checksum "${EXCLUDES[@]}" "$SRC/" "$DST"
+  rsync -az --delete --checksum "${EXCLUDES[@]}" "$SRC/" "$DST1"
+  [[ -n "$DST2" ]] && rsync -az --delete --checksum "${EXCLUDES[@]}" "$SRC/" "$DST2"
   echo "Files synchronized at $(date)"
 }
 
