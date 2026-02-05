@@ -327,6 +327,8 @@
         .fa-icon { font-family: var(--font-fa); font-weight: 400; }
         /* FontAwesome icons (bold/solid weight) */
         .fa-icon-bold { font-family: var(--font-fa); font-weight: 900; }
+        /* Status-specific colors */
+        .status-completed { color: #22c55e; }
         .fav-toggle.active { opacity: 1; color: #ef4444; }
         .col-fav { width: 1.6em; }
         .col-rq { width: 1.6em; }
@@ -549,7 +551,7 @@
 
         const STATE_EMOJIS = {
             RUNNING: '🏃', PENDING: '⏳', REQUEUE_HOLD: '🚫', COMPLETING: '🌇',
-            DONE: '✅', DONE_ISH: '🌄', FAILED: '❌', UNKNOWN: '😕', TIMEOUT: '⏰', CANCELLED: '■',
+            DONE: '✅', DONE_ISH: '🌄', COMPLETED: '✓', FAILED: '❌', UNKNOWN: '😕', TIMEOUT: '⏰', CANCELLED: '■',
             CANCELLED_FAIL: '🛑'
         };
 
@@ -1660,7 +1662,7 @@
                         <td class="mono text-right">${widDisplay}</td>
                         <td class="mono"><a href="${serverUrl}/log/${wu.jid}" target="_blank" title="View Slurm log">${wu.jid}</a><span class="copy-btn" onclick="navigator.clipboard.writeText('${wu.jid}')" title="Copy JID">⎘</span><span class="code-btn fa-icon" onclick="window.open('${serverUrl}/files/${data.xid}/wu/${wu.wid}', '_blank')" title="Browse workdir">🗁</span></td>
                         <td class="mono text-center">${wu.restarts}</td>
-                        <td class="text-center" title="${statusTooltip}"><span class="status-emoji">${statusEmoji}</span></td>
+                        <td class="text-center" title="${statusTooltip}"><span class="status-emoji status-${effectiveStatus.toLowerCase()}">${statusEmoji}</span></td>
                         <td class="text-center">${requeueBtn}</td>
                         <td class="text-center">${actionBtn}</td>
                         <td class="mono text-right" data-wid="${wu.wid}" data-field="progress">-</td>

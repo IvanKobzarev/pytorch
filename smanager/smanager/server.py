@@ -699,6 +699,7 @@ def get_xid_info(xid: str):
     for wuwd_name, config in config_results:
         wid = config.get("wid", wuwd_name)
         new_jid = config.get("jid")
+        config["_wuwd_name"] = wuwd_name  # Store actual workdir name for DONE check
 
         # If wid already exists, prefer the "better" config
         if wid in configs:
@@ -740,8 +741,8 @@ def get_xid_info(xid: str):
     # Determine status for each wid
     status = {}
     for wid, config in configs.items():
-        name = config.get("name", "")
-        has_done = name and (wd_path / name / "DONE").is_file()
+        wuwd_name = config.get("_wuwd_name", "")
+        has_done = wuwd_name and (wd_path / wuwd_name / "DONE").is_file()
         jid = config.get("jid")
         slurm_state = jobs_by_jid.get(str(jid), {}).get("STATE") if jid else None
 
