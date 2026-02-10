@@ -5,7 +5,7 @@ from tiktoken.load import load_tiktoken_bpe
 
 
 class Tiktoken:
-    def __init__(self, first_N=None):
+    def __init__(self, first_N=None, path="/checkpoint/rigi/bv2/l4_200k_base.model"):
         # "pretokenization" step done via regexp
         # borrowed from: https://www.internalfb.com/code/fbsource/[cd5f9614da86]/genai/xlformers/core/tokenizers/finetune.py?lines=281
         # bento notebook: https://fburl.com/anp/u3rlrljj.
@@ -16,8 +16,7 @@ class Tiktoken:
         )
 
         # load actual tokens
-        model_path = "/checkpoint/rigi/bv2/l4_200k_base.model"
-        tokens = load_tiktoken_bpe(model_path)
+        tokens = load_tiktoken_bpe(path)
 
         if first_N is not None:
             tokens = {k: val for k, val in tokens.items() if val < first_N}
@@ -53,5 +52,5 @@ class Tiktoken:
 
 
 @cache
-def get_tiktoken(first_N=None):
-    return Tiktoken(first_N=first_N)
+def get_tiktoken(first_N=None, path="/checkpoint/rigi/bv2/l4_200k_base.model"):
+    return Tiktoken(first_N=first_N, path=path)
