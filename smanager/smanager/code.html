@@ -186,6 +186,23 @@
             height: 100%;
             color: var(--muted);
         }
+        .context-menu {
+            position: fixed;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 4px 0;
+            min-width: 120px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            z-index: 1000;
+        }
+        .context-menu-item {
+            padding: 6px 12px;
+            cursor: pointer;
+        }
+        .context-menu-item:hover {
+            background: var(--hover);
+        }
     </style>
 </head>
 <body>
@@ -207,6 +224,10 @@
         </div>
     </div>
 
+    <div class="context-menu" id="contextMenu" style="display: none;">
+        <div class="context-menu-item" onclick="copyContextPath()">Copy path</div>
+    </div>
+
     <script>
         // Parse URL: /code/{xid}/{file_path}#L{line}
         const pathMatch = window.location.pathname.match(/^\/code\/([^\/]+)(?:\/(.+))?$/);
@@ -221,6 +242,8 @@
         let selectedPath = null;
         let treeData = [];  // Store tree data for filtering
         let isSearching = false;
+        let contextFilePath = null;
+        let rootPath = '';
 
         function escapeHtml(text) {
             const div = document.createElement('div');
@@ -277,6 +300,30 @@
             return result;
         }
 
+        function showContextMenu(event, path) {
+            event.preventDefault();
+            contextFilePath = path;
+            const menu = document.getElementById('contextMenu');
+            menu.style.display = 'block';
+            menu.style.left = event.pageX + 'px';
+            menu.style.top = event.pageY + 'px';
+        }
+
+        function hideContextMenu() {
+            document.getElementById('contextMenu').style.display = 'none';
+            contextFilePath = null;
+        }
+
+        function copyContextPath() {
+            if (contextFilePath && rootPath) {
+                const fullPath = `${rootPath}/${contextFilePath}`;
+                navigator.clipboard.writeText(fullPath);
+            }
+            hideContextMenu();
+        }
+
+        document.addEventListener('click', hideContextMenu);
+
         function renderTree(items, depth = 0, forceExpanded = false) {
             let html = '';
             for (const item of items) {
@@ -284,7 +331,7 @@
                 const icon = item.type === 'dir' ? '📁' : '📄';
                 const expanded = forceExpanded ? true : false;
 
-                html += `<div class="tree-item" style="padding-left: ${indent}px" data-path="${escapeHtml(item.path)}" data-type="${item.type}">`;
+                html += `<div class="tree-item" style="padding-left: ${indent}px" data-path="${escapeHtml(item.path)}" data-type="${item.type}" oncontextmenu="showContextMenu(event, '${escapeHtml(item.path)}')">`;
                 if (item.type === 'dir') {
                     html += `<span class="tree-icon expand-icon">${expanded ? '▼' : '▶'}</span>`;
                 } else {
@@ -357,6 +404,7 @@
                 if (!resp.ok) throw new Error('Failed to load tree');
                 const data = await resp.json();
                 treeData = data.tree;
+                rootPath = data.root_path || '';
 
                 const panel = document.getElementById('treePanel');
                 renderFullTree(panel);

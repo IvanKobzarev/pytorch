@@ -983,7 +983,7 @@ def _build_tree(path: Path, base: Path) -> list:
 def get_code_tree(xid: str):
     """Get the file tree for an XID's source directory."""
     src_path = _get_srcdir(xid)
-    return {"xid": xid, "tree": _build_tree(src_path, src_path)}
+    return {"xid": xid, "root_path": str(src_path), "tree": _build_tree(src_path, src_path)}
 
 
 @app.get("/api/xid/{xid}/code/file/{file_path:path}")
@@ -1098,7 +1098,7 @@ def _build_files_tree(path: Path, base: Path, depth: int = -1) -> list:
 def get_files_tree(xid: str, depth: int = 1):
     """Get file tree for XID's workdir. Use depth=1 for lazy loading."""
     wd_path = _get_workdir(xid)
-    return {"xid": xid, "tree": _build_files_tree(wd_path, wd_path, depth)}
+    return {"xid": xid, "root_path": str(wd_path), "tree": _build_files_tree(wd_path, wd_path, depth)}
 
 
 @app.get("/api/xid/{xid}/files/tree/{wuname:path}")
@@ -1108,7 +1108,7 @@ def get_wu_files_tree(xid: str, wuname: str, depth: int = 1):
     wu_path = _safe_path(wd_path, wuname)
     if not wu_path.exists() or not wu_path.is_dir():
         raise HTTPException(status_code=404, detail=f"Work-unit directory not found: {wuname}")
-    return {"xid": xid, "wuname": wuname, "tree": _build_files_tree(wu_path, wu_path, depth)}
+    return {"xid": xid, "wuname": wuname, "root_path": str(wu_path), "tree": _build_files_tree(wu_path, wu_path, depth)}
 
 
 @app.get("/api/xid/{xid}/files/content/{file_path:path}")
