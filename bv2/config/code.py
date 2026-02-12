@@ -20,7 +20,8 @@ def get_config():
     c.lr = 1e-3  # NEEDS TO BE TUNED
     c.wd = lambda: 0.1*c.lr
 
-    c.muon.regexps = [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*txt_unemb.head.weight", r".*img_emb.proj.weight"]
+    c.muon.param_modes = {"muon": [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*img_emb.proj.weight", r".*txt_unemb.head.weight"],
+                          "adam": [r".*"]}
 
     c.model.dim = 2048
     c.model.depth = 8

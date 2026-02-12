@@ -127,18 +127,24 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     with torch.no_grad():
         with bv2.simple_fsdp.disable_data_parallel():  # super important, or nothing happens.
             model.init_weights(u.rng_torch(c.seed, "param_init", device=device))
+    muon_args = c.muon.to_dict()
+    param_modes = muon_args.pop("param_modes")
+
+    def get_muon_param_mode(name):
+        for mode, regexps in param_modes.items():
+            if any(re.fullmatch(r, name) for r in regexps):
+                return mode
+        raise ValueError(f"Every param should be matched to an optimizer mode. `{name}` was not matched")
+
     if rank == 0:
-        summary_table(model, stats=c.get("param_stats", False))
+        summary_table(model, stats=c.get("param_stats", False), param_mode=get_muon_param_mode)
 
-    muon_args = c.get("muon", sws.Config()).to_dict()
-    muon_regexps = muon_args.pop("regexps", [])
-    def _is_muon(name):
-        return any(re.fullmatch(r, name) for r in muon_regexps)
+    param_groups = defaultdict(list)
+    for n, p in model.named_parameters():
+        param_groups[get_muon_param_mode(n)].append(p)
+    params = [{"params": params, "mode": mode} for mode, params in param_groups.items()]
 
-    muon_params = {"params": [p for n, p in model.named_parameters() if _is_muon(n)], "use_muon": True}
-    adam_params = {"params": [p for n, p in model.named_parameters() if not _is_muon(n)], "use_muon": False}
-
-    optim = Muon([muon_params, adam_params], lr=torch.tensor(0.0), **muon_args)
+    optim = Muon(params, lr=torch.tensor(0.0), **muon_args)
     optim.init_state() # we init state to avoid recompiles
     decay_params = [p for n, p in model.named_parameters() if is_decay(n)]
 
@@ -174,7 +180,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         plattli=bv2.metrics.PlattliWriter(rank, workdir, first_step),
     )
     if rank == 0:  # Log once more after ckpt resume.
-        summary_table(model, stats=c.get("param_stats", False))
+        summary_table(model, stats=c.get("param_stats", False), param_mode=get_muon_param_mode)
     prints0(model)
 
     peak_mems, model_times = [], []
@@ -454,7 +460,7 @@ def is_decay(name):
     return any(re.match(d, name) for d in decays)
 
 
-def summary_table(model, stats=True):
+def summary_table(model, stats=True, param_mode=None):
     from rich.table import Table
     tbl = Table(
         show_header=True,
@@ -470,12 +476,16 @@ def summary_table(model, stats=True):
     tbl.add_column("placement", justify="right")
     tbl.add_column("local shape", justify="right")
     tbl.add_column("weight decay", justify="right")
+    tbl.add_column("param mode", justify="right")
     if stats:
         tbl.add_column("mean", justify="right")
         tbl.add_column("std", justify="right")
 
     total_num, total_bytes, local_bytes = 0, 0, 0
-    for name, x in chain(model.named_parameters(), model.named_buffers()):
+    for name, x, mode in chain(
+        ((n, x, param_mode(n)) for n, x in model.named_parameters()),
+        ((n, x, "-") for n, x in model.named_buffers()),
+    ):
         total_num += x.numel()
         total_bytes += x.nbytes
         cols = [name]
@@ -488,6 +498,7 @@ def summary_table(model, stats=True):
         else:
             cols += ["-", "shape"]
         cols += [str(is_decay(name))]
+        cols += [mode]
         if stats:
             cols += [global_reduce(x, "mean"), global_reduce(x, "std")]
         tbl.add_row(*cols)
@@ -625,7 +636,8 @@ def get_config():
     c.lr = 3e-4
     c.wd = lambda: c.lr * 0.1
 
-    c.muon.regexps = [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*txt_unemb.head.weight", r".*img_emb.proj.weight"]
+    c.muon.param_modes = {"muon_h": [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*img_emb.proj.weight", r".*txt_unemb.head.weight"],
+                          "adam": [r".*"]}
 
     c.model.dim = 4096
     c.model.depth = 4

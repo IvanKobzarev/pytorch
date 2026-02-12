@@ -4,6 +4,11 @@ from torch.distributed.tensor import DTensor, Replicate
 
 
 @torch.no_grad()
+def rescale_(A, radius):
+    return A.mul_(radius / (A.norm().full_tensor() + 1e-12))
+
+
+@torch.no_grad()
 def ns_ortho(G, *, steps=5, eps=1e-7, a=3.4445, b=-4.7750, c=2.0315):
     orig_dtype = G.dtype
     X = G.to(dtype=torch.bfloat16)
@@ -36,7 +41,8 @@ class Muon(torch.optim.Optimizer):
         ns_eps=1e-7,
         adam_beta1=0.9,
         adam_beta2=0.99,
-        adam_eps=1e-8):
+        adam_eps=1e-8,
+        muon_h_lr_mult=3.0):
 
         defaults = dict(
             use_muon=True,
@@ -48,6 +54,7 @@ class Muon(torch.optim.Optimizer):
             adam_beta1=adam_beta1,
             adam_beta2=adam_beta2,
             adam_eps=adam_eps,
+            muon_h_lr_mult=muon_h_lr_mult,
         )
 
         return super().__init__(params, defaults)
@@ -55,8 +62,10 @@ class Muon(torch.optim.Optimizer):
     def init_state(self):
         for group in self.param_groups:
             for p in (p for p in group["params"] if p.requires_grad):
-                if group["use_muon"]:
+                if group["mode"].startswith("muon"):
                     self.state[p]["momentum"] = torch.zeros_like(p, dtype=torch.float32)
+                    if group["mode"] == "muon_h":
+                        self.state[p]["R"] = p.norm().full_tensor()
                 else:
                     self.state[p]["step"] = torch.tensor(0)
                     self.state[p]["exp_avg"] = torch.zeros_like(p, dtype=torch.float32)
@@ -70,8 +79,8 @@ class Muon(torch.optim.Optimizer):
             lr = group["lr"]
 
             for p in (p for p in group["params"] if p.grad is not None):
-                if group["use_muon"]:
-                    assert p.ndim == 2
+
+                if group["mode"].startswith("muon"):
 
                     assert "momentum" in self.state[p], "Did you forget to run `init_state()`?"
                     m = self.state[p]["momentum"]
@@ -80,24 +89,29 @@ class Muon(torch.optim.Optimizer):
                     m.lerp_(p.grad, 1 - group["muon_momentum"])
                     G = p.grad.lerp(m, group["muon_momentum"]) if group["muon_nesterov"] else m
 
+                    assert G.ndim == 2  # Can be relaxed, but currently we have no need to dive into this
                     G = G.to(torch.bfloat16)
-                    G_full = G.redistribute(
+                    G = G.redistribute(
                         placements=(Replicate(),) * p.device_mesh.ndim,
                         forward_dtype=torch.bfloat16,
                     ).to_local()
 
-                    GO = ns_ortho(G_full, steps=group["ns_steps"], eps=group["ns_eps"])
+                    G = ns_ortho(G, steps=group["ns_steps"], eps=group["ns_eps"])
 
                     # Scaling rule from https://arxiv.org/abs/2502.16982.
-                    GO = GO * 0.2 * np.sqrt(max(GO.shape))
+                    G = G * 0.2 * np.sqrt(max(G.shape))
 
-                    GO_dt = DTensor.from_local(
-                        GO,
+                    G = DTensor.from_local(
+                        G,
                         device_mesh=p.device_mesh,
                         placements=(Replicate(),) * p.device_mesh.ndim,
-                    ).redistribute(placements=p.placements)
+                    ).redistribute(device_mesh=p.device_mesh, placements=p.placements)
 
-                    p.add_(GO_dt.to(p.dtype), alpha=-lr)
+                    if group["mode"] == "muon_h":
+                        p.add_(rescale_(G, self.state[p]["R"]).to(p.dtype), alpha=-lr * group["muon_h_lr_mult"])
+                        rescale_(p, self.state[p]["R"])
+                    else:
+                        p.add_(G.to(p.dtype), alpha=-lr)
                 else:
                     # Fallback to adam
                     state = self.state[p]

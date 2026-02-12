@@ -24,7 +24,8 @@ def get_config():
     c.lr = 3e-5
     c.wd = lambda: c.lr * 0.1
 
-    c.muon.regexps = [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*txt_unemb.head.weight", r".*img_emb.proj.weight"]
+    c.muon.param_modes = {"muon": [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*img_emb.proj.weight", r".*txt_unemb.head.weight"],
+                          "adam": [r".*"]}
 
     c.model.dim = 2048
     c.model.depth = 12
