@@ -177,8 +177,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         summary_table(model, stats=c.get("param_stats", False))
     prints0(model)
 
-    peak_mems = []
-    train_times = []
+    peak_mems, model_times = [], []
     t0 = t_step_start = t_prev_step_end = perf_counter()
     prof = c.nsteps >= 50 and profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
@@ -244,7 +243,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         distr.barrier()  # For accurate global datawait timing.
         t_prev_step_start, t_step_start = t_step_start, perf_counter()
 
-        if prof and step == 50:
+        if prof and (step - first_step) == 50:
             torch.cuda.cudart().cudaProfilerStart()
             prof.start()
 
@@ -275,6 +274,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         if step < 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
             mw.log({f"pnorm/{n}": global_reduce(p, "norm") for n, p in model.named_parameters()})
 
+        t_before_model = perf_counter()  # Let's not sync/barrier, FSDP does that anyways.
         local_loss, extras = _fwd_and_bwd_step(
             torch.tensor(c.wd * sched) if c.wd else None,
             data["tokens"],
@@ -282,6 +282,20 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             data["loss_weights"],
             data["iseq"],
         )
+
+        # Sync for getting accurate "global" timings
+        torch.cuda.synchronize()
+        distr.barrier()
+        mw.log({"chrono/modeltime": (model_time := perf_counter() - t_before_model)})
+        mw.log({"chrono/steptime": t_step_start - t_prev_step_start})
+        mw.log({"chrono/proctime": perf_counter() - t0})
+        mw.log({"chrono/datawait": t_step_start - t_prev_step_end})
+        mw.log({"sys/gpu_peak_mem_gb": (peak_mem := torch.cuda.max_memory_allocated() / 1024**3)})
+        if step % 10 == 0 and rank == 0:
+            bv2.metrics.log_system_metrics(mw, gpu_index=0, prefix="sys")
+        if c.nsteps < 50:
+            model_times.append(model_time)
+            peak_mems.append(peak_mem * 1024)  # MiB
 
         global_loss, global_pplx, global_ncorrect = sum(u.all_gather_object(
             np.r_[local_loss.cpu(), extras["pplx"].cpu(), extras["ncorrect"].cpu()]))
@@ -318,19 +332,6 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                 pplx = np.concat([d.get(src, []) for d in all_pplx]).mean()  # In nats
                 mw.log({f"mix_pplx/{src}": pplx / np.log(2)})  # In bits
 
-        # Sync for getting accurate "global" timings
-        torch.cuda.synchronize()
-        distr.barrier()
-        train_times.append(perf_counter() - t_step_start)
-        peak_mems.append(torch.cuda.max_memory_allocated() / 1024**2)  # MiB
-        mw.log({"chrono/traintime": train_times[-1]})
-        mw.log({"chrono/steptime": t_step_start - t_prev_step_start})
-        mw.log({"chrono/proctime": perf_counter() - t0})
-        mw.log({"chrono/datawait": t_step_start - t_prev_step_end})
-        mw.log({"sys/gpu_peak_mem_gb": peak_mems[-1] / 1024})
-        if step % 10 == 0 and rank == 0:
-            bv2.metrics.log_system_metrics(mw, gpu_index=0, prefix="sys")
-
         # Do controlled garbage collection to control for lag spikes.
         # gen0 cost about 3-6ms per step, gen2 about 300-500. gen0 every 10 steps 10x its cost => not useful.
         gc_t0 = perf_counter()
@@ -363,16 +364,16 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         if u.about_to_get_killed():  # We checkpointed, yay, quick, byebye.
             break
 
-        if prof and step == 2:
+        if prof and (step - first_step) == 2:
             # dumping first 3 iterations from init are enough to include optim states.
             # Otherwise the .pkl becomes too big and freezes chrome.
             # Drag .pkl file to https://docs.pytorch.org/memory_viz
-            torch.cuda.memory._dump_snapshot(pjoin(workdir, f"prof_memsnap_r{rank}.pkl"))  # fmt: skip
-        if prof and step == 53:  # Open in about://tracing or ui.perfetto.dev
+            torch.cuda.memory._dump_snapshot(pjoin(workdir, f"prof_memsnap_s{step}_r{rank}.pkl"))  # fmt: skip
+        if prof and (step - first_step) == 53:  # Open in about://tracing or ui.perfetto.dev
             torch.cuda.cudart().cudaProfilerStop()
             prof.stop()  # TODO: speedup gz
-            prof.export_chrome_trace(pjoin(workdir, f"prof_trace_r{rank}.json.gz"))
-            prof.export_stacks(pjoin(workdir, f"prof_stacks_cpu_r{rank}.txt"))
+            prof.export_chrome_trace(pjoin(workdir, f"prof_trace_s{step}_r{rank}.json.gz"))
+            prof.export_stacks(pjoin(workdir, f"prof_stacks_cpu_s{step}_r{rank}.txt"))
 
         run_evals(step)
 
@@ -386,7 +387,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     if c.nsteps < 50:
         prints(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
-        prints(f"Step times (med: {np.median(train_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in train_times)}")  # fmt: skip
+        prints(f"Model times (med: {np.median(model_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in model_times)}")  # fmt: skip
 
     if u.about_to_get_killed():
         mw.finish(training_done=False)
