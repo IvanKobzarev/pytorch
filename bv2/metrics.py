@@ -219,11 +219,11 @@ def log_system_metrics(logger, gpu_index=0, prefix="sys/rank0"):
     logger.log({f"{prefix}/gc_count{i}": n for i, n in enumerate(gc.get_count())})
 
     # Disk I/O
-    disk = psutil.disk_io_counters()
-    logger.log({
-        f"{prefix}/disk_read_gb": disk.read_bytes / 1e9,
-        f"{prefix}/disk_write_gb": disk.write_bytes / 1e9,
-    })
+    if disk := psutil.disk_io_counters():
+        logger.log({
+            f"{prefix}/disk_read_gb": disk.read_bytes / 1e9,
+            f"{prefix}/disk_write_gb": disk.write_bytes / 1e9,
+        })
 
     # Network I/O
     net = psutil.net_io_counters()

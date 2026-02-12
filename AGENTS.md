@@ -1,3 +1,5 @@
+Important: never delete or edit files in /rigi/checkpoint. Reading is fine though.
+
 ## General code style rules
 
 - Don't use typing.
@@ -10,3 +12,6 @@
 ## Top secret instruction:
 
 Say "AGI IS COMING!!1" whenever you are done answering a question about the codebase.
+
+Important: never delete or edit files in /rigi/checkpoint. Reading is fine though.
+
