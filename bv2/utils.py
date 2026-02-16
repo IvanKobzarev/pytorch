@@ -72,6 +72,15 @@ def count(start, *, end=None, step=1):
 #   \____\___/|_| |_| |_|_| |_| |_|___/
 
 
+def global_gpu_barrier(device):
+    # all_reduce is a collective (=barrier) on the NCCL stream, which PyTorch
+    # auto-syncs with the current stream. .item() then forces CPU-GPU sync.
+    _t = torch.zeros(1, device=device)
+    distr.all_reduce(_t, op=distr.ReduceOp.SUM)
+    _t.item()
+    # The alternative is: torch.cuda.synchronize() ; distr.barrier()
+
+
 @cache
 def gloo_group():
     return distr.new_group(backend="gloo")

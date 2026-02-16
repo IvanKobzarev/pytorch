@@ -229,7 +229,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                     print0("")  # End the line we did not end above.
                     for k, v in results.items():
                         prints0(f"Eval results: {ev_name}/{k}: {v}")
-            distr.barrier()  # For accurate timing and avoiding u.about_to_get_killed-related divergence.
+            u.global_gpu_barrier(device)  # For accurate timing and avoiding u.about_to_get_killed-related divergence.
             mw.log({f"chrono/evals/{ev_name}": perf_counter() - tev0})
         if ran_eval:
             mw.log({"chrono/evaltime": perf_counter() - teval0})
@@ -245,8 +245,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         ),
     ):
         torch.cuda.reset_peak_memory_stats()
-        torch.cuda.synchronize()
-        distr.barrier()  # For accurate global datawait timing.
+        u.global_gpu_barrier(device)  # For accurate global datawait timing.
         t_prev_step_start, t_step_start = t_step_start, perf_counter()
 
         if prof and (step - first_step) == 50:
@@ -289,9 +288,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             data["iseq"],
         )
 
-        # Sync for getting accurate "global" timings
-        torch.cuda.synchronize()
-        distr.barrier()
+        u.global_gpu_barrier(device)  # For accurate "global" timings
         mw.log({"chrono/modeltime": (model_time := perf_counter() - t_before_model)})
         mw.log({"chrono/steptime": t_step_start - t_prev_step_start})
         mw.log({"chrono/proctime": perf_counter() - t0})
@@ -388,7 +385,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             with open(pjoin(workdir, f"data_r{rank}.pt"), "wb") as f:
                 torch.save({k: v for k, v in data.items() if k != "flex_masks"}, f)
 
-        distr.barrier()  # Sync to get accurate datawait timing.
+        u.global_gpu_barrier(device)  # Sync to get accurate datawait timing.
         t_prev_step_end = perf_counter()
 
     if c.nsteps < 50:
