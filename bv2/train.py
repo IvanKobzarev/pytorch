@@ -183,7 +183,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         summary_table(model, stats=c.get("param_stats", False), param_mode=get_muon_param_mode)
     prints0(model)
 
-    peak_mems, model_times = [], []
+    peak_mems, model_times, step_times = [], [], []
     t0 = t_step_start = t_prev_step_end = perf_counter()
     prof = c.nsteps >= 50 and profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
@@ -290,7 +290,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
         u.global_gpu_barrier(device)  # For accurate "global" timings
         mw.log({"chrono/modeltime": (model_time := perf_counter() - t_before_model)})
-        mw.log({"chrono/steptime": t_step_start - t_prev_step_start})
+        mw.log({"chrono/steptime": (step_time := t_step_start - t_prev_step_start)})
         mw.log({"chrono/proctime": perf_counter() - t0})
         mw.log({"chrono/datawait": t_step_start - t_prev_step_end})
         mw.log({"sys/gpu_peak_mem_gb": (peak_mem := torch.cuda.max_memory_allocated() / 1024**3)})
@@ -298,6 +298,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             bv2.metrics.log_system_metrics(mw, gpu_index=0, prefix="sys")
         if c.nsteps < 50:
             model_times.append(model_time)
+            step_times.append(step_time)
             peak_mems.append(peak_mem * 1024)  # MiB
 
         global_loss, global_pplx, global_ncorrect = sum(u.all_gather_object(
@@ -391,6 +392,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     if c.nsteps < 50:
         prints(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
         prints(f"Model times (med: {np.median(model_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in model_times)}")  # fmt: skip
+        prints(f"Step times (med: {np.median(step_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in step_times)}")  # fmt: skip
 
     if u.about_to_get_killed():
         mw.finish(training_done=False)
