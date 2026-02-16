@@ -313,27 +313,32 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         mw.log({f"attn_max_logit/blk{i}": max_logits[i] for i in extras["blk"]})
 
         # For dataset mixtures, collect and report per-component stats and loss.
-        # TODO: Update this to be global, or at least check!
         if "src" in data:
-            # Count the number of examples of each subset source:
-            all_counts = u.all_gather_object(Counter(data["src"]))
-            per_src_examples_seen = sum(all_counts, per_src_examples_seen)
-            mw.log({f"mix_examples_seen/{n}": c for n, c in per_src_examples_seen.items()})
+            # Sync source names across ranks (cheap: just ~200 strings, not tensors)
+            local_srcs = sorted(set(data["src"]))
+            all_srcs = sorted({s for ss in u.all_gather_object(local_srcs) for s in ss})
+            s2i = {s: i for i, s in enumerate(all_srcs)}
 
-            per_src_toks = Counter()
-            per_src_pplx = defaultdict(list)
-            for iseq, src in enumerate(data["src"]):  # This is basically for each example.
-                iseq_mask = (data["iseq"] == iseq)  # Which token is from this example?
-                per_src_toks[src] += iseq_mask.sum().cpu()
-                per_src_pplx[src].append((extras["tok_losses"] * iseq_mask[:-1]).sum().cpu())
+            # Map each token to its source index via iseq
+            src_per_ex = torch.tensor([s2i[s] for s in data["src"]], device=device)
+            src_per_tok = src_per_ex[data["iseq"]]
 
-            per_src_tokens_seen = sum(u.all_gather_object(per_src_toks), per_src_tokens_seen)
-            mw.log({f"mix_tokens_seen/{n}": v.item() for n, v in per_src_tokens_seen.items()})
+            # Vectorized per-source stats on GPU, then one all_reduce
+            stats = torch.zeros(3, len(all_srcs), device=device)
+            stats[0].scatter_add_(0, src_per_ex, torch.ones(len(data["src"]), device=device))
+            stats[1].scatter_add_(0, src_per_tok, torch.ones_like(src_per_tok, dtype=stats.dtype))
+            stats[2].scatter_add_(0, src_per_tok[:-1], extras["tok_losses"].float())
+            distr.all_reduce(stats)
 
-            all_pplx = u.all_gather_object(per_src_pplx)  # List of dict of list
-            for src in {k for d in all_pplx for k in d}:  # Union of all seen src
-                pplx = np.concat([d.get(src, []) for d in all_pplx]).mean()  # In nats
-                mw.log({f"mix_pplx/{src}": pplx / np.log(2)})  # In bits
+            for i, src in enumerate(all_srcs):
+                per_src_examples_seen[src] += int(stats[0, i])
+                per_src_tokens_seen[src] += int(stats[1, i])
+            mw.log({f"mix_examples_seen/{s}": c for s, c in per_src_examples_seen.items()})
+            mw.log({f"mix_tokens_seen/{s}": v for s, v in per_src_tokens_seen.items()})
+
+            for i, src in enumerate(all_srcs):
+                if stats[0, i] > 0:
+                    mw.log({f"mix_pplx/{src}": (stats[2, i] / stats[0, i] / np.log(2)).item()})
 
         # Do controlled garbage collection to control for lag spikes.
         # gen0 cost about 3-6ms per step, gen2 about 300-500. gen0 every 10 steps 10x its cost => not useful.
