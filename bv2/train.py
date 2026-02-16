@@ -277,7 +277,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
         # Need to log param norms at this step before the update
         if step < 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
-            mw.log({f"pnorm/{n}": global_reduce(p, "norm") for n, p in model.named_parameters()})
+            mw.log({f"pnorm/{k}": v for k, v in global_norms(model.named_parameters()).items()})
 
         t_before_model = perf_counter()  # Let's not sync/barrier, FSDP does that anyways.
         local_loss, extras = _fwd_and_bwd_step(
@@ -347,7 +347,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
         # And grad-norms are for this step, but we only get them after the update ran, i.e. here.
         if step < 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
-            mw.log({f"gnorm/{n}": global_reduce(p.grad, "norm") for n, p in model.named_parameters()})
+            mw.log({f"gnorm/{k}": v for k, v in global_norms((n, p.grad) for n, p in model.named_parameters()).items()})
 
         # After the update is done, we are at the step+1
         mw.end_step()
@@ -427,6 +427,16 @@ def set_lr_(optimizer, lr):
 def print_stamped(s, rank, **kw):
     t = datetime.now().time().isoformat(timespec="milliseconds")
     print(f"[{rank} {t}] {s}", **kw)
+
+
+def global_norms(named_tensors):
+    """Batched global L2 norms via single all-reduce. Works with DTensors."""
+    items = [(n, x) for n, x in named_tensors if x is not None]
+    loc = lambda x: x.to_local() if hasattr(x, 'to_local') else x
+    sums = u.all_reduce_scalars(*[loc(x).float().square().sum() for _, x in items])
+    ws = distr.get_world_size()
+    sh = lambda x: hasattr(x, 'placements') and any(pl.is_shard() for pl in x.placements)
+    return {n: (s if sh(x) else s / ws) ** 0.5 for (n, x), s in zip(items, sums)}
 
 
 def global_reduce(x, method):
