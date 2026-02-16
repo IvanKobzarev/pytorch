@@ -1,5 +1,3 @@
-from copy import deepcopy
-
 import bv2
 import bv2.utils as u
 
@@ -35,14 +33,13 @@ class Dataset:
             return self.datasets[name].make_exids(
                 seed=(seed, name), rank=rank, **kw, **start_states.get(name, {}))
         generators = {n: make_generator(n) for n in self.mix}
-        states = deepcopy(start_states)
+        states = start_states.copy()
 
         for step in u.count(start_offset):
             which = u.rng(seed, rank, step).choice(list(self.mix), p=list(self.mix.values())).item()
             exid, states[which] = next(generators[which])
-            # We need deepcopy of states to avoid them being overwritten by next example fetch
-            # before the saving code was able to save them.
-            yield {"which": which, "exid": exid}, {"start_offset": step + 1, "start_states": deepcopy(states)}
+            # Shallow copy states because we modify in-place just above.
+            yield {"which": which, "exid": exid}, {"start_offset": step + 1, "start_states": states.copy()}
 
         # NOTE: We specifically don't shard the mixture components by rank, since that
         # would cause severe imbalances in terms of tokens if we use native resolution
