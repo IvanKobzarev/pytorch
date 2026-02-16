@@ -301,17 +301,16 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             step_times.append(step_time)
             peak_mems.append(peak_mem * 1024)  # MiB
 
-        global_loss, global_pplx, global_ncorrect = sum(u.all_gather_object(
-            np.r_[local_loss.cpu(), extras["pplx"].cpu(), extras["ncorrect"].cpu()]))
+        global_loss, global_pplx, global_ncorrect = u.all_reduce_scalars(
+            local_loss, extras["pplx"], extras["ncorrect"])
 
-        prints0(f"step {step}: loss {global_loss.item():.8f}")
-        mw.log({"train/pplx": global_pplx.item() / num_examples})
-        mw.log({"train/loss": global_loss.item()})  # loss used for bwd, so already normalized by a global weight
-        mw.log({"train/tokacc": global_ncorrect.item() / extras["global_total_loss_toks"].item()})
+        prints0(f"step {step}: loss {global_loss:.8f}")
+        mw.log({"train/pplx": global_pplx / num_examples})
+        mw.log({"train/loss": global_loss})  # loss used for bwd, so already normalized by a global weight
+        mw.log({"train/tokacc": global_ncorrect / extras["global_total_loss_toks"].item()})
         mw.log({"train/n_loss_toks": extras["global_total_loss_toks"].item()})
-        for i, blk_extras in extras["blk"].items():
-            max_logit = max(u.all_gather_object(blk_extras["attn"]["max_logit"].cpu())).item()
-            mw.log({f"attn_max_logit/blk{i}": max_logit})
+        max_logits = u.all_reduce_scalars(*(blk["attn"]["max_logit"] for blk in extras["blk"].values()), op=distr.ReduceOp.MAX)
+        mw.log({f"attn_max_logit/blk{i}": max_logits[i] for i in extras["blk"]})
 
         # For dataset mixtures, collect and report per-component stats and loss.
         # TODO: Update this to be global, or at least check!

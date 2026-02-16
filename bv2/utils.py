@@ -81,6 +81,12 @@ def global_gpu_barrier(device):
     # The alternative is: torch.cuda.synchronize() ; distr.barrier()
 
 
+def all_reduce_scalars(*scalars, op=distr.ReduceOp.SUM):
+    scalars = torch.stack(scalars)  # Also clones, so none gets overwritten.
+    distr.all_reduce(scalars, op=op)
+    return tuple(s.item() for s in scalars)
+
+
 @cache
 def gloo_group():
     return distr.new_group(backend="gloo")
