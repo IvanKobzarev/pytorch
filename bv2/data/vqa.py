@@ -72,23 +72,19 @@ class Dataset:
         d.pack_regs(nreg, out=tokens[1 + npre + 1 + nimg : -(1 + nsuf + 1)])
         d.pack_text([self.tt.sep, suffix, self.tt.eos], positions=txtpos[-(1 + nsuf + 1):], out=tokens[-(1 + nsuf + 1):])  # fmt: skip
 
-        return pp.sanity_check({
+        example = {
             "tokens": tokens,
-
             # NOTE: cast to int64, because if nreg == 0, then [] causes float in np.r_
             "loss_weights": np.r_[0, [0] * npre, 0, [0] * nimg, [0] * nreg, 0, [1] * nsuf, 1].astype(np.int64),
-
-            "attn_regions": np.r_[1, [1] * npre, 1, [1] * nimg, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
-
-            # Our initial
-            "attn_regions2": np.r_[1, [1] * npre, 1, [-1] * nimg, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
-
-            # regonly
-            # "attn_regions2": np.r_[-1, [-1] * npre, -1, [-1] * nimg, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
-
             # NOTE: for attn_regions, 0 = AR, >0 = dense region ID.
+            "attn_regions": np.r_[1, [1] * npre, 1, [1] * nimg, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
             "id": exid,
-        })  # fmt: skip
+        }
+        if nreg:  # Only add if needed, because mask creation is expensive.
+            example["attn_regions2"] = np.r_[1, [1] * npre, 1, [-1] * nimg, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64)
+            # regonly
+            # example["attn_regions2"] = np.r_[-1, [-1] * npre, -1, [-1] * nimg, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64)
+        return pp.sanity_check(example)
 
     def make_exids(self, **kw):
         yield from shuffled_iota_exids(len(self.reader), epochs=self.epochs, **kw)

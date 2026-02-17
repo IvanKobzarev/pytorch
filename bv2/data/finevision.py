@@ -108,14 +108,16 @@ class Dataset:
 
         d.pack_text([suffix, self.tt.eos], positions=txtpos[-(nsuf + 1) :], out=tokens[-(nsuf + 1) :])
 
-        return pp.sanity_check({
+        example = {
             "tokens": tokens,
             "loss_weights":  np.r_[0, [0] * npre, 0,  [0] * nimg, [0] * nreg, [1] * nsuf, 1].astype(np.int64),
             "attn_regions":  np.r_[1, [1] * npre, 1,  [1] * nimg, [1] * nreg, [0] * nsuf, 0].astype(np.int64),
-            "attn_regions2": np.r_[1, [1] * npre, 1, [-1] * nimg, [1] * nreg, [0] * nsuf, 0].astype(np.int64),
             "src": data["source"][0],
             "id": exid,
-        })
+        }
+        if nreg:  # Only add if needed, because mask creation is expensive.
+            example["attn_regions2"] = np.r_[1, [1] * npre, 1, [-1] * nimg, [1] * nreg, [0] * nsuf, 0].astype(np.int64)
+        return pp.sanity_check(example)
 
     def make_exids(self, **kw):
         yield from shuffled_iota_exids(len(self.reader), epochs=self.epochs, **kw)
