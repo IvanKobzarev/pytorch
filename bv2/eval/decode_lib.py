@@ -13,7 +13,7 @@ from torch.nn.attention.flex_attention import create_block_mask
 
 import bv2.data.dpack as dpack
 import bv2.utils as u
-from bv2.simple_input import parallel_prefetch, to_len
+from bv2.simple_input import pmap, to_len
 
 
 # lazy global variable, so we avoid compiling on import
@@ -114,7 +114,7 @@ def decoding_iterator(predict_fn, ds, *, max_prefix, max_decode, device, batch_s
 
     exid_gen = ds.make_exids(seed=seed, rank=rank, world_size=world_size)
     make_ex = functools.partial(_make_ex, ds=ds, max_prefix=max_prefix, max_decode=max_decode)
-    ex_iter = parallel_prefetch(iter(exid_gen), make_ex, eagerness)
+    ex_iter = pmap(exid_gen, make_ex, n_prefetch=eagerness, n_threads=eagerness)
 
     # Since examples can be filtered out, we iterate until we get a valid example
     dummy_ex = next(ex for ex in map(make_ex, ds.make_exids(seed=seed)) if ex is not None)

@@ -1,30 +1,53 @@
-from itertools import islice
 from multiprocessing.pool import ThreadPool
+from queue import Queue
+from threading import Thread
 
 import numpy as np
 
 
-def parallel_prefetch(seedgen, workfn, n_parallel=16):
-    # Separate non-parallel codepath for ease of pdb'ing:
-    if not n_parallel:
-        for seed in seedgen:
-            yield workfn(seed)
+def prefetch(it, n=1):
+    if not n:  # Separate non-parallel codepath for ease of pdb'ing:
+        yield from it
         return
 
-    with ThreadPool(n_parallel) as pool:
-        # Prefill:
-        futures = [pool.apply_async(workfn, (seed,)) for seed in islice(seedgen, n_parallel)]
+    _DONE = object()
+    q = Queue(maxsize=n)
+    def feeder():
+        try:
+            for item in it:
+                q.put(item)
+        except BaseException as e:
+            q.put(e)
+        q.put(_DONE)
 
-        # Keep consuming one and filling up next one, until we're all out of jobs.
-        # NOTE: always following FIFO order, not first-ready, so we're deterministic.
-        while len(futures):
-            f = futures.pop(0)
+    Thread(target=feeder, daemon=True).start()
+    for item in iter(q.get, _DONE):
+        if isinstance(item, BaseException):
+            raise item
+        yield item
 
-            try:
-                futures.append(pool.apply_async(workfn, (next(seedgen),)))
-            except StopIteration:
-                pass
 
+def pmap(it, fn, n_prefetch=16, n_threads=16):
+    if not n_threads:  # Separate non-parallel codepath for ease of pdb'ing:
+        for x in it:
+            yield fn(x)
+        return
+
+    # NOTE: always following FIFO order, not first-ready, so we're deterministic.
+    q = Queue(maxsize=n_prefetch)
+    def feeder(pool):
+        try:
+            for x in it:
+                q.put(pool.apply_async(fn, (x,)))
+        except BaseException as e:
+            q.put(e)
+        q.put(None)
+
+    with ThreadPool(n_threads) as pool:
+        Thread(target=feeder, args=(pool,), daemon=True).start()
+        while (f := q.get()) is not None:
+            if isinstance(f, BaseException):
+                raise f
             yield f.get()
 
 

@@ -6,7 +6,7 @@ import torch
 from torch.nn.attention.flex_attention import create_block_mask
 
 import bv2.utils as u
-from bv2.simple_input import iter_packed_examples, parallel_prefetch, to_len
+from bv2.simple_input import iter_packed_examples, pmap, prefetch, to_len
 
 # Current high-level description of input pipeline:
 # 0. A dataset module `ds` defines two functions: `make_exids` and `make_example`.
@@ -31,8 +31,9 @@ from bv2.simple_input import iter_packed_examples, parallel_prefetch, to_len
 
 @u.suppress_warnings("`isinstance(treespec, LeafSpec)` is deprecated", FutureWarning)
 @u.suppress_warnings("`isinstance(treespec, TreeSpec)` is deprecated", FutureWarning)
-def data_iter(ds, *, maxtok, device, seed=0, eagerness=16, device_eagerness=1,
-              rank=0, world_size=1, resume={}, pad_after=True):
+def data_iter(ds, *, maxtok, device, seed=0, rank=0, world_size=1, resume={}, pad_after=True,
+              # The following defaults were tuned for steptime on a FineVision d8w2k@3136 run:
+              pmap_chunksz=24, pmap_threads=16, eagerness=1, parallel_flexmask=False):
     make_exids = partial(ds.make_exids, seed=seed, rank=rank, world_size=world_size, **resume)
 
     def make_example(exid_and_state_after):
@@ -40,7 +41,7 @@ def data_iter(ds, *, maxtok, device, seed=0, eagerness=16, device_eagerness=1,
         return {**ds.make_example(**make_example_kw), "state_after": state_after}
 
     def cpu_data_gen():
-        ex_gen = parallel_prefetch(make_exids(), make_example, eagerness)
+        ex_gen = pmap(make_exids(), make_example, n_prefetch=pmap_chunksz, n_threads=pmap_threads)
 
         seq_padder = lambda seq: to_len(seq, to_len=maxtok, pad_values={
             # Only pad these fields, keep unmentioned fields unpadded.
@@ -91,14 +92,15 @@ def data_iter(ds, *, maxtok, device, seed=0, eagerness=16, device_eagerness=1,
 
     # As long as we're in the same address space, we can also prefetch
     # transfer to GPU, and flexmasks computation (on GPU). Especially the
-    # relatively heavy mask computation on GPU might interfere with training.
-    # It indeed does (see traintime), but the overall steptime is still better:
-    # Code - Prefetch togpu: med steptime 2.663, med traintime 2.525
-    # Code - Prefetch both:  med steptime 2.653, med traintime 2.522
-    # FiVi - Prefetch togpu: med steptime 1.821, med traintime 1.477
-    # FiVi - Prefetch both:  med steptime 1.814, med traintime 1.488
-    yield from parallel_prefetch(
-        cpu_data_gen(), lambda seq: add_flexmasks(to_gpu(seq)), n_parallel=device_eagerness)
+    # relatively heavy mask computation on GPU can interfere with training.
+    # See also: http://localhost:1337/?share=star-bean-rust
+    if parallel_flexmask:
+        gpu_gen = (add_flexmasks(to_gpu(seq)) for seq in cpu_data_gen())
+        yield next(gpu_gen)  # warmup torch.compile in main thread
+        yield from prefetch(gpu_gen, n=eagerness)
+    else:
+        yield from (add_flexmasks(seq) for seq in prefetch(
+            (to_gpu(seq) for seq in cpu_data_gen()), n=eagerness))
 
 
 create_block_mask = torch.compile(partial(create_block_mask, B=None, H=None))
