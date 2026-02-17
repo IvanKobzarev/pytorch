@@ -1,4 +1,4 @@
-# torchrun --nproc_per_node=gpu -m bv2.train --config bv2/config/finevision.py
+# bv2/tools/local_run -m bv2.train --config bv2/config/finevision.py nsteps:=250 c.evals=None
 
 import sws
 

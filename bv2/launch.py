@@ -53,7 +53,7 @@ def main(slurm=True):
     if slurm:
         assert "login" in os.uname().nodename, "Launch is only supported from the login node."
     else:
-        assert "login" not in os.uname().nodename, "Serial launch is only supported from the devbox."
+        assert "gpu-login" in os.uname().nodename, "Serial launch is only supported from the GPU devbox."
 
     # First, get the sweep function out of the config file.
     conf_file = sys.argv[1]

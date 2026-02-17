@@ -1,6 +1,6 @@
 """
-pip install -U -r bv2/requirements.txt
-torchrun --nproc_per_node=gpu -m bv2.train
+pip install -U -r bv2/requirements-gpu.txt (or -nightly)
+bv2/tools/local_run -m bv2.train
 """
 
 import gc
@@ -93,6 +93,9 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         os.makedirs(workdir, exist_ok=True)
         with open(pjoin(workdir, "config.json"), "w+") as f:
             f.write(c.to_flat_json(indent=0))
+
+    # Hacky way of always-enabling TORCH_TRACE from now on. Only a few MB per compile, no run overhead.
+    torch._logging._internal.LOG_TRACE_HANDLER.root_dir = pjoin(workdir, "torch_trace")
 
     # Import and get data source. We need it early on to know vocab size.
     ds = bv2.simple_data.from_config({'seed': (c.seed, "dataset"), **c.data.to_dict()})
@@ -553,6 +556,8 @@ class OptimState(dcp.stateful.Stateful):
 @u.suppress_warnings("version 2.5 of PyTorch, `overwrite` will default to False")
 @u.suppress_warnings("TypedStorage is deprecated", UserWarning)
 def maybe_save_ckpt(step, save_steps, keep_steps, model, optim, workdir, extras=None):
+    if save_steps is None or workdir is None:
+        return
 
     should_save = (step % save_steps == 0) if isinstance(save_steps, int) else step in save_steps
     if not (u.about_to_get_killed() or should_save):
