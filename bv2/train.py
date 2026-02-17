@@ -86,7 +86,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     name = c.get("name", f"{getuser()}-{xid}") + (f"-{c.wid}" if "wid" in c else "")
     xid, name = u.broadcast_object_from(rank=0, obj=(xid, name))
     workdir = "workdirs" if c.nsteps >= 50 else "workdirs-dbg"
-    workdir = pjoin("/checkpoint/rigi/bv2/", workdir, xid, name)
+    workdir = pjoin(c.get("workdir_base", "/checkpoint/rigi/bv2/"), workdir, xid, name)
     prints0(f"Workdir: {u.BLUE}{workdir}{u.RESET}")
 
     if rank == 0:
