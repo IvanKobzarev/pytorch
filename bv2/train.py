@@ -307,8 +307,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         prints0(f"step {step}: loss {global_loss:.8f}")
         mw.log({"train/pplx": global_pplx / num_examples})
         mw.log({"train/loss": global_loss})  # loss used for bwd, so already normalized by a global weight
-        mw.log({"train/tokacc": global_ncorrect / extras["global_total_loss_toks"].item()})
-        mw.log({"train/n_loss_toks": extras["global_total_loss_toks"].item()})
+        mw.log({"train/tacc": global_ncorrect / extras["global_total_loss_toks"].item()})
+        mw.log({"train/num_loss_toks": extras["global_total_loss_toks"].item()})
         max_logits = u.all_reduce_scalars(*(blk["attn"]["max_logit"] for blk in extras["blk"].values()), op=distr.ReduceOp.MAX)
         mw.log({f"attn_max_logit/blk{i}": max_logits[i] for i in extras["blk"]})
 

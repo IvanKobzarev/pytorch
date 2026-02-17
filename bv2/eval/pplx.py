@@ -45,6 +45,9 @@ def run(predict_fn, ds, iter, **comms):
         return {
             "pplx": g["total_pplx"] / g["examples_seen"],
             "tacc": g["total_correct"] / g["total_loss_toks"],
+            "num_tokens": g["tokens_seen"],
+            "num_examples": g["examples_seen"],
+            "num_loss_toks": g["total_loss_toks"],
         }
 
 
