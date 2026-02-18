@@ -25,6 +25,7 @@ import torch
 import torch.distributed as distr
 import torch.distributed.checkpoint as dcp
 import torch.distributed.checkpoint.state_dict as dcpsd
+import zstandard as zstd
 from torch.profiler import ProfilerActivity, profile, record_function
 
 import bv2.metrics
@@ -390,7 +391,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
         # visualize input tokens
         if c.nsteps >= 50 and step == 8:
-            with open(pjoin(workdir, f"data_r{rank}.pt"), "wb") as f:
+            with zstd.open(pjoin(workdir, f"data_r{rank}.pt.zst"), "wb") as f:
                 torch.save({k: v for k, v in data.items() if k != "flex_masks"}, f)
 
         u.global_gpu_barrier(device)  # Sync to get accurate datawait timing.
