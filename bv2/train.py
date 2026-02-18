@@ -166,8 +166,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         return loss, extras
 
     # Potentially resume/fork from a checkpoint, if not, init stuff.
-    first_step, tokens_seen, examples_seen = 0, 0, 0
-    resume_data = {}
+    first_step, resume_data = 0, {}
+    data_tokens_seen, model_tokens_seen, loss_tokens_seen, examples_seen = 0, 0, 0, 0
 
     # Checkpoint loading priority: resume > fork > init
     ckpt_path = c.get("fork") or c.get("init")
@@ -177,7 +177,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     if ckpt_path:
         if extras := load_ckpt(ckpt_path, model, optim, weights_only=bool(c.get("init"))):
             first_step, resume_data = extras["step"], extras["data"]
-            tokens_seen, examples_seen = extras["tokens_seen"], extras["examples_seen"]
+            data_tokens_seen, model_tokens_seen, loss_tokens_seen, examples_seen = \
+                extras["data_tokens_seen"], extras["model_tokens_seen"], extras["loss_tokens_seen"], extras["examples_seen"]
 
     mw = bv2.metrics.MultiWriter(
         bytes=bv2.metrics.BytesWriter(rank, workdir, first_step),
@@ -268,14 +269,15 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
         model.zero_grad(set_to_none=True)
 
-        all_lens = u.all_gather_object(data["lens"])
-        num_tokens = sum(sum(l) for l in all_lens)
-        num_examples = sum(len(l) for l in all_lens)
-        tokens_seen += num_tokens
-        examples_seen += num_examples
-        mw.log({"chrono/tokens_seen": tokens_seen})
+        all_ndatatoks, all_nmodeltoks = zip(*u.all_gather_object((data["ndatatoks"], data["ntok"])))
+        data_tokens_seen += (num_data_tokens := sum(sum(l) for l in all_ndatatoks))
+        model_tokens_seen += (num_model_tokens := sum(sum(l) for l in all_nmodeltoks))
+        examples_seen += (num_examples := sum(len(l) for l in all_ndatatoks))
         mw.log({"chrono/examples_seen": examples_seen})
-        mw.log({"chrono/num_tokens": num_tokens})
+        mw.log({"chrono/data_tokens_seen": data_tokens_seen})
+        mw.log({"chrono/model_tokens_seen": model_tokens_seen})
+        mw.log({"chrono/num_data_tokens": num_data_tokens})
+        mw.log({"chrono/num_model_tokens": num_model_tokens})
         mw.log({"chrono/num_examples": num_examples})
         mw.log({"chrono/percent": (step + 1) / c.nsteps})
 
@@ -286,9 +288,10 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         t_before_model = perf_counter()  # Let's not sync/barrier, FSDP does that anyways.
         local_loss, extras = _fwd_and_bwd_step(
             torch.tensor(c.wd * sched) if c.wd else None,
-            data["tokens"],
+            data["toki"],
+            data["toko"],
             data["flex_masks"],
-            data["loss_weights"],
+            data["lowe"],
             data["iseq"],
         )
 
@@ -309,10 +312,14 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             local_loss, extras["pplx"], extras["ncorrect"])
 
         prints0(f"step {step}: loss {global_loss:.8f}")
+
+        loss_tokens_seen += (num_loss_tokens := extras["global_total_loss_toks"].item())
+        mw.log({"chrono/num_loss_tokens": num_loss_tokens})
+        mw.log({"chrono/loss_tokens_seen": loss_tokens_seen})
+
         mw.log({"train/pplx": global_pplx / num_examples})
         mw.log({"train/loss": global_loss})  # loss used for bwd, so already normalized by a global weight
-        mw.log({"train/tacc": global_ncorrect / extras["global_total_loss_toks"].item()})
-        mw.log({"train/num_loss_toks": extras["global_total_loss_toks"].item()})
+        mw.log({"train/tacc": global_ncorrect / num_loss_tokens})
         max_logits = u.all_reduce_scalars(*(blk["attn"]["max_logit"] for blk in extras["blk"].values()), op=distr.ReduceOp.MAX)
         mw.log({f"attn_max_logit/blk{i}": max_logits[i] for i in extras["blk"]})
 
@@ -366,8 +373,10 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         maybe_save_ckpt(
             step, save_steps=c.get("ckpt_steps", 1000), keep_steps=c.get('ckpt_keep_steps', ()),
             model=model, optim=optim, workdir=workdir, extras={
-                "data": data["state_after"][-1],  # NOTE: This differs per process(!)
-                "tokens_seen": tokens_seen,
+                "data": data["state_after"],  # NOTE: This differs per process(!)
+                "data_tokens_seen": data_tokens_seen,
+                "model_tokens_seen": model_tokens_seen,
+                "loss_tokens_seen": loss_tokens_seen,
                 "examples_seen": examples_seen,
                 "metrics": mw.save_ckpt(),
                 "jid": c.get("jid", "n/a"),  # Just for future archeologs.
@@ -640,7 +649,7 @@ def get_config():
     c = sws.Config()
     c.seed = 0
 
-    c.maxtok = 8 * 4096 + 1
+    c.maxtok = 8 * 4096
 
     c.data.name = "random_nouns"
     c.data.min_nouns = 128

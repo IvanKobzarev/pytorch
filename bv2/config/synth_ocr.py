@@ -5,7 +5,7 @@ def get_config():
     c = sws.Config()
     c.seed = 0
 
-    c.maxtok = 8192 + 1
+    c.maxtok = 8192
 
     def get_data_config(seed=0, n=None):
         dc = sws.Config()

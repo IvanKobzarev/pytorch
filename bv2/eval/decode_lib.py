@@ -1,5 +1,5 @@
 """Important simplifying assumptions made for now:
-- we assume the prompt ends at the last token with zero `loss_weights`.
+- we assume the prompt ends at the last token with zero `lowe`.
 - we hard-code epoch=0 for the dataset
 - we only decode text modality
 """
@@ -32,33 +32,33 @@ def _make_ex(exid_and_state_after, ds, max_prefix, max_decode):
     ex = ds.make_example(**exid)
     attn_keys = [k for k in ex.keys() if k.startswith("attn_regions")]
 
-    # Prompt ends at the last unsupervised token.
-    prompt_idx = np.where(ex["loss_weights"] == 0)[0][-1]
-    assert prompt_idx + 1 < len(ex["loss_weights"]), "Last token of an example has to be supervised"
-    ex.pop("loss_weights") # not needed anymore
-
-    ex["decode_idx"] = prompt_idx + 1
+    # Prompt ends at the last unsupervised token, which is one after the last lowe-0 token.
+    prompt_idx = np.where(ex["lowe"] == 0)[0][-1] + 1
+    ex.pop("lowe")  # not needed anymore
+    ex.pop("toko")  # Never needed.
 
     if prompt_idx >= max_prefix:
         print(f"[{__file__}] Dropping a too long example: {ex["id"]=}.")
         return None
 
-    for k in ("tokens", *attn_keys):
+    # The token we decode is the one after the prompt's last token:
+    ex["decode_idx"] = prompt_idx + 1
+    for k in ("toki", *attn_keys):
         ex[k] = ex[k][:prompt_idx + 1]
 
     return to_len(ex, max_prefix + max_decode,
-                  pad_values={"tokens": 0, **{k: 0 for k in attn_keys}})
+                  pad_values={"toki": 0, **{k: 0 for k in attn_keys}})
 
 
 def decode_batch(predict_fn, batch, *, decode_idx, rng,
                  T, eos, device, max_prefix, max_decode):
 
     # Get the last txt token position for each sequence for positional embeddings.
-    _, txtpos, mask = dpack.unpack_as_text(torch.from_numpy(batch["tokens"]))
+    _, txtpos, mask = dpack.unpack_as_text(torch.from_numpy(batch["toki"]))
     next_token_pos = (txtpos * mask).max(dim=1).values.numpy() + 1
 
     batch = {k: torch.from_numpy(v).to(device) for k, v in batch.items()}
-    tokens = batch["tokens"]
+    tokens = batch["toki"]
     batch_size = len(tokens)
 
     def mask_mod(b, h, q_idx, kv_idx, mask_key):
@@ -81,7 +81,7 @@ def decode_batch(predict_fn, batch, *, decode_idx, rng,
             break
 
         logits_tok_idx = torch.from_numpy(decode_idx - 1).to(device)
-        logits, _ = predict_fn(tokens, flex_masks, None, torch.zeros(tokens.shape[:2], dtype=torch.int64), mode="logits", logits_tok_idx=logits_tok_idx)
+        logits, _ = predict_fn(tokens, None, flex_masks, None, torch.zeros(tokens.shape[:2], dtype=torch.int64), mode="logits", logits_tok_idx=logits_tok_idx)
 
         # TODO: add support for T=0
         probs = torch.softmax(logits / T, dim=-1)

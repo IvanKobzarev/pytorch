@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 import bv2.data.dpack as d
 import bv2.utils as u
-from bv2.data.common import random_exids, vis_image_text_wandb
+from bv2.data.common import random_exids
 from bv2.data.noun_vocab import VOCAB
 from bv2.data.pp import patchify, sanity_check
 from bv2.data.tokenizer import get_tiktoken
@@ -125,16 +125,14 @@ class Dataset:
         d.pack_text([self.tt.sep, suffix, self.tt.eos], positions=txtpos[-nsuf:], out=tokens[-nsuf:])
 
         return sanity_check({
-            "tokens": tokens,
-            #                     Prefix      Image       Sep  Suffix
-            "loss_weights": np.r_[[0] * npre, [0] * nimg, [0], [1] * (nsuf - 1)],
-            "attn_regions": np.r_[[1] * npre, [1] * nimg, [1], [0] * (nsuf - 1)],
+            "toki": tokens[..., :-1, :],
+            "toko": tokens[..., 1:, :],
+            "lowe": np.r_[[0] * (npre-1), [0] * nimg, [0], [1] * (nsuf-1)].astype(np.float32),  # -1 removes bos+sep
+            "attn_regions": np.r_[[1] * npre, [1] * nimg, [1], [0] * (nsuf-2)],  # -2 removes sep+eos
             # NOTE: for attn_regions, 0 = AR, >0 = dense region ID.
+            "ndatatoks": len(prefix) + len(suffix) + nimg,
             "id": exid,
-        })  # fmt: skip
+        })
 
     def vocab_size(self):
         return self.tt.n_vocab
-
-    def vis_data_wandb(self, data):
-        return vis_image_text_wandb(data, self.tt, ph=self.ps, pw=self.ps)

@@ -7,7 +7,7 @@ def get_config():
     c = sws.Config()
     c.seed = 0
 
-    c.maxtok = 2*32_768 + 1
+    c.maxtok = 2*32_768
 
     c.data.name = "deduped_code"
     c.data.split = "codewall_train_0.25M"

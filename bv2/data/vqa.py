@@ -12,7 +12,7 @@ import numpy as np
 import bv2.data.dpack as d
 import bv2.utils as u
 from bv2.data import pp
-from bv2.data.common import cycle_qas, get_bagz_reader, shuffled_iota_exids, vis_image_text_wandb
+from bv2.data.common import cycle_qas, get_bagz_reader, shuffled_iota_exids
 from bv2.data.tokenizer import get_tiktoken
 
 PATH = "/checkpoint/rigi/data/{split}.bag"
@@ -60,7 +60,7 @@ class Dataset:
 
         npre = len(prefix)
         nsuf = len(suffix)
-        nimg = np.prod(patches.shape[:2])
+        nimg = patches.shape[0] * patches.shape[1]
         nreg = self.nreg
 
         nbytes = max(d.nbytes_text(), d.nbytes_image(**self.ps), d.nbytes_reg())
@@ -72,16 +72,18 @@ class Dataset:
         d.pack_regs(nreg, out=tokens[1 + npre + 1 + nimg : -(1 + nsuf + 1)])
         d.pack_text([self.tt.sep, suffix, self.tt.eos], positions=txtpos[-(1 + nsuf + 1):], out=tokens[-(1 + nsuf + 1):])  # fmt: skip
 
+        # TODO: Actually we could have `toko` be only non-packed text => smaller and faster.
         example = {
-            "tokens": tokens,
-            # NOTE: cast to int64, because if nreg == 0, then [] causes float in np.r_
-            "loss_weights": np.r_[0, [0] * npre, 0, [0] * nimg, [0] * nreg, 0, [1] * nsuf, 1].astype(np.int64),
-            # NOTE: for attn_regions, 0 = AR, >0 = dense region ID.
-            "attn_regions": np.r_[1, [1] * npre, 1, [1] * nimg, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64),
+            "toki": tokens[..., :-1, :],
+            "toko": tokens[..., 1:, :],
+            "lowe": np.r_[[0] * npre, 0, [0] * nimg, [0] * nreg, 0, [1] * nsuf, 1].astype(np.float32),
+            # NOTE: for attn_regions, 0 = AR, >0 = dense region ID. Cast needed when nreg == 0.
+            "attn_regions": np.r_[1, [1] * npre, 1, [1] * nimg, [1] * nreg, 1, [0] * nsuf].astype(np.int64),
+            "ndatatoks": npre + nimg + nsuf,
             "id": exid,
         }
         if nreg:  # Only add if needed, because mask creation is expensive.
-            example["attn_regions2"] = np.r_[1, [1] * npre, 1, [-1] * nimg, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64)
+            example["attn_regions2"] = np.r_[1, [1] * npre, 1, [-1] * nimg, [1] * nreg, 1, [0] * nsuf].astype(np.int64)
             # regonly
             # example["attn_regions2"] = np.r_[-1, [-1] * npre, -1, [-1] * nimg, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64)
         return pp.sanity_check(example)
@@ -91,6 +93,3 @@ class Dataset:
 
     def vocab_size(self):
         return self.tt.n_vocab
-
-    def vis_data_wandb(self, data):
-        return vis_image_text_wandb(data, self.tt, **self.ps)

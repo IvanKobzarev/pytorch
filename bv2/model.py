@@ -373,14 +373,14 @@ class SimpleTransformer(nn.Module):
         # Just to avoid silly mistakes making `zip` skip layers in `forward`.
         assert len(self.flex_masks) == depth
 
-    def forward(self, tokens, flex_masks, loss_weights, seqids, mode, **mode_kw):
+    def forward(self, toki, toko, flex_masks, loss_weights, seqids, mode, **mode_kw):
         assert mode in ("loss and bwd", "loss", "logits"), f"Invalid mode {mode}"
 
         extras = {}
-        xtxt, extras["txt_emb"] = self.txt_emb(tokens)
-        xreg, extras["reg_emb"] = self.reg_emb(tokens)
-        xsep, extras["sep_emb"] = self.sep_emb(tokens)
-        ximg, extras["img_emb"] = checkpoint(self.img_emb, tokens, use_reentrant=False)
+        xtxt, extras["txt_emb"] = self.txt_emb(toki)
+        xreg, extras["reg_emb"] = self.reg_emb(toki)
+        xsep, extras["sep_emb"] = self.sep_emb(toki)
+        ximg, extras["img_emb"] = checkpoint(self.img_emb, toki, use_reentrant=False)
 
         # Embeddings of non-relevant tokens are 0
         x = xtxt + xreg + ximg + xsep  # ...so the addition really just combines them!
@@ -394,16 +394,8 @@ class SimpleTransformer(nn.Module):
 
         # We do the slicing here (and waste 1 token fwd pass) so we don't need to
         # adjust the `flex_mask` above according to slicing. Simplifies code overall.
-        loss, extras_txt_unemb = self.txt_unemb(
-            x[..., :-1, :],
-            tokens[..., 1:, :],
-            loss_weights[..., 1:] if loss_weights is not None else None,
-            seqids[..., 1:],
-            mode,
-            **mode_kw,
-        )
+        loss, extras_txt_unemb = self.txt_unemb(x, toko, loss_weights, seqids, mode, **mode_kw)
         extras.update(extras_txt_unemb)
-
         return loss, extras
 
     def init_weights(self, rng):

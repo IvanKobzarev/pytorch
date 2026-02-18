@@ -53,8 +53,3 @@ class Dataset:
 
     def vocab_size(self):
         return self.tt.n_vocab
-
-    # TODO: This is not generically possible here, because `data` is already packed and dpacked
-    #       and it would be a lot of work to slice it into individual sub datasets etc.
-    #       We should probably rather add tools to look at the raw batch we always dump already.
-    # def vis_data_wandb(self, data):

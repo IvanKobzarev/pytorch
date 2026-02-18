@@ -32,10 +32,12 @@ class Dataset:
         noun_tokens = render((self.data_seed, exid, "render"), self.tt, **self.render_kw)
 
         return sanity_check({
-            "tokens": pack_text(np.r_[self.tt.bos, noun_tokens, self.tt.eos], positions="auto"),
-            "loss_weights": np.r_[0, [1] * len(noun_tokens), 1],
-            "attn_regions": np.zeros(2 + len(noun_tokens), int),
+            "toki": pack_text(np.r_[self.tt.bos, noun_tokens], positions="auto"),
+            "toko": pack_text(np.r_[noun_tokens, self.tt.eos], positions="zero"),
+            "lowe": np.ones(len(noun_tokens) + 1, np.float32),
+            "attn_regions": np.zeros(1 + len(noun_tokens), int),
             # NOTE: for attn_regions, 0 = AR, >0 = dense region ID.
+            "ndatatoks": len(noun_tokens),
             "id": exid,
         })  # fmt: skip
 

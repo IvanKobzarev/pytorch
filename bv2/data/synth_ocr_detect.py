@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw
 
 import bv2.data.dpack as d
 import bv2.utils as u
-from bv2.data.common import random_exids, vis_image_text_unpack
+from bv2.data.common import random_exids
 from bv2.data.pp import patchify, sanity_check
 from bv2.data.synth_ocr import font, render
 from bv2.data.tokenizer import get_tiktoken
@@ -78,20 +78,20 @@ class Dataset:
 
         txtpos = np.arange(npre + nsuf)
 
-        # fmt:off
         d.pack_text([self.tt.bos, prefix, self.tt.sep], positions=txtpos[:npre], out=tokens[:npre])
         d.pack_image_with_extras(
             patches, positions, out=tokens[npre:-nsuf],
             add_row_sep=self.add_row_sep, add_hw=self.add_hw, tiptoi=self.tiptoi)
         d.pack_text([self.tt.sep, suffix, self.tt.eos], positions=txtpos[-nsuf:], out=tokens[-nsuf:])
-        # fmt:on
 
         return sanity_check({
-            "tokens": tokens,
+            "toki": tokens[..., :-1, :],
+            "toko": tokens[..., 1:, :],
             # no loss on sep after image.
-            "loss_weights": np.r_[[0] * npre, [0] * (nimg+1), [1] * (nsuf-1)],
-            "attn_regions": np.r_[[1] * npre, [1] * (nimg+1), [0] * (nsuf-1)],
+            "lowe": np.r_[[0] * (npre-1), [0] * (nimg+1), [1] * (nsuf-1)].astype(np.float32),  # -1 removes bos+sep
+            "attn_regions": np.r_[[1] * npre, [1] * (nimg+1), [0] * (nsuf-2)],  # -2 removes sep+eos
             # NOTE: for attn_regions, 0 = AR, >0 = dense region ID.
+            "ndatatoks": len(prefix) + len(suffix) + nimg,
             "id": exid,
         })  # fmt: skip
 
@@ -148,54 +148,6 @@ class Dataset:
 
         print(f"skip mode: {self.mode} coords: {len(coords)} {coords}")
         return image
-
-    def vis_output_wandb(self, data, preds, max_examples=20):
-        import wandb  # Local import to not pollute tests with silly warnings.
-        table = wandb.Table([
-            "input_text",
-            "ground_truth",
-            "TF prediction",
-            "image_gt",
-            "image_pred",
-        ])  # fmt: skip
-
-        tokens = data["tokens"].cpu()
-        iseq = data["iseq"].cpu()
-        loss_mask = data["loss_weights"].cpu() > 0
-
-        for i in range(min(max_examples, iseq.max() + 1)):
-            seq_mask = iseq == i
-
-            txt, img = vis_image_text_unpack(tokens[seq_mask], ph=self.ps, pw=self.ps)
-            assert len(img) == 1
-            img = img[0]
-            txt = self.tt.decode(txt)
-            prefix, _, suffix = txt.split("<|sep|>")
-            prefix = prefix.removeprefix("<|bos|>")
-            suffix = suffix.removesuffix("<|eos|>")
-
-            query = prefix.replace("Where is the word ", "")
-            img_gt = self.parse_and_draw(img, suffix, color="red")
-
-            tgt_mask = seq_mask & loss_mask
-            seq_preds = preds[tgt_mask[1:]].numpy()
-
-            pred_suffix = self.tt.decode(seq_preds)
-
-            if seq_preds[-1] == self.tt.eos:
-                pred_str = self.tt.decode(seq_preds[:-1])
-                img_pred = self.parse_and_draw(img, pred_str, color="blue")
-            else:
-                img_pred = img
-
-            table.add_data(
-                txt,
-                suffix,
-                pred_suffix,
-                wandb.Image(img_gt, caption=f"{query}: {suffix}"),
-                wandb.Image(img_pred, caption=f"{query}: {pred_suffix}"),
-            )
-        return table
 
     def vocab_size(self):
         return self.tt.n_vocab

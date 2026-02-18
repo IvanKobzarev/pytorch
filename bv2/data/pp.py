@@ -10,19 +10,19 @@ import bv2.utils as u
 def sanity_check(example):
     attn_regions_keys = [k for k in example if k.startswith("attn_regions")]
 
-    keys_with_same_size = ("tokens", "loss_weights") + tuple(attn_regions_keys)
+    keys_with_same_size = ("toki", "toko", "lowe") + tuple(attn_regions_keys)
     if len(set(len(example[k]) for k in keys_with_same_size)) != 1:
         raise ValueError(
             "Keys with unexpectedly different sizes:\n"
             + "\n".join(f"{k}: {len(example[k])}" for k in keys_with_same_size)
         )
 
-    # fmt: off
-    assert example["tokens"].dtype == np.uint8, f"{example['tokens'].dtype=}, expected int64"
-    assert example["loss_weights"].dtype == np.int64, f"{example['loss_weights'].dtype=}, expected int64"
-    # fmt: on
+    assert example["toki"].dtype == np.uint8, f"{example['toki'].dtype=}, expected uint8"
+    assert example["toko"].dtype == np.uint8, f"{example['toko'].dtype=}, expected uint8"
+    assert example["lowe"].dtype == np.float32, f"{example['lowe'].dtype=}, expected float32"
     for k in attn_regions_keys:
         assert example[k].dtype == np.int64, f"{k}: {example[k].dtype=}, expected int64"
+    assert isinstance(example["ndatatoks"], int), f"{example['ndatatoks']=}, expected POD int"
     return example
 
 

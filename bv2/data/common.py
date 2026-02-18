@@ -3,9 +3,7 @@ from functools import cache
 import bagz
 import numpy as np
 
-import bv2.data.dpack as d
 import bv2.utils as u
-from bv2.data.pp import unpatchify
 
 
 def iota_exids(n=None, start_offset=0, rank=0, world_size=1):
@@ -79,43 +77,3 @@ def get_bagz_reader(fspec, cache_limits=True):
         limits_storage=bagz.LimitsStorage.IN_MEMORY if cache_limits else bagz.LimitsStorage.ON_DISK,
         max_parallelism=1,  # We do our own prefetch, and don't read ranges.
     ))  # fmt: skip
-
-
-def vis_image_text_unpack(tokens, *, ph, pw):
-    txt, _, mask = d.unpack_as_text(tokens)
-    txt = txt.numpy()[mask.numpy()]
-
-    if not any(tokens[..., -1] == d.MOD_IMG):
-        return txt, []
-
-    patches, positions, _, mask = d.unpack_as_image(tokens, ph, pw)
-    patches, positions = patches.numpy()[mask.numpy()], positions.numpy()[mask.numpy()]
-
-    # Supports multiple images.
-    curr_patches, curr_positions, images = [], [], []
-    for pos, patch in zip(positions, patches):
-        curr_patches.append(patch)
-        curr_positions.append(pos)
-
-        if len(curr_patches) == pos[2] * pos[3]:
-            images.append(unpatchify(np.array(curr_patches), np.array(curr_positions)))
-            curr_patches, curr_positions = [], []
-
-    return txt, images
-
-
-def vis_image_text_wandb(data, tiktoken, *, ph, pw):
-    import wandb  # Local import to not pollute tests with silly warnings.
-    table = wandb.Table(["id", "text", "images"])
-
-    tokens = data["tokens"].cpu()
-    iseq = data["iseq"].cpu()
-
-    for _id in range(iseq.max() + 1):
-        txt, images = vis_image_text_unpack(tokens[iseq == _id], ph=ph, pw=pw)
-        txt = tiktoken.decode(txt)
-
-        wandb_images = [wandb.Image(img) for img in images] or None
-        table.add_data(_id, txt, wandb_images)
-
-    return table

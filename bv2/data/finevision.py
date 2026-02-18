@@ -11,7 +11,7 @@ import bv2.data.dpack as d
 import bv2.data.finevision_info as fvi
 import bv2.utils as u
 from bv2.data import pp
-from bv2.data.common import cycle_qas, get_bagz_reader, shuffled_iota_exids, vis_image_text_wandb
+from bv2.data.common import cycle_qas, get_bagz_reader, shuffled_iota_exids
 from bv2.data.tokenizer import get_tiktoken
 
 
@@ -36,9 +36,6 @@ class Dataset:
         self.greyout_frac = greyout_frac
         self.data_seed = seed
         self.epochs = epochs
-
-    def vis_data_wandb(self, data):
-        return vis_image_text_wandb(data, self.tt, **self.ps)
 
     def make_example(self, exid, epoch):
         with ZipFile(BytesIO(self.reader[exid])) as zf:
@@ -108,15 +105,18 @@ class Dataset:
 
         d.pack_text([suffix, self.tt.eos], positions=txtpos[-(nsuf + 1) :], out=tokens[-(nsuf + 1) :])
 
+        # TODO: Actually we could have `toko` be only non-packed text => smaller and faster.
         example = {
-            "tokens": tokens,
-            "loss_weights":  np.r_[0, [0] * npre, 0,  [0] * nimg, [0] * nreg, [1] * nsuf, 1].astype(np.int64),
-            "attn_regions":  np.r_[1, [1] * npre, 1,  [1] * nimg, [1] * nreg, [0] * nsuf, 0].astype(np.int64),
+            "toki": tokens[..., :-1, :],
+            "toko": tokens[..., 1:, :],
+            "lowe":  np.r_[[0] * npre, 0,  [0] * nimg, [0] * nreg, [1] * nsuf, 1].astype(np.float32),
+            "attn_regions":  np.r_[1, [1] * npre, 1,  [1] * nimg, [1] * nreg, [0] * nsuf].astype(np.int64),
+            "ndatatoks": npre + nimg + nsuf,
             "src": data["source"][0],
             "id": exid,
         }
         if nreg:  # Only add if needed, because mask creation is expensive.
-            example["attn_regions2"] = np.r_[1, [1] * npre, 1, [-1] * nimg, [1] * nreg, [0] * nsuf, 0].astype(np.int64)
+            example["attn_regions2"] = np.r_[1, [1] * npre, 1, [-1] * nimg, [1] * nreg, [0] * nsuf].astype(np.int64)
         return pp.sanity_check(example)
 
     def make_exids(self, **kw):

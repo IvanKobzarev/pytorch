@@ -55,9 +55,10 @@ def iter_packed_examples(
     example_generator,
     max_seqlen,
     *,
-    leader="tokens",
+    leader="toki",
     debugid="id",
-    dont_repeat=("id", "state_after", "src"),
+    dont_repeat=("id", "ndatatoks", "src"),
+    keep_last_only=("state_after",)
 ):
     def not_too_long(ex):  # pyre-ignore[53]
         if len(ex[leader]) <= max_seqlen:
@@ -67,25 +68,27 @@ def iter_packed_examples(
             return False
 
     good_example_generator = (ex for ex in example_generator if not_too_long(ex))
-
-    def tolist_maybe_repeat(ex, k):
-        return [ex[k]] * (len(ex[leader]) if k not in dont_repeat else 1)
+    dont_repeat = set(dont_repeat)
 
     def seq_from(exs):  # NOTE: This also works when `exs` is empty.
         seq = {}
-        seq["lens"] = [len(ex[leader]) for ex in exs]
-        seq["iseq"] = np.repeat(np.arange(len(exs)), seq["lens"])
+        seq["ntok"] = [len(ex[leader]) for ex in exs]
+        seq["iseq"] = np.repeat(np.arange(len(exs)), seq["ntok"])
 
         # Concat all arrays, potentially repeat all non-arrays.
-        for k in set().union(*exs) - {"lens", "iseq"}:
+        for k in set().union(*exs) - {"iseq"}:
             # TODO: What if `k` does not exist in some example? Currently, we raise,
             #       but conceivably we could also treat as non-array and use `None`?
             if any(isinstance(ex[k], np.ndarray) for ex in exs):
                 seq[k] = np.concatenate([ex[k] for ex in exs])
-            else:
+            elif k in keep_last_only:
+                seq[k] = exs[-1][k]
+            elif k in dont_repeat:
+                seq[k] = [ex[k] for ex in exs]
+            else:  # Repeat for each token in each example
                 seq[k] = []
                 for ex in exs:  # This is much faster than the sum(, []) one-liner
-                    seq[k].extend(tolist_maybe_repeat(ex, k))
+                    seq[k].extend([ex[k]] * len(ex[leader]))
         return seq
 
     seq_exs = []

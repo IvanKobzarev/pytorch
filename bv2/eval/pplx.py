@@ -7,7 +7,7 @@ import bv2.utils as u
 def run(predict_fn, ds, iter, **comms):
     # These are all things we collect PER PROCESS/GPU in the loop.
     # We'll summarize across processes once at the end.
-    tokens_seen, examples_seen = 0, 0
+    data_tokens_seen, model_tokens_seen, examples_seen = 0, 0, 0
     total_pplx, total_correct, total_loss_toks = 0, 0, 0
 
     for step, data in enumerate(simple_data.data_iter(ds, **iter, **comms)):
@@ -18,22 +18,25 @@ def run(predict_fn, ds, iter, **comms):
         if all(whos_done):
             break
 
-        _, extras = predict_fn(
-            data["tokens"], data["flex_masks"], data["loss_weights"], data["iseq"], mode="loss")
+        _, extras = predict_fn(data["toki"], data["toko"], data["flex_masks"], data["lowe"], data["iseq"], mode="loss")
 
-        num_tokens = sum(data["lens"])
-        num_examples = len(data["lens"])
-        tokens_seen += num_tokens
+        num_data_tokens = sum(data["ndatatoks"])
+        num_model_tokens = sum(data["ntok"])
+        num_examples = len(data["ntok"])
+        data_tokens_seen += num_data_tokens
+        model_tokens_seen += num_model_tokens
         examples_seen += num_examples
 
-        total_loss_toks += (data["loss_weights"] > 0).sum().item()
+        total_loss_toks += (data["lowe"] > 0).sum().item()
         total_pplx += extras["pplx"].item()
         total_correct += extras["ncorrect"].item()
+        print(".", end="", flush=True)
 
     # Get all sum/info to rank0. `g` stands for `globally`.
     if g := u.sum_to(
         rank=0,
-        tokens_seen=tokens_seen,
+        data_tokens_seen=data_tokens_seen,
+        model_tokens_seen=model_tokens_seen,
         examples_seen=examples_seen,
         total_loss_toks=total_loss_toks,
         total_pplx=total_pplx,
@@ -42,9 +45,10 @@ def run(predict_fn, ds, iter, **comms):
         return {
             "pplx": g["total_pplx"] / g["examples_seen"],
             "tacc": g["total_correct"] / g["total_loss_toks"],
-            "num_tokens": g["tokens_seen"],
+            "num_data_tokens": g["data_tokens_seen"],
+            "num_model_tokens": g["model_tokens_seen"],
             "num_examples": g["examples_seen"],
-            "num_loss_toks": g["total_loss_toks"],
+            "num_loss_tokens": g["total_loss_toks"],
         }
 
 
@@ -69,8 +73,10 @@ class TestDataset:
     def make_example(self, exid, epoch):
         import numpy as np
         return {
-            "tokens": np.array([exid] * exid),
-            "loss_weights": np.array([1 / exid] * exid),
+            "toki": np.array([exid] * exid),
+            "toko": np.array([exid] * exid),
+            "lowe": np.array([1 / exid] * exid),
+            "ndatatoks": exid,
             "id": exid,
         }
 

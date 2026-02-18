@@ -38,9 +38,11 @@ class Dataset:
         toks = self.tt.encode(data)
 
         return sanity_check({
-            "tokens": d.pack_text(np.r_[self.tt.bos, toks, self.tt.eos], positions="auto"),
-            "loss_weights": np.r_[0, [1] * len(toks), 1],
-            "attn_regions": np.zeros(2 + len(toks), int),  # 0 = AR
+            "toki": d.pack_text(np.r_[self.tt.bos, toks], positions="auto"),
+            "toko": d.pack_text(np.r_[toks, self.tt.eos], positions="zero"),
+            "lowe": np.ones(len(toks) + 1, np.float32),
+            "attn_regions": np.zeros(1 + len(toks), int),  # 0 = AR
+            "ndatatoks": len(toks),
             "id": exid,
         })
 
@@ -49,17 +51,3 @@ class Dataset:
 
     def vocab_size(self):
         return self.tt.n_vocab
-
-    def vis_data_wandb(self, data):
-        import wandb  # Local import to not pollute tests with silly warnings.
-        table = wandb.Table(["id", "text"])
-
-        tokens = data["tokens"].cpu()
-        iseq = data["iseq"].cpu()
-
-        for _id in range(iseq.max() + 1):
-            txt, _, mask = d.unpack_as_text(tokens[iseq == _id])
-            txt = txt.numpy()[mask.numpy()]
-            table.add_data(_id, self.tt.decode(txt))
-
-        return table

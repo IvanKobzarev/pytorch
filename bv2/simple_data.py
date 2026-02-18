@@ -45,9 +45,7 @@ def data_iter(ds, *, maxtok, device, seed=0, rank=0, world_size=1, resume={}, pa
 
         seq_padder = lambda seq: to_len(seq, to_len=maxtok, pad_values={
             # Only pad these fields, keep unmentioned fields unpadded.
-            "tokens": 0,
-            "loss_weights": 0.0,  # Also makes sure it's float.
-            "iseq": -1,
+            "toki": 0, "toko": 0, "lowe": 0, "iseq": -1,
             # attn_region -1 is ignored by our flex call.
         } | {k: -1 for k in seq if k.startswith("attn_regions")})  # fmt: skip
 
@@ -57,11 +55,12 @@ def data_iter(ds, *, maxtok, device, seed=0, rank=0, world_size=1, resume={}, pa
             # But we need to know the content/shape/dtype of sequence entries!
             # So we make one example, that we then truncate, pad, and reuse forever.
             dummy_ex = make_example(next(make_exids()))
-            dummy_ex["loss_weights"] = dummy_ex["loss_weights"][:0]
-            dummy_ex["tokens"] = dummy_ex["tokens"][:0]
+            dummy_ex["lowe"] = dummy_ex["lowe"][:0]
+            dummy_ex["toki"] = dummy_ex["toki"][:0]
+            dummy_ex["toko"] = dummy_ex["toko"][:0]
             # Usually added by the packer, so we need to manually add it here:
             dummy_ex["iseq"] = np.empty(0, np.int64)
-            dummy_ex["lens"] = []
+            dummy_ex["ntok"] = dummy_ex["ndatatoks"] = []
             dummy_ex = seq_padder(dummy_ex)
             while True:
                 yield dummy_ex

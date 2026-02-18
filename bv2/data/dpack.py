@@ -23,9 +23,14 @@ def pack_text(tokens, positions="auto", out=None):
     # Then, we make sure it's int64, the only dtype that nn.Embedding accepts on CUDA.
     tokens = np.asarray(tokens, dtype=np.int64)
 
-    if isinstance(positions, str) and positions == "auto":
+    if isinstance(positions, str):
         # also works for batched inputs
-        positions = np.broadcast_to(np.arange(tokens.shape[-1], dtype=np.int32), tokens.shape)
+        if positions == "auto":
+            positions = np.broadcast_to(np.arange(tokens.shape[-1], dtype=np.int32), tokens.shape)
+        elif positions == "zero":
+            positions = np.zeros_like(tokens, dtype=np.int32)
+        else:
+            ValueError(f"Unknown position type: {positions}")
     else:
         positions = np.asarray(positions, dtype=np.int32)
 

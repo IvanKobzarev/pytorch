@@ -8,7 +8,7 @@ def get_config():
     c = sws.Config()
     c.seed = 0
 
-    c.maxtok = 32_768 + 1
+    c.maxtok = 32_768
 
     c.data.name = "vqa"
     c.data.split = "docvqa/train"
