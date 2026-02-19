@@ -854,8 +854,13 @@ def get_xid_info(xid: str):
             "warnings": warnings.get(wid, []),
         })
 
+    # Read note if exists
+    note_file = wd_path / "NOTE.md"
+    note = note_file.read_text().strip() if note_file.exists() else ""
+
     result = {
         "xid": xid,
+        "note": note,
         "wus": wus,
         "launch_command": (wd_path / "launchinfo.txt").read_text() if (wd_path / "launchinfo.txt").exists() else "",
     }

@@ -329,6 +329,16 @@
         .fa-icon-bold { font-family: var(--font-fa); font-weight: 900; }
         /* Status-specific colors */
         .status-completed { color: #22c55e; }
+        /* XID detail header */
+        .xid-display { font-weight: bold; font-family: var(--font-mono); margin-right: 0.5em; }
+        .xid-actions { display: inline-flex; align-items: center; gap: 0.5em; margin-right: 1em; flex: 1; }
+        .xid-actions .xid-btn { cursor: pointer; opacity: 0.6; font-family: var(--font-symbols); }
+        .xid-actions .xid-btn:hover { opacity: 1; }
+        .xid-actions .xid-btn.fa-icon { font-family: var(--font-fa); font-weight: 400; }
+        .xid-actions .xid-btn.active { opacity: 1; color: #ef4444; }
+        .xid-actions .xid-note { cursor: pointer; padding: 0.1em 0.4em; border-radius: 3px; color: var(--fg-muted); font-size: 0.9em; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .xid-actions .xid-note:hover { background: var(--hover-bg); }
+        .xid-actions .xid-note.has-note { color: var(--accent); }
         .fav-toggle.active { opacity: 1; color: #ef4444; }
         .col-fav { width: 1.6em; }
         .col-rq { width: 1.6em; }
@@ -452,9 +462,10 @@
     <div id="xid-detail" class="view">
         <div class="xid-input">
             <label>XID:</label>
-            <input type="text" id="xidInput" placeholder="e.g. 1029_160123" />
-            <label>Server:</label>
-            <select id="xidServer"></select>
+            <span id="xidDisplay" class="xid-display">-</span>
+            <span id="xidActions" class="xid-actions"></span>
+            <input type="hidden" id="xidInput" />
+            <input type="hidden" id="xidServer" />
             <span class="metric-input">
                 <label>Metric:</label>
                 <input type="text" id="metricInput" value="train/loss" onchange="saveMetricPref()" />
@@ -727,6 +738,91 @@
                 if (row) row.classList.remove('outdated');
                 alert(`Error deleting XID: ${e.message}`);
             }
+        }
+
+        async function deleteXidDetail(serverUrl, serverIdx, xid) {
+            if (!confirm(`Delete XID ${xid}?\n\nThis will permanently remove all associated files.`)) return;
+            try {
+                const resp = await fetch(`${serverUrl}/api/action/delete/${xid}`, { method: 'POST' });
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    alert(`Failed to delete XID: ${err.detail || 'Unknown error'}`);
+                    return;
+                }
+                // Go back to overview after delete
+                document.getElementById('xidContent').innerHTML = '<p>XID deleted. <a href="#" onclick="showTab(\'overview\'); return false;">Return to overview</a></p>';
+            } catch (e) {
+                alert(`Error deleting XID: ${e.message}`);
+            }
+        }
+
+        function toggleFavoriteDetail(xid) {
+            if (favorites.has(xid)) {
+                favorites.delete(xid);
+            } else {
+                favorites.add(xid);
+            }
+            savePrefsToServers();
+            // Update the favorite button in the header
+            const favBtn = document.querySelector('#xidActions .xid-btn');
+            if (favBtn) {
+                favBtn.className = `xid-btn ${favorites.has(xid) ? 'active' : ''}`;
+                favBtn.textContent = favorites.has(xid) ? '❤︎' : '♡';
+            }
+        }
+
+        function editXidNote(cell, serverIdx, xid, currentNote) {
+            if (cell.querySelector('input')) return;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'note-input';
+            input.value = currentNote;
+            input.placeholder = 'Add a note...';
+            input.style.width = '100%';
+
+            cell.innerHTML = '';
+            cell.appendChild(input);
+            input.focus();
+            input.select();
+
+            let saved = false;
+            const saveNote = async () => {
+                if (saved) return;
+                saved = true;
+                const newNote = input.value.trim();
+                const serverUrl = servers[serverIdx]?.url;
+                if (serverUrl) {
+                    try {
+                        await fetch(`${serverUrl}/api/note/${xid}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ note: newNote }),
+                            signal: AbortSignal.timeout(5000)
+                        });
+                    } catch (e) {
+                        console.error('Failed to save note:', e);
+                    }
+                }
+                // Update currentXidData
+                if (currentXidData) currentXidData.note = newNote;
+                // Update cell
+                const escapedNote = newNote.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                cell.setAttribute('onclick', `editXidNote(this, ${serverIdx}, '${xid}', '${escapedNote}')`);
+                cell.className = `xid-note ${newNote ? 'has-note' : ''}`;
+                cell.innerHTML = newNote || '<span style="opacity:0.3">click to add note</span>';
+            };
+
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    saveNote();
+                } else if (e.key === 'Escape') {
+                    cell.className = `xid-note ${currentNote ? 'has-note' : ''}`;
+                    cell.innerHTML = currentNote || '<span style="opacity:0.3">click to add note</span>';
+                    saved = true;
+                }
+            });
+            input.addEventListener('blur', saveNote);
         }
 
         function saveServers() {
@@ -1596,6 +1692,22 @@
             const wus = data.wus || [];
             const serverIdx = document.getElementById('xidServer').value;
             const serverUrl = servers[serverIdx]?.url || '';
+            const xid = data.xid;
+            const note = data.note || '';
+            const escapedNote = note.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+
+            // Check if any jobs are active (for delete button visibility)
+            const hasActiveJobs = wus.some(wu => ['RUNNING', 'PENDING', 'REQUEUE_HOLD', 'COMPLETING'].includes(wu.status));
+
+            // Update XID display and actions in the header bar
+            document.getElementById('xidDisplay').textContent = xid;
+            document.getElementById('xidActions').innerHTML = `
+                <span class="xid-btn ${favorites.has(xid) ? 'active' : ''}" onclick="toggleFavoriteDetail('${xid}')" title="Favorite">${favorites.has(xid) ? '❤︎' : '♡'}</span>
+                <span class="xid-btn fa-icon" onclick="window.open('${serverUrl}/code/${xid}', '_blank')" title="Browse source code">🗎</span>
+                <span class="xid-btn fa-icon" onclick="stopXid('${serverUrl}', '${xid}')" title="Stop all jobs (scancel -n ${xid})">⏹</span>
+                ${!hasActiveJobs ? `<span class="xid-btn" onclick="deleteXidDetail('${serverUrl}', ${serverIdx}, '${xid}')" title="Delete ${xid}">🗑</span>` : ''}
+                <span class="xid-note ${note ? 'has-note' : ''}" onclick="editXidNote(this, ${serverIdx}, '${xid}', '${escapedNote}')">${note || '<span style="opacity:0.3">click to add note</span>'}</span>
+            `;
 
             let html = `<div class="table-container-full"><table>
                 <thead>
