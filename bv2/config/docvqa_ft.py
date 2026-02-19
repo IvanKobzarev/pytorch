@@ -15,9 +15,7 @@ def get_config():
     c.data.max_patches = 3136
     c.data.nreg = lambda: c.model.reg.nreg
     c.data.greyout_frac = 0.0
-
     c.iter.maxtok = lambda: c.maxtok
-    c.iter.eagerness = 24
 
     c.nsteps = 8_000
     c.warmup_nsteps = 1000

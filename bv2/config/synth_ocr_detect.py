@@ -9,8 +9,6 @@ def get_config():
 
     c.data.name = "synth_ocr_detect"
     c.data.mode = "ltwh"
-
-    c.iter.eagerness = 16  # The default, just as an example.
     c.iter.maxtok = lambda: c.maxtok
 
     # By default no tiptoi and no row separators/hw

@@ -19,6 +19,7 @@ def get_config():
         "stvqa": 17028//2, "stvqa_fmt": 17028//2,
         "textvqa": 21953//2, "textvqa_fmt": 21953//2,
     }
+    c.iter.maxtok = lambda: c.maxtok
     c.data.common.max_patches = 784  # (448/16)^2 = 784; (2048/16)^2 = 16_384
     c.data.common.rand_max_patches.exp = None  # Disables this.
     c.data.common.rand_max_patches.mode = None
@@ -47,9 +48,6 @@ def get_config():
         c.data[f"{name}_fmt"].qfmt = CUSTOM_QFMT[name]
         c.data[f"{name}_fmt"].lower_q = True
         c.data[f"{name}_fmt"].lower_a = True
-
-    c.iter.maxtok = lambda: c.maxtok
-    c.iter.eagerness = 24
 
     # 784 patches: 35m examples / 100k steps
     # 16384 patches: 13m examples / 100k steps

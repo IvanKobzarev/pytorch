@@ -14,9 +14,7 @@ def get_config():
     c.data.max_patches = 16_384
     c.data.nreg = lambda: c.model.reg.nreg
     c.data.greyout_frac = 0.03
-
     c.iter.maxtok = lambda: c.maxtok
-    c.iter.eagerness = 24  # Amount of CPUs per GPU.
 
     c.nsteps = 30_000
     c.warmup_nsteps = 500

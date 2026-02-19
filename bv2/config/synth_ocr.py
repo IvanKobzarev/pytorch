@@ -30,8 +30,6 @@ def get_config():
         return dc
 
     c.data = get_data_config()
-
-    c.iter.eagerness = 16  # The default, just as an example.
     c.iter.maxtok = lambda: c.maxtok
 
     c.nsteps = 20_000
