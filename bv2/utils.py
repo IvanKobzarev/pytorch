@@ -189,3 +189,30 @@ def rng(*seedz):
 
 def rng_torch(*seedz, device="cpu"):  # Same default device as PyTorch API.
     return torch.Generator(device=device).manual_seed(seeds(*seedz))  # noqa:TID251
+
+
+_can_torch = {
+    np.float32, np.float64, np.float16,
+    np.int8, np.int16, np.int32, np.int64,
+    np.uint8, np.bool_, np.complex64, np.complex128,
+}
+
+def to_gpu(seq, device):
+    """Move a dict of numpy/torch/BlockMask values to device.
+
+    Handles BlockMask closure tensors and _dynamo_dynamic_indices preservation."""
+    from torch.nn.attention.flex_attention import BlockMask
+
+    def maybe_to_gpu(x):
+        if isinstance(x, dict):
+            return {k: maybe_to_gpu(v) for k, v in x.items()}
+        if isinstance(x, BlockMask):
+            from flexlimaskli import blockmask_to_gpu
+            return blockmask_to_gpu(x, device)
+        if isinstance(x, np.ndarray) and any(x.dtype == t for t in _can_torch):
+            x = torch.from_numpy(x)
+        if isinstance(x, torch.Tensor):
+            return x.pin_memory().to(device=device, non_blocking=True)
+        return x
+
+    return {k: maybe_to_gpu(v) for k, v in seq.items()}

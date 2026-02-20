@@ -9,22 +9,11 @@ import functools
 
 import numpy as np
 import torch
-from torch.nn.attention.flex_attention import create_block_mask
+from flexlimaskli import make_batchmask_cpu
 
 import bv2.data.dpack as dpack
 import bv2.utils as u
 from bv2.simple_input import pmap, to_len
-
-
-# lazy global variable, so we avoid compiling on import
-@functools.cache
-def get_cbm(key):
-    # We have to use dynamic shapes with the current code organization, because the same
-    # function is shared across all evaluators, which may have different data shapes!
-    fn = torch.compile(u.clone_function(create_block_mask, name_suffix=key), dynamic=True)
-    fn = u.suppress_warnings("`isinstance(treespec, LeafSpec)` is deprecated", FutureWarning)(fn)
-    fn = u.suppress_warnings("`isinstance(treespec, TreeSpec)` is deprecated", FutureWarning)(fn)
-    return fn
 
 
 def _make_ex(exid_and_state_after, ds, max_prefix, max_decode):
@@ -57,21 +46,16 @@ def decode_batch(predict_fn, batch, *, decode_idx, rng,
     _, txtpos, mask = dpack.unpack_as_text(torch.from_numpy(batch["toki"]))
     next_token_pos = (txtpos * mask).max(dim=1).values.numpy() + 1
 
-    batch = {k: torch.from_numpy(v).to(device) for k, v in batch.items()}
+    batch_size = len(batch["toki"])
+    ntoks = max_prefix + max_decode
+
+    # Create flexmasks on CPU using numba (batched), then move everything to GPU.
+    attn_keys = [k for k in batch if k.startswith("attn_regions")]
+    flex_masks = {k: make_batchmask_cpu(ntoks, batch[k], BLOCK_SIZE=128) for k in attn_keys}
+
+    batch = u.to_gpu(batch, device)
+    flex_masks = u.to_gpu(flex_masks, device)
     tokens = batch["toki"]
-    batch_size = len(tokens)
-
-    def mask_mod(b, h, q_idx, kv_idx, mask_key):
-        causal = q_idx >= kv_idx
-        dense_region = (batch[mask_key][b][q_idx] > 0) & (batch[mask_key][b][kv_idx] > 0)
-        same_region = batch[mask_key][b][q_idx] == batch[mask_key][b][kv_idx]
-        return (causal | (same_region & dense_region))
-
-    flex_masks = {}
-    for k in (k for k in batch if k.startswith("attn_regions")):
-        flex_masks[k] = get_cbm(k)(functools.partial(mask_mod, mask_key=k),
-                                   Q_LEN=max_prefix + max_decode, KV_LEN=max_prefix + max_decode,
-                                   B=batch_size, H=None, device=device)
 
     reached_eos = np.zeros(len(decode_idx), dtype=np.bool_)
     for step in range(max_decode):

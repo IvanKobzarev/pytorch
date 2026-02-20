@@ -2,8 +2,7 @@ from functools import partial
 from importlib import import_module
 
 import numpy as np
-import torch
-from torch.nn.attention.flex_attention import create_block_mask
+from flexlimaskli import make_docmask_cpu
 
 import bv2.utils as u
 from bv2.simple_input import iter_packed_examples, pmap, prefetch, to_len
@@ -33,7 +32,7 @@ from bv2.simple_input import iter_packed_examples, pmap, prefetch, to_len
 @u.suppress_warnings("`isinstance(treespec, TreeSpec)` is deprecated", FutureWarning)
 def data_iter(ds, *, maxtok, device, seed=0, rank=0, world_size=1, resume={}, pad_after=True,
               # The following defaults were tuned for steptime on a FineVision d8w2k@3136 run:
-              pmap_chunksz=24, pmap_threads=16, eagerness=1, parallel_flexmask=False):
+              pmap_chunksz=24, pmap_threads=16, eagerness=1, mask_block_size=128):
     make_exids = partial(ds.make_exids, seed=seed, rank=rank, world_size=world_size, **resume)
 
     def make_example(exid_and_state_after):
@@ -65,62 +64,17 @@ def data_iter(ds, *, maxtok, device, seed=0, rank=0, world_size=1, resume={}, pa
             while True:
                 yield dummy_ex
 
-    def to_gpu(seq):
-        _can_torch = {
-            np.float32, np.float64, np.float16,
-            np.int8, np.int16, np.int32, np.int64,
-            np.uint8, np.bool_, np.complex64, np.complex128,
-        }
+    to_gpu = partial(u.to_gpu, device=device)
 
-        def maybe_to_gpu(x):
-            if isinstance(x, np.ndarray) and any(x.dtype == t for t in _can_torch):
-                x = torch.from_numpy(x)
-            if isinstance(x, torch.Tensor):
-                return x.pin_memory().to(device=device, non_blocking=True)
-            return x
-
-        return {k: maybe_to_gpu(v) for k, v in seq.items()}
-
-    def add_flexmasks(seq):
-        # Turn all attention regions into flex-attention mask datastructures.
+    def add_flexmasks_cpu(seq):
         seq["flex_masks"] = {
-            k: make_mask(maxtok, v, seq["iseq"], device)
+            k: make_docmask_cpu(maxtok, v, seq["iseq"], BLOCK_SIZE=mask_block_size,
+                                max_per_row="dynamic")
             for k, v in seq.items() if k.startswith("attn_regions")
         }
         return seq
 
-    # As long as we're in the same address space, we can also prefetch
-    # transfer to GPU, and flexmasks computation (on GPU). Especially the
-    # relatively heavy mask computation on GPU can interfere with training.
-    # See also: http://localhost:1337/?share=star-bean-rust
-    if parallel_flexmask:
-        gpu_gen = (add_flexmasks(to_gpu(seq)) for seq in cpu_data_gen())
-        yield next(gpu_gen)  # warmup torch.compile in main thread
-        yield from prefetch(gpu_gen, n=eagerness)
-    else:
-        yield from (add_flexmasks(seq) for seq in prefetch(
-            (to_gpu(seq) for seq in cpu_data_gen()), n=eagerness))
-
-
-create_block_mask = torch.compile(partial(create_block_mask, B=None, H=None))
-
-
-@u.suppress_warnings("`isinstance(treespec, LeafSpec)` is deprecated", FutureWarning)
-@u.suppress_warnings("`isinstance(treespec, TreeSpec)` is deprecated", FutureWarning)
-def make_mask(ntoks, attn_regions, document_ids, device):
-    def mask_mod(b, h, q_idx, kv_idx):
-        causal = q_idx >= kv_idx
-        is_padding = (document_ids[q_idx] == -1) | (document_ids[kv_idx] == -1)
-        dense_region = (attn_regions[q_idx] > 0) & (attn_regions[kv_idx] > 0)
-        same_region = attn_regions[q_idx] == attn_regions[kv_idx]
-        same_document = document_ids[q_idx] == document_ids[kv_idx]
-        return (causal | (dense_region & same_region)) & same_document & ~is_padding
-
-    # TODO: This is only reasonably efficient up to a reasonable but not huge
-    #       seqlen (about 1M). See the file tools/batched_vmap_slow.py for more.
-    #       There are plans to fix this, reach out to qkv@ to discuss.
-    with torch.no_grad():
-        return create_block_mask(mask_mod, Q_LEN=ntoks, KV_LEN=ntoks, device=device)
+    yield from prefetch((to_gpu(add_flexmasks_cpu(s)) for s in cpu_data_gen()), n=eagerness)
 
 
 def from_config(data_config):

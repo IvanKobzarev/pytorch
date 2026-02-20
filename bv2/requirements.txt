@@ -3,6 +3,7 @@ blobfile
 editdistance
 einops
 ipdb
+numba
 numpy
 opencv-python-headless
 pillow
