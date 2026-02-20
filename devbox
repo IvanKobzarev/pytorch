@@ -28,6 +28,8 @@ if tmux has-session -t $SESS 2>/dev/null; then
   esac
 fi
 
+cd ~/rigi/
+
 tmux new-session -d -s "$SESS"
 
 # Three-way split:
