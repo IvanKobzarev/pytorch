@@ -156,7 +156,7 @@ class TxtUnembedding(nn.Module):
         self.chunksz = chunksz
         self.init_std = init_std
 
-    def _process_chunk(self, x, targets, loss_weights, global_total_loss_weights, mode):
+    def _process_chunk(self, x, targets, loss_weights, global_total_loss_toks, mode):
         logits = self.head(x)
         pred = logits.argmax(dim=-1)
 
@@ -170,7 +170,7 @@ class TxtUnembedding(nn.Module):
 
         toklosses = toklosses * (loss_weights > 0)
         lsum = (toklosses * loss_weights).sum()
-        loss = lsum / global_total_loss_weights
+        loss = lsum / global_total_loss_toks
         if mode == "loss and bwd":
             loss.backward()
 
@@ -199,14 +199,11 @@ class TxtUnembedding(nn.Module):
         tok_losses = torch.empty_like(targets, dtype=torch.float32)
         loss_weights = loss_weights * mask
 
-        # Sum of loss weights across all tokens and devices:
-        global_total_loss_weights = loss_weights.sum()
-        distr.all_reduce(global_total_loss_weights, op=distr.ReduceOp.SUM)
-        global_total_loss_weights = torch.clamp(global_total_loss_weights, min=1.0)
-
-        # How many tokens get a loss, across all devices:
+        # How many tokens get a loss, across all devices.
+        # We normalize by count(lowe > 0) so that lowe magnitude is meaningful for weighting.
         global_total_loss_toks = (loss_weights > 0).sum()
         distr.all_reduce(global_total_loss_toks, op=distr.ReduceOp.SUM)
+        global_total_loss_toks = torch.clamp(global_total_loss_toks, min=1.0)
 
         # NOTE: This is the case because of our choice to do static compiles without recompiles.
         # In principle we could relax it and compile two variants, or leave chunk dim dynamic.
@@ -220,7 +217,7 @@ class TxtUnembedding(nn.Module):
             chunk_loss_weights = loss_weights[..., start:end]
 
             loss, tok_losses_chunk, pred = self._process_chunk(
-                chunk_x, chunk_targets, chunk_loss_weights, global_total_loss_weights, mode)
+                chunk_x, chunk_targets, chunk_loss_weights, global_total_loss_toks, mode)
 
             total_loss += loss
             total_pplx += tok_losses_chunk.sum()
