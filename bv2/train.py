@@ -8,7 +8,6 @@ import json
 import os
 import re
 import shutil
-import sys
 from collections import Counter, defaultdict
 from datetime import datetime
 from functools import cache, partial
@@ -540,7 +539,7 @@ def summary_table(model, stats=True, param_mode=None):
     tbl.columns[0].footer = f"Total: {swissnum(total_num)}"
     tbl.columns[1].footer = f"({total_bytes/1024/1024:.0f}MiB)"
     tbl.columns[2].footer = f"Local: {local_bytes/1024/1024:.0f}MiB"
-    rich.print(tbl)
+    rich.get_console().print(tbl)  # get_console so we do use the reconfigure from main.
 
 
 # ---- CHECKPOINTING ----
@@ -708,8 +707,8 @@ if __name__ == "__main__":
     # torch._inductor.exc.InductorError: Timeout: The file lock [...] could not be acquired.
     os.environ["TORCHINDUCTOR_CACHE_DIR"] = f"/tmp/torchinductor_{getuser()}_rank{local_rank}"
 
-    if not sys.stdout.isatty():  # Don't squeeze tables or use colors in logs!
-        rich.reconfigure(width=500, color_system=None)
+    # Don't squeeze tables! Can't protect this by isatty, because slurm-out is always a tty :(
+    rich.reconfigure(width=500)
 
     # We need to "warmup" the einops backend cache; if we don't, then einops
     # has a multi-threading race-condition that makes it fail in our input pipeline.
