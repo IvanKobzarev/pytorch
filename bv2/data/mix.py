@@ -3,7 +3,7 @@ import bv2.utils as u
 
 
 class Dataset:
-    def __init__(self, mix, *, seed=(), tokenizer=None, common={}, **datasets):
+    def __init__(self, mix, *, seed=(), common={}, **datasets):
         # 1. Normalize the weights so we can simply sample from the mix.
         # 2. Sort the dataset names alphabetically such that the order of sampling each
         #    does not depend on the order in which they were defined, but only on their prob.
@@ -14,7 +14,6 @@ class Dataset:
             "seed": (*seed, name),
             **common,
             **datasets[name],
-            "tokenizer": tokenizer,  # Force this to be the same, for now.
         }) for name in self.mix}
 
     def make_example(self, which, exid):
@@ -46,10 +45,5 @@ class Dataset:
         # and different components have very different resolutions. If each rank gets
         # samples from each component, then this is not an issue.
 
-    @property
-    def tt(self):
-        # They all have forcibly the same tokenizer, so just return any:
-        return next(iter(self.datasets.values())).tt
-
     def vocab_size(self):
-        return self.tt.n_vocab
+        return max(ds.vocab_size() for ds in self.datasets.values())
