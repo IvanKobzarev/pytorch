@@ -70,7 +70,13 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     # In theory we only need `init_device_mesh`, but in practice, we need this
     # whole verbose `init_process_group` or else the `barrier` will throw a warning.
-    device = torch.device(f"cuda:{local_rank}")
+    # Also, depending on how we launch, CUDA_VISIBLE_DEVICES may already select the GPU for us.
+    # When using --gpu-bind=closest with per-socket binding, SLURM may expose a subset of GPUs
+    # (e.g. 4 per socket), so we index with local_rank % n_visible to stay in range:
+    n_visible = len(os.environ.get("CUDA_VISIBLE_DEVICES", "0").split(","))
+    device = torch.device(f"cuda:{local_rank % n_visible}")
+    prints(f"CUDA_VISIBLE_DEVICES={os.environ.get("CUDA_VISIBLE_DEVICES")} ; {device=}")
+
     torch.cuda.set_device(device)
     distr.init_process_group(
         "cpu:gloo,cuda:nccl", rank=rank, world_size=world_size, device_id=device
@@ -107,6 +113,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             **{"vocab": ds.vocab_size(), **c.model.to_dict()},
         )
 
+    prints0(f"Mesh: {u.BLUE}{mesh}{u.RESET}")
     # This wraps all param properties with a shard/gather code.
     model = bv2.simple_fsdp.data_parallel(
         model,

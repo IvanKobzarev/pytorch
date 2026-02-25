@@ -22,6 +22,11 @@ export MASTER_PORT=$((10000 + SLURM_JOB_ID % 50000))
 
 # One task per GPU
 NTASKS_PER_NODE=${SLURM_GPUS_ON_NODE:-8}
+NSOCKETS=2  # All our current machines have 2 sockets.
+NUMA_ARG=""
+if (( NTASKS_PER_NODE >= NSOCKETS && NTASKS_PER_NODE % NSOCKETS == 0 )); then
+  NUMA_ARG="--ntasks-per-socket=$((NTASKS_PER_NODE / NSOCKETS))"
+fi
 
 export NCCL_DEBUG=WARN  # quiet NCCL a bit
 
@@ -31,9 +36,16 @@ pwd
 srun --ntasks-per-node=1 --ntasks="$SLURM_JOB_NUM_NODES" nvidia-smi topo -m
 
 # The --unbuffered is needed if we want to live-tail the stdout/stderr logfile, otherwise it buffers aggressively.
+# NOTE: no --gpus-per-task or --gpu-bind here. --gpu-bind=closest doesn't work
+# because GRES topology lists all GPUs as S:0-1. GPU selection is done in Python
+# via cuda:{SLURM_LOCALID}. NUMA locality is preserved by --ntasks-per-socket.
+#  --kill-on-bad-exit=1 \
 srun \
   --unbuffered \
   --kill-on-bad-exit=1 \
   --ntasks-per-node="${NTASKS_PER_NODE}" \
+  ${NUMA_ARG} \
   --cpus-per-task="$((SLURM_CPUS_ON_NODE / NTASKS_PER_NODE))" \
+  --cpu-bind=cores \
+  --mem-bind=local \
   python "$@" c.jid:="$SLURM_JOB_ID" c.gpus:="$((SLURM_GPUS_PER_NODE * SLURM_JOB_NUM_NODES))" c.gpu:="$SLURM_JOB_PARTITION"
