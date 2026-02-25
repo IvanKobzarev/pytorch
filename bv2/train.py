@@ -69,12 +69,12 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     # In theory we only need `init_device_mesh`, but in practice, we need this
     # whole verbose `init_process_group` or else the `barrier` will throw a warning.
-    # Also, depending on how we launch, CUDA_VISIBLE_DEVICES may already select the GPU for us.
-    # When using --gpu-bind=closest with per-socket binding, SLURM may expose a subset of GPUs
-    # (e.g. 4 per socket), so we index with local_rank % n_visible to stay in range:
-    n_visible = len(os.environ.get("CUDA_VISIBLE_DEVICES", "0").split(","))
-    device = torch.device(f"cuda:{local_rank % n_visible}")
-    prints(f"CUDA_VISIBLE_DEVICES={os.environ.get("CUDA_VISIBLE_DEVICES")} ; {device=}")
+    # Also, because optimal assignment of device to process depends on the launch environment,
+    # we force the launcher to assign a single GPU for each process, and use that:
+    assert (cvd := os.environ.get("CUDA_VISIBLE_DEVICES")) and "," not in cvd, (
+        f"This codebase assumes you make a single GPU visible per process. {os.environ.get("CUDA_VISIBLE_DEVICES")=}")
+    device = torch.device("cuda:0")
+    prints(f"{os.environ.get("CUDA_VISIBLE_DEVICES")=} ; {device=}")
 
     torch.cuda.set_device(device)
     distr.init_process_group(
@@ -696,6 +696,9 @@ if __name__ == "__main__":
         rank = int(os.environ["SLURM_PROCID"])
         local_rank = int(os.environ["SLURM_LOCALID"])
         world_size = int(os.environ["SLURM_NTASKS"])
+        # I was so far unsuccessful in having slurm set this, so we set it manually.
+        # See more details in tools/launch_fair_srun
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(local_rank)
     else:
         print("Local run on single-gpu")
         rank = local_rank = 0

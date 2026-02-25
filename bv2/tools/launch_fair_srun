@@ -36,10 +36,11 @@ pwd
 srun --ntasks-per-node=1 --ntasks="$SLURM_JOB_NUM_NODES" nvidia-smi topo -m
 
 # The --unbuffered is needed if we want to live-tail the stdout/stderr logfile, otherwise it buffers aggressively.
-# NOTE: no --gpus-per-task or --gpu-bind here. --gpu-bind=closest doesn't work
-# because GRES topology lists all GPUs as S:0-1. GPU selection is done in Python
-# via cuda:{SLURM_LOCALID}. NUMA locality is preserved by --ntasks-per-socket.
-#  --kill-on-bad-exit=1 \
+# The --gpu-bind=closest doesn't work in this cluster, so we manually bind in order 0,1,...,ngpu
+# NUMA locality is preserved by --ntasks-per-socket.
+# These both failed me hard here:
+#  --gpu-bind=map_gpu:$(seq -s, 0 $((NTASKS_PER_NODE - 1))) \
+#  --gpus-per-task=1 \
 srun \
   --unbuffered \
   --kill-on-bad-exit=1 \
