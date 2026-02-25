@@ -148,13 +148,21 @@ class TxtEmbedding(nn.Module):
             nn.init.constant_(self.pe_scale, 1 / 0.7071 / 0.03 / self.dim)
 
 
+def to_next_multiple_of(m):
+    if m:
+        return lambda n: ((n + m - 1) // m) * m
+    else:
+        return lambda n: n
+
+
 class TxtUnembedding(nn.Module):
-    def __init__(self, dim, vocab, chunksz=None, init_std=0.0):
+    def __init__(self, dim, vocab, chunksz=None, init_std=0.0, pad_to=256):
         super().__init__()
         # TODO: Should we move the pre-head LN to the unembeddings, maybe?
-        self.head = nn.Linear(dim, vocab, bias=True)
+        self.head = nn.Linear(dim, to_next_multiple_of(pad_to)(vocab), bias=True)
         self.chunksz = chunksz
         self.init_std = init_std
+        self.unpadded_vocab = vocab
 
     def _process_chunk(self, x, targets, loss_weights, global_total_loss_toks, mode):
         logits = self.head(x)
@@ -244,6 +252,8 @@ class TxtUnembedding(nn.Module):
         else:
             nn.init.zeros_(self.head.weight)
         nn.init.zeros_(self.head.bias)
+        if self.unpadded_vocab != self.head.bias.shape[0]:
+            nn.init.constant_(self.head.bias[self.unpadded_vocab:], -2)  # -2 is trunc_normal_'s limit.
 
 
 class PosEmbSinCos2D(nn.Module):
