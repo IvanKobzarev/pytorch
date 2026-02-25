@@ -124,7 +124,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         mp_policy=bv2.simple_fsdp.MixedPrecisionPolicy(
             param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16
         ),
-        min_bytes=1024 * 1024,  # Don't shard params that are less than 1MiB
+        min_bytes=c.get("fsdp.min_bytes", 32 * 1024 * 1024),
     )
     prints0(model)
 
