@@ -82,7 +82,7 @@ def global_gpu_barrier(device):
 
 
 def all_reduce_scalars(*scalars, op=distr.ReduceOp.SUM):
-    scalars = torch.stack(scalars)  # Also clones, so none gets overwritten.
+    scalars = torch.stack([torch.as_tensor(x) for x in scalars])  # Also clones, so none gets overwritten.
     distr.all_reduce(scalars, op=op)
     return tuple(s.item() for s in scalars)
 

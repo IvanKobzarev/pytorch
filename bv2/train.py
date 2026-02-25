@@ -276,10 +276,11 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
         model.zero_grad(set_to_none=True)
 
-        all_ndatatoks, all_nmodeltoks = zip(*u.all_gather_object((data["ndatatoks"], data["ntok"])))
-        data_tokens_seen += (num_data_tokens := sum(sum(l) for l in all_ndatatoks))
-        model_tokens_seen += (num_model_tokens := sum(sum(l) for l in all_nmodeltoks))
-        examples_seen += (num_examples := sum(len(l) for l in all_ndatatoks))
+        num_data_tokens, num_examples, num_model_tokens = u.all_reduce_scalars(
+            sum(data["ndatatoks"]), len(data["ndatatoks"]), sum(data["ntok"]))
+        data_tokens_seen += num_data_tokens
+        model_tokens_seen += num_model_tokens
+        examples_seen += num_examples
         mw.log({"chrono/examples_seen": examples_seen})
         mw.log({"chrono/data_tokens_seen": data_tokens_seen})
         mw.log({"chrono/model_tokens_seen": model_tokens_seen})
