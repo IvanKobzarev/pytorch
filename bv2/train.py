@@ -15,7 +15,7 @@ from getpass import getuser
 from importlib import import_module
 from itertools import chain
 from os.path import join as pjoin
-from time import perf_counter
+from time import perf_counter, time
 
 import numpy as np
 import rich
@@ -180,9 +180,10 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     if os.path.exists(pjoin(workdir, "ckpt-latest")):  # := is_resuming
         ckpt_path = pjoin(workdir, "ckpt-latest")
 
+    past_proctime = 0
     if ckpt_path:
         if extras := load_ckpt(ckpt_path, model, optim, weights_only=bool(c.get("init"))):
-            first_step, resume_data = extras["step"], extras["data"]
+            first_step, resume_data, past_proctime = extras["step"], extras["data"], extras.get("proctime", 0)
             data_tokens_seen, model_tokens_seen, loss_tokens_seen, examples_seen = \
                 extras["data_tokens_seen"], extras["model_tokens_seen"], extras["loss_tokens_seen"], extras["examples_seen"]
 
@@ -305,7 +306,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         u.global_gpu_barrier(device)  # For accurate "global" timings
         mw.log({"chrono/modeltime": (model_time := perf_counter() - t_before_model)})
         mw.log({"chrono/steptime": (step_time := t_step_start - t_prev_step_start)})
-        mw.log({"chrono/proctime": perf_counter() - t0})
+        mw.log({"chrono/proctime": perf_counter() - t0 + past_proctime})
+        mw.log({"chrono/axltime": np.float64(time() - 1751320800.0)})
         mw.log({"chrono/datawait": t_step_start - t_prev_step_end})
         mw.log({"sys/gpu_peak_mem_gb": (peak_mem := torch.cuda.max_memory_allocated() / 1024**3)})
         if step % 10 == 0 and rank == 0:
@@ -385,6 +387,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                 "model_tokens_seen": model_tokens_seen,
                 "loss_tokens_seen": loss_tokens_seen,
                 "examples_seen": examples_seen,
+                "proctime": perf_counter() - t0 + past_proctime,
                 "metrics": mw.save_ckpt(),
                 "jid": c.get("jid", "n/a"),  # Just for future archeologs.
             })  # fmt: skip
