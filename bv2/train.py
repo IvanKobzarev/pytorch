@@ -696,9 +696,6 @@ if __name__ == "__main__":
         rank = int(os.environ["SLURM_PROCID"])
         local_rank = int(os.environ["SLURM_LOCALID"])
         world_size = int(os.environ["SLURM_NTASKS"])
-        # I was so far unsuccessful in having slurm set this, so we set it manually.
-        # See more details in tools/launch_fair_srun
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(local_rank)
     else:
         print("Local run on single-gpu")
         rank = local_rank = 0
