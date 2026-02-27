@@ -1,33 +1,55 @@
 from multiprocessing.pool import ThreadPool
-from queue import Queue
-from threading import Thread
+from queue import Full, Queue
+from threading import Event, Thread
 
 import numpy as np
 
 
 def prefetch(it, n=1):
+    """Wrap an iterator to prefetch next elements in a background thread."""
     if not n:  # Separate non-parallel codepath for ease of pdb'ing:
         yield from it
         return
 
     _DONE = object()
     q = Queue(maxsize=n)
+    stop = Event()
     def feeder():
         try:
             for item in it:
-                q.put(item)
+                while not stop.is_set():
+                    try:
+                        q.put(item, timeout=0.1)
+                        break
+                    except Full:
+                        pass
+                if stop.is_set():
+                    return
         except BaseException as e:
-            q.put(e)
-        q.put(_DONE)
+            if not stop.is_set():
+                q.put(e)
+        if not stop.is_set():
+            q.put(_DONE)
 
-    Thread(target=feeder, daemon=True).start()
-    for item in iter(q.get, _DONE):
-        if isinstance(item, BaseException):
-            raise item
-        yield item
+    t = Thread(target=feeder, daemon=True)
+    t.start()
+    try:
+        for item in iter(q.get, _DONE):
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+    finally:
+        stop.set()
+        t.join(timeout=5)
+        while not q.empty():
+            try:
+                q.get_nowait()
+            except Exception:
+                break
 
 
 def pmap(it, fn, n_prefetch=16, n_threads=16):
+    """Like map(fn, it) but fn runs in a thread pool, results yielded in order."""
     if not n_threads:  # Separate non-parallel codepath for ease of pdb'ing:
         for x in it:
             yield fn(x)
@@ -35,20 +57,41 @@ def pmap(it, fn, n_prefetch=16, n_threads=16):
 
     # NOTE: always following FIFO order, not first-ready, so we're deterministic.
     q = Queue(maxsize=n_prefetch)
+    stop = Event()
     def feeder(pool):
         try:
             for x in it:
-                q.put(pool.apply_async(fn, (x,)))
+                f = pool.apply_async(fn, (x,))
+                while not stop.is_set():
+                    try:
+                        q.put(f, timeout=0.1)
+                        break
+                    except Full:
+                        pass
+                if stop.is_set():
+                    return
         except BaseException as e:
-            q.put(e)
-        q.put(None)
+            if not stop.is_set():
+                q.put(e)
+        if not stop.is_set():
+            q.put(None)
 
     with ThreadPool(n_threads) as pool:
-        Thread(target=feeder, args=(pool,), daemon=True).start()
-        while (f := q.get()) is not None:
-            if isinstance(f, BaseException):
-                raise f
-            yield f.get()
+        t = Thread(target=feeder, args=(pool,), daemon=True)
+        t.start()
+        try:
+            while (f := q.get()) is not None:
+                if isinstance(f, BaseException):
+                    raise f
+                yield f.get()
+        finally:
+            stop.set()
+            t.join(timeout=5)
+            while not q.empty():
+                try:
+                    q.get_nowait()
+                except Exception:
+                    break
 
 
 def iter_packed_examples(
