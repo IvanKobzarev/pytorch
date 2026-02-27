@@ -214,7 +214,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         def _fwd(*a, **kw):
             return model(*a, **kw)
 
-        fn = torch.compile(u.clone_function(_fwd, name_suffix=eval_key), dynamic=False)
+        fn = torch.compile(u.clone_function(_fwd, name_suffix=eval_key), dynamic=False, fullgraph=True)
         fn = u.suppress_warnings("`isinstance(treespec, LeafSpec)` is deprecated", FutureWarning)(fn)
         fn = u.suppress_warnings("`isinstance(treespec, TreeSpec)` is deprecated", FutureWarning)(fn)
         fn = u.suppress_warnings("remat_using_tags_for_fwd_loss_bwd_graph: Graph has recomputable ops but no backward region.", UserWarning)(fn)  # Fixed in https://github.com/pytorch/pytorch/pull/173528
@@ -235,7 +235,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             em = import_module(f"bv2.eval.{ev.type}")
             ds_ev = bv2.simple_data.from_config(ev.data.to_dict())
             args = {k: v for k, v in ev.to_dict().items() if k not in {"type", "data", "steps"}}
-            with torch.no_grad():
+            with torch.inference_mode():
                 if results := em.run(get_fwd(ev_name), ds_ev, **args, rank=rank, world_size=world_size, device=device):
                     mw.log({f"{ev_name}/{k}": v for k, v in results.items()}, flush=True)
                     print0("")  # End the line we did not end above.
