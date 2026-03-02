@@ -1,5 +1,3 @@
-from functools import partial
-
 import numpy as np
 import torch
 import torch.distributed as distr
@@ -88,20 +86,15 @@ class Block(nn.Module):
         self.remat = remat
 
     def forward(self, x, flex_mask):
-        def att_ln_fn(y, fm):
-            return self.att(self.att_ln(y), fm)
-
-        def mlp_ln_fn(y):
-            return self.mlp(self.mlp_ln(y))
-
         if self.remat:
-            att_ln_fn = partial(checkpoint, att_ln_fn, use_reentrant=False)
-            mlp_ln_fn = partial(checkpoint, mlp_ln_fn, use_reentrant=False)
+            return checkpoint(self._block_fn, x, flex_mask, use_reentrant=False)
+        return self._block_fn(x, flex_mask)
 
+    def _block_fn(self, x, flex_mask):
         extras = {}
-        y, extras["attn"] = att_ln_fn(x, flex_mask)
+        y, extras["attn"] = self.att(self.att_ln(x), flex_mask)
         x = x + y
-        z, extras["mlp"] = mlp_ln_fn(x)
+        z, extras["mlp"] = self.mlp(self.mlp_ln(x))
         x = x + z
         return x, extras
 
