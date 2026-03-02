@@ -60,7 +60,7 @@ def test_model_simple():
         )
     }
 
-    x, extra = m(data, mask, loss_weights, seqids, mode="loss")
+    x, extra = m(data, data, mask, loss_weights, seqids, mode="loss")
 
 
 @pytest.mark.gpu
@@ -104,7 +104,7 @@ def test_model_batching():
         )
     }
 
-    _, res = m(data, mask, loss_weights, seqids, mode="loss")
+    _, res = m(data, data, mask, loss_weights, seqids, mode="loss")
     losses_packed = res["tok_losses"]
     losses_packed_1 = losses_packed[: ntoks[0] - 1]
     losses_packed_2 = losses_packed[ntoks[0] :]
@@ -122,7 +122,7 @@ def test_model_batching():
             H=None,
         )
     }
-    _, res = m(data[:k], mask, loss_weights[:k], seqids[:k], mode="loss")
+    _, res = m(data[:k], data[:k], mask, loss_weights[:k], seqids[:k], mode="loss")
     losses_1 = res["tok_losses"]
 
     mask = {
@@ -135,7 +135,7 @@ def test_model_batching():
             H=None,
         )
     }
-    _, res = m(data[k:], mask, loss_weights[k:], seqids[k:], mode="loss")
+    _, res = m(data[k:], data[k:], mask, loss_weights[k:], seqids[k:], mode="loss")
     losses_2 = res["tok_losses"]
 
     assert torch.allclose(losses_packed_1, losses_1)
@@ -171,6 +171,7 @@ def test_model_batching():
     # fmt: on
 
     _, res = m(
+        data_batched,
         data_batched,
         mask,
         loss_weights_batched,
