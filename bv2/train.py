@@ -40,8 +40,8 @@ from bv2.muon import Muon
 torch.backends.fp32_precision = "tf32"
 torch.backends.cuda.matmul.allow_tf32 = True
 
-# Reduce limit to make the issue appear faster
-torch._dynamo.config.recompile_limit = 1
+# We want to be intentional about recompiles and shape dynamism:
+torch._dynamo.config.recompile_limit = 1  # Misleading name: 1 means 0 recompiles allowed.
 torch._dynamo.config.fail_on_recompile_limit_hit = True
 torch._dynamo.config.accumulated_recompile_limit = 10_000_000  # Basically inf.
 
