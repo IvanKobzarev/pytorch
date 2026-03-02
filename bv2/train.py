@@ -100,8 +100,9 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         with open(pjoin(workdir, "config.json"), "w+") as f:
             f.write(c.to_flat_json(indent=0))
 
-    # Hacky way of always-enabling TORCH_TRACE from now on. Only a few MB per compile, no run overhead.
-    torch._logging._internal.LOG_TRACE_HANDLER.root_dir = pjoin(workdir, "torch_trace")
+    # Hacky way of always-enabling TORCH_TRACE from now on. No run overhead, only compile.
+    if rank == 0:  # Big jobs have >700MB per rank, so do rank0 only.
+        torch._logging._internal.LOG_TRACE_HANDLER.root_dir = pjoin(workdir, "torch_trace")
 
     # Import and get data source. We need it early on to know vocab size.
     ds = bv2.simple_data.from_config({'seed': (c.seed, "dataset"), **c.data.to_dict()})
