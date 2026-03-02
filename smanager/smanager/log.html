@@ -14,9 +14,25 @@
             --accent: #4bc0c8;
             --muted: #666666;
             --highlight: rgba(255, 251, 204, 0.5);
+            --ansi-black: #1e1e1e;
+            --ansi-red: #c53030;
+            --ansi-green: #16a34a;
+            --ansi-yellow: #a16207;
+            --ansi-blue: #2563eb;
+            --ansi-magenta: #9333ea;
+            --ansi-cyan: #0891b2;
+            --ansi-white: #6b7280;
+            --ansi-bright-black: #4b5563;
+            --ansi-bright-red: #ef4444;
+            --ansi-bright-green: #22c55e;
+            --ansi-bright-yellow: #ca8a04;
+            --ansi-bright-blue: #3b82f6;
+            --ansi-bright-magenta: #a855f7;
+            --ansi-bright-cyan: #06b6d4;
+            --ansi-bright-white: #9ca3af;
         }
         @media (prefers-color-scheme: dark) {
-            :root {
+            :root:not([data-theme="light"]) {
                 --bg: #121417;
                 --text: #f0f3f9;
                 --border: rgba(255, 255, 255, 0.08);
@@ -24,7 +40,48 @@
                 --accent: #4bc0c8;
                 --muted: #9aa4b1;
                 --highlight: rgba(255, 251, 204, 0.15);
+                --ansi-black: #555555;
+                --ansi-red: #f87171;
+                --ansi-green: #4ade80;
+                --ansi-yellow: #fbbf24;
+                --ansi-blue: #60a5fa;
+                --ansi-magenta: #c084fc;
+                --ansi-cyan: #22d3ee;
+                --ansi-white: #e5e7eb;
+                --ansi-bright-black: #6b7280;
+                --ansi-bright-red: #fca5a5;
+                --ansi-bright-green: #86efac;
+                --ansi-bright-yellow: #fde68a;
+                --ansi-bright-blue: #93c5fd;
+                --ansi-bright-magenta: #d8b4fe;
+                --ansi-bright-cyan: #67e8f9;
+                --ansi-bright-white: #f9fafb;
             }
+        }
+        :root[data-theme="dark"] {
+            --bg: #121417;
+            --text: #f0f3f9;
+            --border: rgba(255, 255, 255, 0.08);
+            --hover: rgba(75, 192, 200, 0.15);
+            --accent: #4bc0c8;
+            --muted: #9aa4b1;
+            --highlight: rgba(255, 251, 204, 0.15);
+            --ansi-black: #555555;
+            --ansi-red: #f87171;
+            --ansi-green: #4ade80;
+            --ansi-yellow: #fbbf24;
+            --ansi-blue: #60a5fa;
+            --ansi-magenta: #c084fc;
+            --ansi-cyan: #22d3ee;
+            --ansi-white: #e5e7eb;
+            --ansi-bright-black: #6b7280;
+            --ansi-bright-red: #fca5a5;
+            --ansi-bright-green: #86efac;
+            --ansi-bright-yellow: #fde68a;
+            --ansi-bright-blue: #93c5fd;
+            --ansi-bright-magenta: #d8b4fe;
+            --ansi-bright-cyan: #67e8f9;
+            --ansi-bright-white: #f9fafb;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         html, body { height: 100%; }
@@ -112,30 +169,26 @@
             color: #ef4444;
         }
         /* ANSI colors */
-        .ansi-black { color: #000000; }
-        .ansi-red { color: #cc0000; }
-        .ansi-green { color: #00cc00; }
-        .ansi-yellow { color: #cccc00; }
-        .ansi-blue { color: #0000cc; }
-        .ansi-magenta { color: #cc00cc; }
-        .ansi-cyan { color: #00cccc; }
-        .ansi-white { color: #cccccc; }
-        .ansi-bright-black { color: #666666; }
-        .ansi-bright-red { color: #ff0000; }
-        .ansi-bright-green { color: #00ff00; }
-        .ansi-bright-yellow { color: #ffff00; }
-        .ansi-bright-blue { color: #5c5cff; }
-        .ansi-bright-magenta { color: #ff00ff; }
-        .ansi-bright-cyan { color: #00ffff; }
-        .ansi-bright-white { color: #ffffff; }
+        .ansi-black { color: var(--ansi-black); }
+        .ansi-red { color: var(--ansi-red); }
+        .ansi-green { color: var(--ansi-green); }
+        .ansi-yellow { color: var(--ansi-yellow); }
+        .ansi-blue { color: var(--ansi-blue); }
+        .ansi-magenta { color: var(--ansi-magenta); }
+        .ansi-cyan { color: var(--ansi-cyan); }
+        .ansi-white { color: var(--ansi-white); }
+        .ansi-bright-black { color: var(--ansi-bright-black); }
+        .ansi-bright-red { color: var(--ansi-bright-red); }
+        .ansi-bright-green { color: var(--ansi-bright-green); }
+        .ansi-bright-yellow { color: var(--ansi-bright-yellow); }
+        .ansi-bright-blue { color: var(--ansi-bright-blue); }
+        .ansi-bright-magenta { color: var(--ansi-bright-magenta); }
+        .ansi-bright-cyan { color: var(--ansi-bright-cyan); }
+        .ansi-bright-white { color: var(--ansi-bright-white); }
         .ansi-bold { font-weight: bold; }
         .ansi-dim { opacity: 0.7; }
         .ansi-italic { font-style: italic; }
         .ansi-underline { text-decoration: underline; }
-        @media (prefers-color-scheme: dark) {
-            .ansi-black { color: #666666; }
-            .ansi-white { color: #ffffff; }
-        }
         .filter-group {
             display: flex;
             align-items: center;
@@ -184,6 +237,29 @@
         .log-line.hidden {
             display: none;
         }
+        .theme-toggle {
+            display: flex;
+            gap: 0;
+            margin-left: 8px;
+        }
+        .theme-toggle button {
+            font-size: 11px;
+            padding: 3px 8px;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            color: var(--muted);
+            cursor: pointer;
+        }
+        .theme-toggle button:first-child { border-radius: 4px 0 0 4px; }
+        .theme-toggle button:last-child { border-radius: 0 4px 4px 0; }
+        .theme-toggle button:not(:first-child) { border-left: none; }
+        .theme-toggle button:hover { color: var(--text); }
+        .theme-toggle button.active {
+            background: var(--accent);
+            color: var(--bg);
+            border-color: var(--accent);
+        }
+        .theme-toggle button.active + button { border-left-color: var(--accent); }
     </style>
 </head>
 <body>
@@ -196,6 +272,11 @@
             <button class="regex-toggle" id="regexToggle" title="Toggle regex mode">.*</button>
         </div>
         <span class="info" id="lineCount"></span>
+        <div class="theme-toggle" id="themeToggle">
+            <button data-theme="light">Light</button>
+            <button data-theme="auto" class="active">Auto</button>
+            <button data-theme="dark">Dark</button>
+        </div>
     </div>
     <div class="content" id="content">
         <div class="loading">Loading log...</div>
@@ -205,6 +286,21 @@
         const jid = window.location.pathname.split('/').pop();
         document.getElementById('jidDisplay').textContent = jid;
         document.title = `Log: ${jid}`;
+
+        // Theme toggle
+        const savedTheme = localStorage.getItem('log-theme') || 'auto';
+        function applyTheme(theme) {
+            document.documentElement.removeAttribute('data-theme');
+            if (theme !== 'auto') document.documentElement.setAttribute('data-theme', theme);
+            document.querySelectorAll('#themeToggle button').forEach(b => {
+                b.classList.toggle('active', b.dataset.theme === theme);
+            });
+            localStorage.setItem('log-theme', theme);
+        }
+        applyTheme(savedTheme);
+        document.getElementById('themeToggle').addEventListener('click', e => {
+            if (e.target.dataset.theme) applyTheme(e.target.dataset.theme);
+        });
 
         // ANSI code to CSS class mapping
         const ANSI_COLORS = {
