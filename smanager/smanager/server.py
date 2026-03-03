@@ -1362,15 +1362,15 @@ def delete_xid(xid: str):
 
 
 @app.post("/api/action/archive/{xid}")
-def archive_xid(xid: str):
-    """Archive an XID by removing checkpoints and moving workdir to archive directory."""
+def archive_xid(xid: str, move: bool = True):
+    """Archive an XID by removing checkpoints and optionally moving workdir to archive directory."""
     if not ACTIONS_ENABLED:
         raise HTTPException(status_code=403, detail="Actions are disabled (--no-actions)")
-    if ARCHIVE_DIR is None:
+    if move and ARCHIVE_DIR is None:
         raise HTTPException(status_code=400, detail="Archive directory not configured (use --archive-dir)")
     if not xid or not _xid_re.fullmatch(xid):
         raise HTTPException(status_code=400, detail="Invalid XID format")
-    log.info("POST /api/action/archive/%s", xid)
+    log.info("POST /api/action/archive/%s (move=%s)", xid, move)
     wd_path = BASEDIR / xid
     if not wd_path.exists():
         raise HTTPException(status_code=404, detail=f"XID {xid} not found")
@@ -1385,6 +1385,8 @@ def archive_xid(xid: str):
         else:
             item.unlink()
             log.info("Removed checkpoint file %s", item)
+    if not move:
+        return {"status": "ok", "xid": xid, "checkpoints_removed": True}
     # Move workdir to archive directory
     dest = ARCHIVE_DIR / xid
     shutil.move(str(wd_path), str(dest))

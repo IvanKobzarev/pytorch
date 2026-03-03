@@ -317,10 +317,13 @@
         .archive-btn { cursor: pointer; opacity: 0; }
         tr:hover .archive-btn { opacity: 0.3; }
         .archive-btn:hover { opacity: 1 !important; }
+        .delckpt-btn { cursor: pointer; opacity: 0; }
+        tr:hover .delckpt-btn { opacity: 0.3; }
+        .delckpt-btn:hover { opacity: 1 !important; }
         .fav-toggle { cursor: pointer; font-size: 16px; opacity: 0.4; }
         .fav-toggle:hover { opacity: 0.7; }
         /* Use symbol font for all icon buttons and symbol text */
-        .copy-btn, .code-btn, .stop-btn, .action-btn, .rq-btn, .fav-btn, .del-btn, .archive-btn, .fav-toggle, .bulk-action-btn, .config-view-btn, .status-emoji, .warning-text, .col-fav, .col-rq, .col-del, .col-archive, .col-flattli {
+        .copy-btn, .code-btn, .stop-btn, .action-btn, .rq-btn, .fav-btn, .del-btn, .archive-btn, .delckpt-btn, .fav-toggle, .bulk-action-btn, .config-view-btn, .status-emoji, .warning-text, .col-fav, .col-rq, .col-del, .col-archive, .col-delckpt, .col-flattli {
             font-family: var(--font-symbols);
         }
         /* FontAwesome icons (regular weight) */
@@ -344,6 +347,7 @@
         .col-rq { width: 1.6em; }
         .col-del { width: 1.6em; }
         .col-archive { width: 1.6em; }
+        .col-delckpt { width: 1.6em; }
         .col-flattli { width: 1.6em; }
         .col-xid { width: 11.5em; }
         .col-usr { width: 5em; }
@@ -444,6 +448,7 @@
                         <th class="col-fav">♡</th>
                         <th class="col-del">🗑</th>
                         <th class="col-archive">📦︎</th>
+                        <th class="col-delckpt">✗</th>
                         <th style="width:1.6em" title="Open run in Flättlibrettli">📉︎</th>
                         <th class="col-xid">XID</th>
                         <th class="col-usr">User</th>
@@ -627,6 +632,25 @@
             } catch (e) {
                 if (row) row.classList.remove('outdated');
                 alert(`Error archiving XID: ${e.message}`);
+            }
+        }
+
+        async function deleteCheckpoints(serverUrl, serverIdx, xid) {
+            if (!confirm(`Delete checkpoints for XID ${xid}?\n\nThis will remove all ckpt-* directories/files but keep the workdir in place.`)) return;
+            const row = document.querySelector(`tr[data-xid="${xid}"]`);
+            if (row) row.classList.add('outdated');
+            try {
+                const resp = await fetch(`${serverUrl}/api/action/archive/${xid}?move=false`, { method: 'POST' });
+                if (!resp.ok) {
+                    if (row) row.classList.remove('outdated');
+                    const err = await resp.json();
+                    alert(`Failed to delete checkpoints: ${err.detail || 'Unknown error'}`);
+                } else {
+                    if (row) row.classList.remove('outdated');
+                }
+            } catch (e) {
+                if (row) row.classList.remove('outdated');
+                alert(`Error deleting checkpoints: ${e.message}`);
             }
         }
 
@@ -1329,7 +1353,7 @@
             if (inactiveLoaded) {
                 filterColdTable();
             } else {
-                coldBody.innerHTML = '<tr><td colspan="11" class="loading">Loading inactive experiments...</td></tr>';
+                coldBody.innerHTML = '<tr><td colspan="12" class="loading">Loading inactive experiments...</td></tr>';
             }
         }
 
@@ -1354,6 +1378,9 @@
                 const archiveBtn = canDelete
                     ? `<span class="archive-btn" onclick="archiveXid('${serverUrl}', ${r.serverIdx}, '${r.xid}')" title="Archive ${r.xid}">📦︎</span>`
                     : '';
+                const delCkptBtn = canDelete
+                    ? `<span class="delckpt-btn" onclick="deleteCheckpoints('${serverUrl}', ${r.serverIdx}, '${r.xid}')" title="Delete checkpoints for ${r.xid}">✗</span>`
+                    : '';
                 const displayText = r.note || r.name;
                 const textClass = r.note ? 'note-text' : 'name-text';
                 const escapedNote = (r.note || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
@@ -1376,6 +1403,7 @@
                     <td class="text-center"><span class="fav-btn ${favorites.has(r.xid) ? 'active' : ''}" onclick="toggleFavorite('${r.xid}')">${favorites.has(r.xid) ? '❤︎' : '♡'}</span></td>
                     <td class="text-center">${delBtn}</td>
                     <td class="text-center">${archiveBtn}</td>
+                    <td class="text-center">${delCkptBtn}</td>
                     <td class="text-center"><span class="rq-btn" onclick="openFlattli('${r.xid}')" title="Open run in Flättlibrettli">📉︎</span></td>
                     <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="code-btn fa-icon" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span></td>
                     <td class="${userClass}">${r.user}</td>
