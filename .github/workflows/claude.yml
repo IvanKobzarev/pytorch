@@ -5,8 +5,6 @@ on:
     types: [created]
   pull_request_review_comment:
     types: [created]
-  issues:
-    types: [opened, assigned]
   pull_request_review:
     types: [submitted]
 
@@ -15,36 +13,51 @@ jobs:
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude'))
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pull-requests: read
-      issues: read
+      contents: write
+      pull-requests: write
+      issues: write
       id-token: write
       actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
+      - name: Check if user is authorized
+        id: check_auth
+        run: |
+          COMMENTER="${{ github.event.comment.user.login }}"
+          ASSOCIATION="${{ github.event.comment.author_association }}"
+          AUTHORIZED=false
+
+          # Org owners and members
+          if [ "$ASSOCIATION" = "OWNER" ] || [ "$ASSOCIATION" = "MEMBER" ]; then
+            AUTHORIZED=true
+          fi
+
+          # CODEOWNERS
+          if [ "$AUTHORIZED" = "false" ] && [ -f .github/CODEOWNERS ]; then
+            OWNERS=$(grep -oP '(?<=@)\S+' .github/CODEOWNERS | sort -u)
+            if echo "$OWNERS" | grep -qxi "$COMMENTER"; then
+              AUTHORIZED=true
+            fi
+          fi
+
+          echo "authorized=$AUTHORIZED" >> "$GITHUB_OUTPUT"
+          if [ "$AUTHORIZED" = "false" ]; then
+            echo "::notice::User $COMMENTER is not authorized to trigger Claude."
+          fi
+
       - name: Run Claude Code
         id: claude
+        if: steps.check_auth.outputs.authorized == 'true'
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-
-          # This is an optional setting that allows Claude to read CI results on PRs
+          model: "claude-opus-4-6"
           additional_permissions: |
             actions: read
-
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
-
-          # Optional: Add claude_args to customize behavior and configuration
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
-          # claude_args: '--allowed-tools Bash(gh pr:*)'
-
