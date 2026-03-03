@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23121417'/><text x='50%25' y='70%25' font-size='11' text-anchor='middle' fill='%234bc0c8' font-family='serif'>&#x2263;</text></svg>">
+    <title>Config Viewer</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --text: #333333;
+            --border: #dddddd;
+            --hover: #e6f2ff;
+            --accent: #4bc0c8;
+            --muted: #666666;
+            --key: #555555;
+            --tree-line: #ddd;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                --bg: #121417;
+                --text: #f0f3f9;
+                --border: rgba(255, 255, 255, 0.08);
+                --hover: rgba(75, 192, 200, 0.15);
+                --accent: #4bc0c8;
+                --muted: #9aa4b1;
+                --key: #c8cdd5;
+                --tree-line: rgba(255, 255, 255, 0.1);
+            }
+        }
+        :root[data-theme="dark"] {
+            --bg: #121417;
+            --text: #f0f3f9;
+            --border: rgba(255, 255, 255, 0.08);
+            --hover: rgba(75, 192, 200, 0.15);
+            --accent: #4bc0c8;
+            --muted: #9aa4b1;
+            --key: #c8cdd5;
+            --tree-line: rgba(255, 255, 255, 0.1);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; }
+        body {
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 13px;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            padding: 8px 16px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+        .header h1 { font-size: 16px; font-weight: 600; }
+        .header .xid { color: var(--accent); font-family: ui-monospace, monospace; }
+        .header .info { color: var(--muted); font-size: 12px; margin-left: auto; }
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-left: 16px;
+        }
+        .filter-group label { color: var(--muted); font-size: 12px; }
+        .filter-input {
+            font-family: ui-monospace, monospace;
+            font-size: 12px;
+            padding: 4px 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg);
+            color: var(--text);
+            width: 220px;
+        }
+        .filter-input:focus { outline: none; border-color: var(--accent); }
+        .theme-toggle { display: flex; gap: 0; margin-left: 8px; }
+        .theme-toggle button {
+            font-size: 11px;
+            padding: 3px 8px;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            color: var(--muted);
+            cursor: pointer;
+        }
+        .theme-toggle button:first-child { border-radius: 4px 0 0 4px; }
+        .theme-toggle button:last-child { border-radius: 0 4px 4px 0; }
+        .theme-toggle button:not(:first-child) { border-left: none; }
+        .theme-toggle button:hover { color: var(--text); }
+        .theme-toggle button.active {
+            background: var(--accent);
+            color: var(--bg);
+            border-color: var(--accent);
+        }
+        .theme-toggle button.active + button { border-left-color: var(--accent); }
+        .content {
+            flex: 1;
+            overflow: auto;
+            padding: 12px 20px;
+        }
+        .loading { padding: 40px; color: var(--muted); text-align: center; }
+        .error { padding: 20px; color: #ef4444; }
+
+        /* Tree */
+        .tree {
+            font-family: ui-monospace, "SF Mono", Monaco, "Cascadia Mono", monospace;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .tree ul {
+            list-style: none;
+            padding-left: 20px;
+            border-left: 1px solid var(--tree-line);
+            margin-left: 6px;
+        }
+        .tree > ul { border-left: none; padding-left: 0; margin-left: 0; }
+        .tree li { position: relative; }
+        .tree-node { padding: 1px 4px; border-radius: 3px; display: inline-block; }
+        .tree-node:hover { background: var(--hover); }
+        .tree-key { color: var(--key); }
+        .tree-val { color: var(--accent); }
+        .tree-val-str { color: var(--accent); }
+        .tree-val-num { color: var(--accent); font-weight: 500; }
+        .tree-val-bool { color: var(--accent); font-style: italic; }
+        .tree-val-null { color: var(--muted); font-style: italic; }
+        .tree-toggle {
+            cursor: pointer;
+            user-select: none;
+        }
+        .tree-toggle .arrow {
+            display: inline-block;
+            width: 14px;
+            text-align: center;
+            color: var(--muted);
+            font-size: 10px;
+            transition: transform 0.1s;
+        }
+        .tree-toggle.closed .arrow { transform: rotate(-90deg); }
+        .tree-toggle .count { color: var(--muted); font-size: 11px; }
+        .tree-children { overflow: hidden; }
+        .tree-children.closed { display: none; }
+        .hidden { display: none; }
+        .highlight { background: rgba(75, 192, 200, 0.2); border-radius: 2px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1><span style="color:var(--accent)">s</span>Manager <span style="font-size: 10px; opacity: 0.3;">v{{VERSION}}</span></h1>
+        <span>Config for <span class="xid" id="xidDisplay"></span></span>
+        <div class="filter-group">
+            <label>search:</label>
+            <input type="text" class="filter-input" id="filterInput" placeholder="lr, batch_size, ...">
+        </div>
+        <span class="info" id="keyCount"></span>
+        <div class="theme-toggle" id="themeToggle">
+            <button data-theme="light">Light</button>
+            <button data-theme="auto" class="active">Auto</button>
+            <button data-theme="dark">Dark</button>
+        </div>
+    </div>
+    <div class="content" id="content">
+        <div class="loading">Loading config...</div>
+    </div>
+
+    <script>
+        const parts = window.location.pathname.split('/');
+        // URL: /config/{xid}/{wid}
+        const xid = parts[2];
+        const wid = parts[3];
+        document.getElementById('xidDisplay').textContent = `${xid} / wu${wid}`;
+        document.title = `Config: ${xid}`;
+
+        // Theme
+        const savedTheme = localStorage.getItem('log-theme') || 'auto';
+        function applyTheme(theme) {
+            document.documentElement.removeAttribute('data-theme');
+            if (theme !== 'auto') document.documentElement.setAttribute('data-theme', theme);
+            document.querySelectorAll('#themeToggle button').forEach(b => {
+                b.classList.toggle('active', b.dataset.theme === theme);
+            });
+            localStorage.setItem('log-theme', theme);
+        }
+        applyTheme(savedTheme);
+        document.getElementById('themeToggle').addEventListener('click', e => {
+            if (e.target.dataset.theme) applyTheme(e.target.dataset.theme);
+        });
+
+        // Build nested tree from flat dot-separated keys
+        function buildTree(flat) {
+            const root = {};
+            for (const [key, val] of Object.entries(flat)) {
+                const segs = key.split('.');
+                let node = root;
+                for (let i = 0; i < segs.length - 1; i++) {
+                    if (!(segs[i] in node) || typeof node[segs[i]] !== 'object' || node[segs[i]] === null || node[segs[i]].__leaf) {
+                        node[segs[i]] = {};
+                    }
+                    node = node[segs[i]];
+                }
+                const last = segs[segs.length - 1];
+                // If this key already exists as a branch (object), store the value as __self
+                if (last in node && typeof node[last] === 'object' && node[last] !== null && !node[last].__leaf) {
+                    node[last].__self = val;
+                } else {
+                    node[last] = { __leaf: true, __val: val };
+                }
+            }
+            return root;
+        }
+
+        function countLeaves(node) {
+            if (node.__leaf) return 1;
+            let n = node.__self !== undefined ? 1 : 0;
+            for (const [k, v] of Object.entries(node)) {
+                if (k === '__self' || k === '__leaf' || k === '__val') continue;
+                n += countLeaves(v);
+            }
+            return n;
+        }
+
+        function formatVal(v) {
+            if (v === null) return `<span class="tree-val-null">null</span>`;
+            if (typeof v === 'boolean') return `<span class="tree-val-bool">${v}</span>`;
+            if (typeof v === 'number') return `<span class="tree-val-num">${v}</span>`;
+            if (typeof v === 'string') {
+                const escaped = v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                return `<span class="tree-val-str">"${escaped}"</span>`;
+            }
+            if (Array.isArray(v)) {
+                if (v.length === 0) return `<span class="tree-val">[]</span>`;
+                const items = v.map(x => formatVal(x)).join(', ');
+                return `<span class="tree-val">[${items}]</span>`;
+            }
+            if (typeof v === 'object') {
+                const entries = Object.entries(v).map(([k, x]) => `${k}: ${formatVal(x)}`).join(', ');
+                return `<span class="tree-val">{${entries}}</span>`;
+            }
+            return `<span class="tree-val">${v}</span>`;
+        }
+
+        function renderTree(node, parentPath) {
+            let html = '<ul>';
+            const entries = Object.entries(node).filter(([k]) => k !== '__self' && k !== '__leaf' && k !== '__val');
+            // Sort: branches first, then leaves, alphabetical within each
+            entries.sort((a, b) => {
+                const aLeaf = a[1].__leaf;
+                const bLeaf = b[1].__leaf;
+                if (aLeaf !== bLeaf) return aLeaf ? 1 : -1;
+                return a[0].localeCompare(b[0]);
+            });
+
+            // Render __self value if present (key that is both a branch and has its own value)
+            if (node.__self !== undefined) {
+                const path = parentPath;
+                html += `<li><span class="tree-node" data-path="${path}"><span class="tree-key">(value)</span>: ${formatVal(node.__self)}</span></li>`;
+            }
+
+            for (const [key, val] of entries) {
+                const path = parentPath ? `${parentPath}.${key}` : key;
+                if (val.__leaf) {
+                    html += `<li><span class="tree-node" data-path="${path}"><span class="tree-key">${key}</span>: ${formatVal(val.__val)}</span></li>`;
+                } else {
+                    const n = countLeaves(val);
+                    html += `<li>`;
+                    html += `<span class="tree-node tree-toggle closed" data-path="${path}" onclick="toggle(this)">`;
+                    html += `<span class="arrow">\u25BC</span>`;
+                    html += `<span class="tree-key">${key}</span> <span class="count">(${n})</span>`;
+                    html += `</span>`;
+                    html += `<div class="tree-children closed">${renderTree(val, path)}</div>`;
+                    html += `</li>`;
+                }
+            }
+            html += '</ul>';
+            return html;
+        }
+
+        function toggle(el) {
+            el.classList.toggle('closed');
+            el.nextElementSibling.classList.toggle('closed');
+        }
+
+        let totalKeys = 0;
+
+        async function loadConfig() {
+            const content = document.getElementById('content');
+            try {
+                const resp = await fetch(`/api/xid/${xid}/${wid}/config`);
+                if (!resp.ok) throw new Error('Config not found');
+                const config = await resp.json();
+
+                // Also try to get run_name from config for the header
+                const runName = config.run_name || config.runname || config.name || '';
+                if (runName) {
+                    document.getElementById('xidDisplay').textContent = `${xid} / wu${wid} \u2014 ${runName}`;
+                }
+
+                totalKeys = Object.keys(config).length;
+                document.getElementById('keyCount').textContent = `${totalKeys} keys`;
+
+                const tree = buildTree(config);
+                content.innerHTML = `<div class="tree">${renderTree(tree, '')}</div>`;
+            } catch (e) {
+                content.innerHTML = `<div class="error">Error: ${e.message}</div>`;
+            }
+        }
+
+        loadConfig();
+
+        // Search with debounce
+        const filterInput = document.getElementById('filterInput');
+        let debounceTimer = null;
+
+        filterInput.addEventListener('input', () => {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(applyFilter, 300);
+        });
+
+        filterInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') { clearTimeout(debounceTimer); applyFilter(); }
+        });
+
+        function applyFilter() {
+            const query = filterInput.value.toLowerCase().trim();
+            const allNodes = document.querySelectorAll('.tree-node');
+            const allChildren = document.querySelectorAll('.tree-children');
+            const allToggles = document.querySelectorAll('.tree-toggle');
+            const allLi = document.querySelectorAll('.tree li');
+
+            // Remove old highlights
+            document.querySelectorAll('.highlight').forEach(el => el.classList.remove('highlight'));
+
+            if (!query) {
+                // No search: close all, show all
+                allLi.forEach(li => li.classList.remove('hidden'));
+                allToggles.forEach(t => t.classList.add('closed'));
+                allChildren.forEach(c => c.classList.add('closed'));
+                document.getElementById('keyCount').textContent = `${totalKeys} keys`;
+                return;
+            }
+
+            // First: close everything and hide all
+            allToggles.forEach(t => t.classList.add('closed'));
+            allChildren.forEach(c => c.classList.add('closed'));
+            allLi.forEach(li => li.classList.add('hidden'));
+
+            // Collect all matching nodes
+            const matches = [];
+            allNodes.forEach(node => {
+                const path = (node.dataset.path || '').toLowerCase();
+                const text = node.textContent.toLowerCase();
+                if (path.includes(query) || text.includes(query))
+                    matches.push({ node, path });
+            });
+
+            // Suppress matches whose ancestor also matches — only keep the
+            // shallowest match along each path so branches stay closed.
+            const matchPaths = new Set(matches.map(m => m.path));
+            const filtered = matches.filter(m => {
+                const segs = m.path.split('.');
+                for (let i = 1; i < segs.length; i++) {
+                    if (matchPaths.has(segs.slice(0, i).join('.'))) return false;
+                }
+                return true;
+            });
+
+            // Show filtered matches, open ancestors but NOT the match itself
+            filtered.forEach(({ node }) => {
+                node.classList.add('highlight');
+                let li = node.closest('li');
+                while (li) {
+                    li.classList.remove('hidden');
+                    const ul = li.parentElement;
+                    if (!ul) break;
+                    const wrapper = ul.parentElement;
+                    if (!wrapper || !wrapper.classList.contains('tree-children')) break;
+                    wrapper.classList.remove('closed');
+                    const tog = wrapper.previousElementSibling;
+                    if (tog && tog.classList.contains('tree-toggle')) tog.classList.remove('closed');
+                    li = wrapper.closest('li');
+                }
+            });
+
+            document.getElementById('keyCount').textContent = `${filtered.length}/${totalKeys} keys`;
+        }
+    </script>
+</body>
+</html>

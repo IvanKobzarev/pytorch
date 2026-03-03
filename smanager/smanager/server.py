@@ -1222,6 +1222,14 @@ def files_browser_page(xid: str, file_path: str = ""):
     return Response(content=html, media_type="text/html")
 
 
+@app.get("/config/{xid}/{wid}")
+def config_viewer_page(xid: str, wid: int):
+    """Serve the config viewer page for a work unit."""
+    html = (SCRIPT_DIR / "config.html").read_text()
+    html = html.replace("{{VERSION}}", __version__)
+    return Response(content=html, media_type="text/html")
+
+
 @app.get("/log/{jid}")
 def log_viewer_page(jid: int):
     """Serve the log viewer page for a job."""
