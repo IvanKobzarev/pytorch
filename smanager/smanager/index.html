@@ -213,7 +213,7 @@
         @media (prefers-color-scheme: dark) {
             [data-theme="auto"] .server-badge { background: rgba(255, 255, 255, 0.1); }
         }
-        .clickable { cursor: pointer; }
+        .clickable { cursor: pointer; color: inherit; }
         .clickable:hover { text-decoration: underline; }
         .xid-input { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
         .xid-input input {
@@ -1292,7 +1292,7 @@
                         <td class="text-center"></td>
                         <td class="text-center"></td>
                         <td class="text-center"></td>
-                        <td class="mono"><span class="clickable" onclick="showMiscDetail()">Miscellaneous</span></td>
+                        <td class="mono"><a class="clickable" href="#misc" onclick="showMiscDetail(); return false">Miscellaneous</a></td>
                         <td></td>
                         <td>${formatStates(r.states)}</td>
                         <td class="mono">${r.wus}</td>
@@ -1318,7 +1318,7 @@
                     <td class="text-center"><span class="fav-btn ${favorites.has(r.xid) ? 'active' : ''}" onclick="toggleFavorite('${r.xid}')">${favorites.has(r.xid) ? '❤︎' : '♡'}</span></td>
                     <td class="text-center"><span class="rq-btn" onclick="requeueXid('${serverUrl}', '${r.xid}')" title="Requeue all jobs">↶</span></td>
                     <td class="text-center"><span class="rq-btn" onclick="openFlattli('${r.xid}')" title="Open run in Flättlibrettli">📉︎</span></td>
-                    <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="code-btn fa-icon" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="code-btn fa-icon" onclick="window.open('${serverUrl}/files/${r.xid}', '_blank')" title="Browse workdir">🗁</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span><span class="stop-btn fa-icon" onclick="stopXid('${serverUrl}', '${r.xid}')" title="Stop (scancel -n ${r.xid})">⏹</span></td>
+                    <td class="mono"><a class="clickable" href="#${r.xid}" onclick="viewXid('${r.xid}', ${r.serverIdx}); return false">${r.xid}</a><span class="code-btn fa-icon" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="code-btn fa-icon" onclick="window.open('${serverUrl}/files/${r.xid}', '_blank')" title="Browse workdir">🗁</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span><span class="stop-btn fa-icon" onclick="stopXid('${serverUrl}', '${r.xid}')" title="Stop (scancel -n ${r.xid})">⏹</span></td>
                     <td class="user-cell ${userClass}" data-user="${r.user}">${r.user}</td>
                     <td>${formatStates(r.states)}</td>
                     <td class="mono">${wusDisplay}</td>
@@ -1405,7 +1405,7 @@
                     <td class="text-center">${archiveBtn}</td>
                     <td class="text-center">${delCkptBtn}</td>
                     <td class="text-center"><span class="rq-btn" onclick="openFlattli('${r.xid}')" title="Open run in Flättlibrettli">📉︎</span></td>
-                    <td class="mono"><span class="clickable" onclick="viewXid('${r.xid}', ${r.serverIdx})">${r.xid}</span><span class="code-btn fa-icon" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="code-btn fa-icon" onclick="window.open('${serverUrl}/files/${r.xid}', '_blank')" title="Browse workdir">🗁</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span></td>
+                    <td class="mono"><a class="clickable" href="#${r.xid}" onclick="viewXid('${r.xid}', ${r.serverIdx}); return false">${r.xid}</a><span class="code-btn fa-icon" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="code-btn fa-icon" onclick="window.open('${serverUrl}/files/${r.xid}', '_blank')" title="Browse workdir">🗁</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span></td>
                     <td class="${userClass}">${r.user}</td>
                     <td class="mono">
                         ${r.fail ? `<span class="status-fail">${r.fail}</span>` : ''}${r.fail && r.done ? '+' : ''}${r.done ? `<span class="status-done">${r.done}</span>` : ''}${warningIndicator}
