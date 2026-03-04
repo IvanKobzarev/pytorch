@@ -357,7 +357,7 @@
         .col-gpus { width: 45px; }
         .col-r { width: 25px; }
         .col-qos { width: 110px; }
-        .col-config { }
+        .col-config { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 0; }
         .col-server { width: 50px; }
         .note-text { color: var(--accent); }
         .name-text { color: var(--text); }
@@ -1325,7 +1325,7 @@
                     <td class="mono text-right">${r.totalGpus}</td>
                     <td class="mono text-right">${r.restarts}</td>
                     <td class="qos-cell" data-qos="${r.qos}" data-server="${r.server}" title="${r.qos}">${r.qos}</td>
-                    <td>${r.config}</td>
+                    <td class="col-config" title="${r.config}">${r.config}</td>
                     <td class="name-note-cell ${textClass}" onclick="editNote(this, ${r.serverIdx}, '${r.xid}', '${escapedNote}')">${displayText || '<span style="opacity:0.3">click to add note</span>'}</td>
                     <td><span class="server-badge" data-server="${r.server}">${r.server}</span></td>
                 </tr>`;
@@ -1410,7 +1410,7 @@
                     <td class="mono">
                         ${r.fail ? `<span class="status-fail">${r.fail}</span>` : ''}${r.fail && r.done ? '+' : ''}${r.done ? `<span class="status-done">${r.done}</span>` : ''}${warningIndicator}
                     </td>
-                    <td>${r.config}</td>
+                    <td class="col-config" title="${r.config}">${r.config}</td>
                     <td class="name-note-cell ${textClass}" onclick="editNote(this, ${r.serverIdx}, '${r.xid}', '${escapedNote}')">${displayText || '<span style="opacity:0.3">click to add note</span>'}</td>
                     <td class="mono" title="${finishedTitle}">${finishedDisplay}</td>
                     <td><span class="server-badge">${r.server}</span></td>
