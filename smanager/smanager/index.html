@@ -207,7 +207,7 @@
             margin-right: 4px;
             cursor: pointer;
         }
-        .qos-cell { cursor: pointer; }
+        .qos-cell { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 110px; }
         .user-cell { cursor: pointer; }
         [data-theme="dark"] .server-badge { background: rgba(255, 255, 255, 0.1); }
         @media (prefers-color-scheme: dark) {
@@ -1324,7 +1324,7 @@
                     <td class="mono">${wusDisplay}</td>
                     <td class="mono text-right">${r.totalGpus}</td>
                     <td class="mono text-right">${r.restarts}</td>
-                    <td class="qos-cell" data-qos="${r.qos}" data-server="${r.server}">${r.qos}</td>
+                    <td class="qos-cell" data-qos="${r.qos}" data-server="${r.server}" title="${r.qos}">${r.qos}</td>
                     <td>${r.config}</td>
                     <td class="name-note-cell ${textClass}" onclick="editNote(this, ${r.serverIdx}, '${r.xid}', '${escapedNote}')">${displayText || '<span style="opacity:0.3">click to add note</span>'}</td>
                     <td><span class="server-badge" data-server="${r.server}">${r.server}</span></td>
@@ -1587,7 +1587,7 @@
                     <td><span class="status-emoji">${stateEmoji(r.state)}</span> ${r.state}</td>
                     <td class="mono">${r.time}</td>
                     <td class="mono text-right">${r.cpus}</td>
-                    <td>${r.qos}</td>
+                    <td title="${r.qos}">${r.qos}</td>
                     <td class="mono text-right">${r.nodes}</td>
                     <td>${r.gpus}</td>
                     <td class="mono" title="${r.priority}">${fmtPrio(r.priority)}</td>

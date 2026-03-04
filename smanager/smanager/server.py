@@ -165,8 +165,11 @@ def extract_xid(name):
 
 
 def get_jobs(group=GROUP):
-    lines = run_cmd(f"squeue -A {group} -O JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:20,NumNodes:20,tres-per-node:20,RestartCnt:20,Reason:20,Priority:20,PriorityLong:20")
-    jobs = [[j[i*20:(i+1)*20].strip() for i in range(13)] for j in lines if j.strip()]
+    widths = [20, 20, 20, 20, 20, 20, 40, 20, 20, 20, 20, 20, 20]
+    fmt = "JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:40,NumNodes:20,tres-per-node:20,RestartCnt:20,Reason:20,Priority:20,PriorityLong:20"
+    lines = run_cmd(f"squeue -A {group} -O {fmt}")
+    offsets = [sum(widths[:i]) for i in range(len(widths))]
+    jobs = [[j[offsets[i]:offsets[i]+widths[i]].strip() for i in range(len(widths))] for j in lines if j.strip()]
     if len(jobs) < 2:
         return [], []
     headers = jobs[0]
@@ -675,9 +678,12 @@ def get_xid_info(xid: str):
 
     # Get current jobs for this xid
     t1 = time.time()
-    lines = run_cmd(f"squeue -n {xid} -O JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:20,NumNodes:20,GRES:20,RestartCnt:20,Reason:20")
+    xid_widths = [20, 20, 20, 20, 20, 20, 40, 20, 20, 20, 20]
+    xid_fmt = "JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:40,NumNodes:20,GRES:20,RestartCnt:20,Reason:20"
+    lines = run_cmd(f"squeue -n {xid} -O {xid_fmt}")
     log.info("  - squeue took %.2fs", time.time() - t1)
-    xid_jobs = [[j[i*20:(i+1)*20].strip() for i in range(11)] for j in lines if j.strip()]
+    xid_offsets = [sum(xid_widths[:i]) for i in range(len(xid_widths))]
+    xid_jobs = [[j[xid_offsets[i]:xid_offsets[i]+xid_widths[i]].strip() for i in range(len(xid_widths))] for j in lines if j.strip()]
     if len(xid_jobs) >= 2:
         headers, job_rows = xid_jobs[0], xid_jobs[1:]
         jobs_by_jid = {row[0]: dict(zip(headers, row)) for row in job_rows}
