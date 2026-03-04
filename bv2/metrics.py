@@ -199,7 +199,7 @@ def _get_gpu_handle(gpu_index=0):
     return pynvml.nvmlDeviceGetHandleByIndex(gpu_index), pynvml
 
 
-def log_system_metrics(logger, gpu_index=0, prefix="sys/rank0"):
+def log_system_metrics(logger, gpu_index=0, prefix="sys/rank0", _base={}):
     """Log system metrics (CPU, RAM, GPU, disk, network) with given prefix."""
     # CPU
     load_1m, load_5m, load_15m = os.getloadavg()
@@ -215,21 +215,26 @@ def log_system_metrics(logger, gpu_index=0, prefix="sys/rank0"):
     logger.log({
         f"{prefix}/ram_used_gb": mem.used / 1e9,
         f"{prefix}/ram_percent": mem.percent,
+        f"{prefix}/proc_rss_gb": psutil.Process().memory_info().rss / 1e9,
     })
     logger.log({f"{prefix}/gc_count{i}": n for i, n in enumerate(gc.get_count())})
 
-    # Disk I/O
+    # Disk I/O (cumulative since first call, not since boot)
     if disk := psutil.disk_io_counters():
+        _base.setdefault("disk_r", disk.read_bytes)
+        _base.setdefault("disk_w", disk.write_bytes)
         logger.log({
-            f"{prefix}/disk_read_gb": disk.read_bytes / 1e9,
-            f"{prefix}/disk_write_gb": disk.write_bytes / 1e9,
+            f"{prefix}/disk_read_mb": (disk.read_bytes - _base["disk_r"]) / 1e6,
+            f"{prefix}/disk_write_mb": (disk.write_bytes - _base["disk_w"]) / 1e6,
         })
 
-    # Network I/O
+    # Network I/O (cumulative since first call, not since boot)
     net = psutil.net_io_counters()
+    _base.setdefault("net_s", net.bytes_sent)
+    _base.setdefault("net_r", net.bytes_recv)
     logger.log({
-        f"{prefix}/net_sent_gb": net.bytes_sent / 1e9,
-        f"{prefix}/net_recv_gb": net.bytes_recv / 1e9,
+        f"{prefix}/net_sent_mb": (net.bytes_sent - _base["net_s"]) / 1e6,
+        f"{prefix}/net_recv_mb": (net.bytes_recv - _base["net_r"]) / 1e6,
     })
 
     # GPU (skip if pynvml not available)
