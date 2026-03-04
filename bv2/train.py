@@ -173,7 +173,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         return loss, extras
 
     # Potentially resume/fork from a checkpoint, if not, init stuff.
-    first_step, resume_data = 0, {}
+    first_step, past_proctime, resume_data = 0, 0, {}
     data_tokens_seen, model_tokens_seen, loss_tokens_seen, examples_seen = 0, 0, 0, 0
 
     # Checkpoint loading priority: resume > fork > init
@@ -181,7 +181,6 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     if os.path.exists(pjoin(workdir, "ckpt-latest")):  # := is_resuming
         ckpt_path = pjoin(workdir, "ckpt-latest")
 
-    past_proctime = 0
     if ckpt_path:
         if extras := load_ckpt(ckpt_path, model, optim, weights_only=bool(c.get("init"))):
             first_step, resume_data, past_proctime = extras["step"], extras["data"], extras.get("proctime", 0)
