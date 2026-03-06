@@ -798,15 +798,37 @@ def get_xid_info(xid: str):
             configs[wid] = {"jid": jid, "name": "", "pending_only": True}
             status[wid] = job_info.get("STATE", "PENDING")
 
+    # Add WUs from launch files that aren't represented yet (e.g. cancelled before starting)
+    for launch_file in sorted(wd_path.glob("launch_*.sh")):
+        lm = re.match(r'launch_(\d+)\.sh', launch_file.name)
+        if not lm:
+            continue
+        wid = int(lm.group(1))
+        if wid in configs:
+            continue
+        content = launch_file.read_text()
+        launch_line = ""
+        name = ""
+        for line in content.splitlines():
+            if line.strip().startswith("sbatch"):
+                launch_line = line.strip()
+                for a in shlex.split(launch_line):
+                    nm = re.match(r'name:=(.+)', a)
+                    if nm:
+                        name = nm.group(1)
+                break
+        configs[wid] = {"name": name, "_launch_line": launch_line}
+        status[wid] = "CANCELLED"
+
     # Format for response
     wus = []
     for wid in sorted(configs.keys(), key=lambda x: int(x) if str(x).isdigit() else x):
         config = configs[wid]
-        jid = config.get("jid", "")
+        jid = config.get("jid") or None
         sacct = saccts.get(jid, {})
 
         # Extract submit line args
-        submit_line = sacct.get("submit_line", "")
+        submit_line = sacct.get("submit_line", "") or config.get("_launch_line", "")
         sws_args = []
         if submit_line:
             ignore = ["xid:=", "wid:=", "jid:=", "name:="]
