@@ -1,4 +1,6 @@
+import atexit
 import hashlib
+import os
 import re
 import signal
 import sys
@@ -6,6 +8,7 @@ import warnings
 from contextlib import ContextDecorator
 from functools import cache
 from itertools import count as icount
+from threading import Thread
 from time import perf_counter
 from types import FunctionType
 
@@ -21,6 +24,8 @@ BLUE = '\033[34m' if sys.stdout.isatty() else ''
 BOLD = '\033[1m' if sys.stdout.isatty() else ''
 RESET = '\033[0m' if sys.stdout.isatty() else ''
 LIGHT = '\033[90m' if sys.stdout.isatty() else ''
+
+_FILTER_STDERR_INSTALLED = False
 
 
 # Can be used both as function annotator, and as with-context.
@@ -38,6 +43,43 @@ class suppress_warnings(ContextDecorator):
     def __exit__(self, exc_type, exc, tb):
         # Restore previous warnings state
         return self._ctx.__exit__(exc_type, exc, tb)
+
+
+def filter_stderr(*prefixes):
+    """Redirect stderr through a background thread that drops lines matching any prefix."""
+    global _FILTER_STDERR_INSTALLED
+    if _FILTER_STDERR_INSTALLED:
+        return
+    _FILTER_STDERR_INSTALLED = True
+
+    r_fd, pipe_w_fd = os.pipe()
+    restore_fd = os.dup(2)
+    os.dup2(pipe_w_fd, 2)
+    os.close(pipe_w_fd)
+    sys.stderr = os.fdopen(2, "w", buffering=1, closefd=False)  # Line-buffered!
+    r = os.fdopen(r_fd, "r", errors="replace")
+    w = os.fdopen(os.dup(restore_fd), "w", errors="replace")
+
+    def _run():
+        for line in r:
+            if any(line.startswith(p) for p in prefixes):
+                continue
+            w.write(line)
+            w.flush()
+        r.close()
+        w.close()
+
+    t = Thread(target=_run, daemon=True)
+    t.start()
+
+    def _flush():
+        sys.stderr.flush()
+        os.dup2(restore_fd, 2)
+        sys.stderr = os.fdopen(2, "w", buffering=1, closefd=False)
+        t.join(timeout=2)
+        os.close(restore_fd)
+
+    atexit.register(_flush)
 
 
 def clone_function(f, name_suffix=""):

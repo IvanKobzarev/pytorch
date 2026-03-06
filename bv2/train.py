@@ -725,6 +725,8 @@ if __name__ == "__main__":
     # Don't squeeze tables! Can't protect this by isatty, because slurm-out is always a tty :(
     rich.reconfigure(width=500)
 
+    u.filter_stderr("libpng warning: iCCP: ")
+
     # We need to "warmup" the einops backend cache; if we don't, then einops
     # has a multi-threading race-condition that makes it fail in our input pipeline.
     import einops
