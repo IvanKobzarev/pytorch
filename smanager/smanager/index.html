@@ -571,6 +571,8 @@
             CANCELLED_FAIL: '🛑'
         };
 
+        const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
         let servers = [];
         let overviewData = {};
         let miscData = {};  // serverIdx -> misc jobs data
@@ -716,7 +718,7 @@
                 cell.className = `name-note-cell ${textClass}`;
                 const escapedNote = newNote.replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 cell.setAttribute('onclick', `editNote(this, ${serverIdx}, '${xid}', '${escapedNote}')`);
-                cell.innerHTML = displayText || '<span style="opacity:0.3">click to add note</span>';
+                cell.innerHTML = esc(displayText) || '<span style="opacity:0.3">click to add note</span>';
             };
 
             input.addEventListener('keydown', (e) => {
@@ -729,7 +731,7 @@
                     const displayText = currentNote || (row?.name || '');
                     const textClass = currentNote ? 'note-text' : 'name-text';
                     cell.className = `name-note-cell ${textClass}`;
-                    cell.innerHTML = displayText || '<span style="opacity:0.3">click to add note</span>';
+                    cell.innerHTML = esc(displayText) || '<span style="opacity:0.3">click to add note</span>';
                     saved = true;  // Prevent blur from saving
                 }
             });
@@ -1314,7 +1316,7 @@
                     ? `<span class="warning-text" title="${r.warningCount} WU(s) have warnings, go to detail view for more.">${r.wus} ⚠</span>`
                     : r.wus;
                 return `
-                <tr data-server="${r.server}" data-qos="${r.qos}" data-user="${r.user}">
+                <tr data-server="${r.server}" data-qos="${esc(r.qos)}" data-user="${r.user}">
                     <td class="text-center"><span class="fav-btn ${favorites.has(r.xid) ? 'active' : ''}" onclick="toggleFavorite('${r.xid}')">${favorites.has(r.xid) ? '❤︎' : '♡'}</span></td>
                     <td class="text-center"><span class="rq-btn" onclick="requeueXid('${serverUrl}', '${r.xid}')" title="Requeue all jobs">↶</span></td>
                     <td class="text-center"><span class="rq-btn" onclick="openFlattli('${r.xid}')" title="Open run in Flättlibrettli">📉︎</span></td>
@@ -1324,9 +1326,9 @@
                     <td class="mono">${wusDisplay}</td>
                     <td class="mono text-right">${r.totalGpus}</td>
                     <td class="mono text-right">${r.restarts}</td>
-                    <td class="qos-cell" data-qos="${r.qos}" data-server="${r.server}" title="${r.qos}">${r.qos}</td>
-                    <td class="col-config" title="${r.config}">${r.config}</td>
-                    <td class="name-note-cell ${textClass}" onclick="editNote(this, ${r.serverIdx}, '${r.xid}', '${escapedNote}')">${displayText || '<span style="opacity:0.3">click to add note</span>'}</td>
+                    <td class="qos-cell" data-qos="${esc(r.qos)}" data-server="${r.server}" title="${esc(r.qos)}">${esc(r.qos)}</td>
+                    <td class="col-config" title="${esc(r.config)}">${esc(r.config)}</td>
+                    <td class="name-note-cell ${textClass}" onclick="editNote(this, ${r.serverIdx}, '${r.xid}', '${escapedNote}')">${esc(displayText) || '<span style="opacity:0.3">click to add note</span>'}</td>
                     <td><span class="server-badge" data-server="${r.server}">${r.server}</span></td>
                 </tr>`;
             }).join('');
@@ -1410,8 +1412,8 @@
                     <td class="mono">
                         ${r.fail ? `<span class="status-fail">${r.fail}</span>` : ''}${r.fail && r.done ? '+' : ''}${r.done ? `<span class="status-done">${r.done}</span>` : ''}${warningIndicator}
                     </td>
-                    <td class="col-config" title="${r.config}">${r.config}</td>
-                    <td class="name-note-cell ${textClass}" onclick="editNote(this, ${r.serverIdx}, '${r.xid}', '${escapedNote}')">${displayText || '<span style="opacity:0.3">click to add note</span>'}</td>
+                    <td class="col-config" title="${esc(r.config)}">${esc(r.config)}</td>
+                    <td class="name-note-cell ${textClass}" onclick="editNote(this, ${r.serverIdx}, '${r.xid}', '${escapedNote}')">${esc(displayText) || '<span style="opacity:0.3">click to add note</span>'}</td>
                     <td class="mono" title="${finishedTitle}">${finishedDisplay}</td>
                     <td><span class="server-badge">${r.server}</span></td>
                 </tr>`;
@@ -1582,17 +1584,17 @@
                 <tr data-jid="${r.jobId}">
                     <td class="text-center">${isActive(r.state) ? `<span class="action-btn" onclick="stopJob('${r.serverUrl}', ${r.jobId})" title="Stop (scancel ${r.jobId})">⏸️</span>` : ''}</td>
                     <td class="mono">${r.jobId}</td>
-                    <td>${r.name}</td>
-                    <td>${r.user}</td>
+                    <td>${esc(r.name)}</td>
+                    <td>${esc(r.user)}</td>
                     <td><span class="status-emoji">${stateEmoji(r.state)}</span> ${r.state}</td>
                     <td class="mono">${r.time}</td>
                     <td class="mono text-right">${r.cpus}</td>
-                    <td title="${r.qos}">${r.qos}</td>
+                    <td title="${esc(r.qos)}">${esc(r.qos)}</td>
                     <td class="mono text-right">${r.nodes}</td>
                     <td>${r.gpus}</td>
                     <td class="mono" title="${r.priority}">${fmtPrio(r.priority)}</td>
                     <td class="mono" title="${r.priorityLong}">${fmtPrioL(r.priorityLong)}</td>
-                    <td>${r.reason}</td>
+                    <td>${esc(r.reason)}</td>
                     <td><span class="server-badge">${r.server}</span></td>
                 </tr>
             `).join('');
@@ -1765,7 +1767,7 @@
                 const statusEmoji = STATE_EMOJIS[effectiveStatus] || '❓';
                 const configArgs = (wu.config_args || []).map(a => {
                     const [lhs, rhs] = a.split('=', 2);
-                    return `${lhs}=<em>${rhs}</em>`;
+                    return `${esc(lhs)}=<em>${esc(rhs)}</em>`;
                 }).join(' ');
 
                 // Action button: stop if running/pending/hold, play if stopped/done/failed
@@ -1786,7 +1788,7 @@
 
                 // Warning display for WID
                 const hasWarnings = wu.warnings && wu.warnings.length > 0;
-                const warningTooltip = hasWarnings ? wu.warnings.join('\\n') : '';
+                const warningTooltip = hasWarnings ? esc(wu.warnings.join('\n')) : '';
                 const widDisplay = hasWarnings
                     ? `<span class="warning-text" title="${warningTooltip}">${wu.wid} ⚠</span>`
                     : wu.wid;
@@ -1794,7 +1796,7 @@
                 // Status tooltip: show reason for pending jobs, exit code for others
                 const isPending = ['PENDING', 'REQUEUE_HOLD'].includes(wu.status);
                 const statusTooltip = isPending && wu.reason
-                    ? `${wu.status} (${wu.reason})`
+                    ? `${wu.status} (${esc(wu.reason)})`
                     : `${wu.status} (exit: ${wu.exit_code})`;
 
                 html += `
@@ -1810,7 +1812,7 @@
                         <td class="mono text-right" data-wid="${wu.wid}" data-field="step">-</td>
                         ${metricToShow ? `<td class="mono text-right" data-wid="${wu.wid}" data-field="metric">-</td>` : ''}
                         <td class="config-args">${configArgs}<span class="config-view-btn" onclick="showFullConfig('${serverUrl}', '${data.xid}', ${wu.wid})" title="View full config">🔍︎</span></td>
-                        <td>${wu.name}</td>
+                        <td>${esc(wu.name)}</td>
                         <td class="mono text-right">${wu.qwait}</td>
                         <td class="mono text-right">${wu.runtime}</td>
                     </tr>`;
