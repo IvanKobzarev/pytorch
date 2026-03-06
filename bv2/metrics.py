@@ -228,6 +228,12 @@ def log_system_metrics(logger, gpu_index=0, prefix="sys/rank0", _base={}):
             f"{prefix}/disk_write_mb": (disk.write_bytes - _base["disk_w"]) / 1e6,
         })
 
+    # VM pressure (cumulative since first call, not since boot)
+    vmstat = {s[0]: int(s[1]) for line in open("/proc/vmstat") if len(s := line.split()) == 2}
+    for k in ("allocstall_movable", "pgmajfault", "pgsteal_kswapd"):
+        _base.setdefault(k, vmstat.get(k, 0))
+        logger.log({f"{prefix}/{k}": vmstat.get(k, 0) - _base[k]})
+
     # Network I/O (cumulative since first call, not since boot)
     net = psutil.net_io_counters()
     _base.setdefault("net_s", net.bytes_sent)
