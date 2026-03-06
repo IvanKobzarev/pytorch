@@ -149,7 +149,7 @@ def to_next_multiple_of(m):
 
 
 class TxtUnembedding(nn.Module):
-    def __init__(self, dim, vocab, chunksz=None, init_std=0.0, pad_to=256):
+    def __init__(self, dim, vocab, chunksz=None, init_std=0.0, pad_to=8):
         super().__init__()
         # TODO: Should we move the pre-head LN to the unembeddings, maybe?
         self.head = nn.Linear(dim, to_next_multiple_of(pad_to)(vocab), bias=True)
@@ -184,9 +184,9 @@ class TxtUnembedding(nn.Module):
             if logits_tok_idx is not None:
                 assert x.ndim == 3, "Only works with 1D batch dimension."
                 batch_indices = torch.arange(x.shape[0], device=x.device)
-                return self.head(x[batch_indices, logits_tok_idx, :]), {}
+                return self.head(x[batch_indices, logits_tok_idx, :])[..., :self.unpadded_vocab], {}
             else:
-                return self.head(x), {}
+                return self.head(x)[..., :self.unpadded_vocab], {}
 
         targets, _, mask = dpack.unpack_as_text(targets)
         x_detached = x.detach().requires_grad_() if mode == "loss and bwd" else x
