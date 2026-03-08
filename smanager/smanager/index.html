@@ -387,6 +387,19 @@
         .theme-toggle button:hover { background: var(--hover); }
         .theme-toggle button.active { background: #4bc0c8; color: #121417; border-color: #4bc0c8; }
         [data-theme="light"] .theme-toggle button.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+        .gpu-sum-tooltip {
+            display: none;
+            position: fixed;
+            padding: 4px 10px;
+            background: var(--header-bg);
+            border: 1px solid var(--accent);
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: ui-monospace, "SF Mono", Monaco, "Cascadia Mono", monospace;
+            z-index: 1000;
+            pointer-events: none;
+        }
+        .gpu-sum-tooltip b { color: var(--accent); }
     </style>
 </head>
 <body>
@@ -435,6 +448,7 @@
                 <tfoot></tfoot>
             </table>
         </div>
+        <div id="gpuSumTooltip" class="gpu-sum-tooltip"></div>
 
         <div style="display: flex; align-items: center; gap: 12px; margin: 16px 0 8px;">
             <h2 style="margin: 0;">Inactive Experiments</h2>
@@ -2049,11 +2063,29 @@
         function setupHotTableHovers() {
             const hotTable = document.getElementById('hotTable');
             if (!hotTable) return;
+            const tooltip = document.getElementById('gpuSumTooltip');
+
+            function showGpuSum(trigger) {
+                let sum = 0;
+                hotTable.querySelectorAll('tr.highlight-full').forEach(row => {
+                    sum += parseInt(row.cells[7]?.textContent) || 0;
+                });
+                if (sum > 0) {
+                    tooltip.innerHTML = 'GPUs: <b>' + sum + '</b>';
+                    tooltip.style.display = 'block';
+                    const cellRect = trigger.closest('td').getBoundingClientRect();
+                    tooltip.style.left = (cellRect.left - tooltip.offsetWidth - 2) + 'px';
+                    tooltip.style.top = cellRect.top + 'px';
+                } else {
+                    tooltip.style.display = 'none';
+                }
+            }
 
             function clearHighlights() {
                 hotTable.querySelectorAll('tr.highlight-full, tr.highlight-muted').forEach(row => {
                     row.classList.remove('highlight-full', 'highlight-muted');
                 });
+                tooltip.style.display = 'none';
             }
 
             hotTable.addEventListener('mouseover', (e) => {
@@ -2067,6 +2099,7 @@
                     hotTable.querySelectorAll(`tbody tr[data-server="${server}"]`).forEach(row => {
                         row.classList.add('highlight-full');
                     });
+                    showGpuSum(serverBadge);
                 } else if (qosCell) {
                     const qos = qosCell.dataset.qos;
                     const server = qosCell.dataset.server;
@@ -2078,12 +2111,14 @@
                             row.classList.add('highlight-muted');
                         }
                     });
+                    showGpuSum(qosCell);
                 } else if (userCell) {
                     const user = userCell.dataset.user;
                     clearHighlights();
                     hotTable.querySelectorAll(`tbody tr[data-user="${user}"]`).forEach(row => {
                         row.classList.add('highlight-full');
                     });
+                    showGpuSum(userCell);
                 }
             });
 
