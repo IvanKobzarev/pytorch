@@ -15,8 +15,8 @@ Random 1k samples stats. Numbers are min|mean/median|max:
     Size: [78|4388.2/1752|109538]
     Lines: [4|135.4/58|4189]
 
-len(bagz.Reader("train@256.bag")) == 170492035
-len(bagz.Reader("val@32.bag")) == 32768
+len(sackli.Reader("train@256.bag")) == 170492035
+len(sackli.Reader("val@32.bag")) == 32768
 """
 
 import argparse
@@ -26,8 +26,8 @@ import zipfile
 from collections import deque
 from statistics import mean, median
 
-import bagz
 import numpy as np
+import sackli
 
 INDIR = "/datasets/llama/codegen/shuffled/deduped_code/"
 OUTDIR = "/checkpoint/rigi/data/deduped_code/"
@@ -98,10 +98,10 @@ def convert(args):
     shard_factor = args.shard_total // 32
     first_shard = args.inshard_idx * shard_factor
     writers = [
-        bagz.Writer(f"{OUTDIR}/train-{i:05d}-of-{args.shard_total:05d}.bag")
+        sackli.Writer(f"{OUTDIR}/train-{i:05d}-of-{args.shard_total:05d}.bag")
         for i in range(first_shard, first_shard + shard_factor)
     ]
-    val_writer = bagz.Writer(f"{OUTDIR}/val-{args.inshard_idx:05d}-of-{32:05d}.bag")
+    val_writer = sackli.Writer(f"{OUTDIR}/val-{args.inshard_idx:05d}-of-{32:05d}.bag")
 
     sizes, lines = deque(maxlen=1000), deque(maxlen=1000)  # Stats while we're at it.
     try:

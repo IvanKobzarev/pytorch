@@ -12,7 +12,7 @@ import numpy as np
 import bv2.data.dpack as d
 import bv2.utils as u
 from bv2.data import pp
-from bv2.data.common import cycle_qas, get_bagz_reader, iota_exids, shuffled_iota_exids
+from bv2.data.common import cycle_qas, get_sackli_reader, iota_exids, shuffled_iota_exids
 from bv2.data.tokenizer import get_tiktoken
 
 PATH = "/checkpoint/rigi/data/{split}.bag"
@@ -21,7 +21,7 @@ PATH = "/checkpoint/rigi/data/{split}.bag"
 class Dataset:
     def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, rand_max_patches=None, nreg=0, greyout_frac=0.0, tokenizer=None, qfmt="{q}", lower_q=False, lower_a=False, seed=0, epochs=None):
         self._name = f"vqa({split})"
-        self.reader = get_bagz_reader(basepath.format(split=split))
+        self.reader = get_sackli_reader(basepath.format(split=split))
         self.ps = dict(ph=ps, pw=ps)
         self.max_patches = max_patches
         self.rand_max_patches = rand_max_patches or {}

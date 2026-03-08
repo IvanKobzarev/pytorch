@@ -3,14 +3,14 @@
 import json
 from collections import Counter
 
-import bagz
+import sackli
 
-from bv2.data.common import get_bagz_reader, shuffled_iota_exids
+from bv2.data.common import get_sackli_reader, shuffled_iota_exids
 
 
 class Dataset:
     def __init__(self, fspec, cache_limits=True):
-        self.reader = get_bagz_reader(fspec, cache_limits=cache_limits)
+        self.reader = get_sackli_reader(fspec, cache_limits=cache_limits)
 
     def make_exids(self, **kw):
         return shuffled_iota_exids(len(self.reader), **kw)
@@ -20,7 +20,7 @@ class Dataset:
 
 
 def write_shard(examples, ishard, fname):
-    with bagz.Writer(fname.format(ishard=ishard)) as writer:
+    with sackli.Writer(fname.format(ishard=ishard)) as writer:
         for ex in examples:
             writer.write(json.dumps({"example": ex, "shard": ishard}))
 

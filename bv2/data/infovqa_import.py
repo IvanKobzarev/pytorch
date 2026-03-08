@@ -10,14 +10,14 @@ $ python3 ~/rigi/bv2/data/infovqa_import.py
 Statistics:
 
 Number of images:
-len(bagz.Reader("train.bag")) == 4406
-len(bagz.Reader("test.bag")) == 579
-len(bagz.Reader("val.bag")) == 500
+len(sackli.Reader("train.bag")) == 4406
+len(sackli.Reader("test.bag")) == 579
+len(sackli.Reader("val.bag")) == 500
 
 Number of questions:
-23946 == sum(len(json.loads(zipfile.ZipFile(io.BytesIO(i)).read("data.json"))["qas"]) for i in bagz.Reader("train.bag"))
- 2801 == sum(len(json.loads(zipfile.ZipFile(io.BytesIO(i)).read("data.json"))["qas"]) for i in bagz.Reader("val.bag"))
- 3288 == sum(len(json.loads(zipfile.ZipFile(io.BytesIO(i)).read("data.json"))["qas"]) for i in bagz.Reader("test.bag"))
+23946 == sum(len(json.loads(zipfile.ZipFile(io.BytesIO(i)).read("data.json"))["qas"]) for i in sackli.Reader("train.bag"))
+ 2801 == sum(len(json.loads(zipfile.ZipFile(io.BytesIO(i)).read("data.json"))["qas"]) for i in sackli.Reader("val.bag"))
+ 3288 == sum(len(json.loads(zipfile.ZipFile(io.BytesIO(i)).read("data.json"))["qas"]) for i in sackli.Reader("test.bag"))
 """
 
 import argparse
@@ -27,7 +27,7 @@ import json
 import random
 import zipfile
 
-import bagz
+import sackli
 
 
 def convert(outname, inname, args):
@@ -59,7 +59,7 @@ def convert(outname, inname, args):
     random.seed(args.shuffle_seed)
     random.shuffle(mtdata)
 
-    with bagz.Writer(outname) as writer:
+    with sackli.Writer(outname) as writer:
         for i, ex in enumerate(mtdata if not args.flatten else flatten(mtdata)):
             print(f"\rWriting ex {i}", flush=True, end="")
             buf = io.BytesIO()

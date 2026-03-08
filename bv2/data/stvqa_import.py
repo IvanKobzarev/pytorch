@@ -29,8 +29,8 @@ import json
 import random
 import zipfile
 
-import bagz
 import numpy as np
+import sackli
 
 
 def load_split_image_sets(train_npy_path, val_npy_path):
@@ -63,7 +63,7 @@ def convert_split(outname, inname, split_name, image_set=None, args=None):
     random.seed(args.shuffle_seed)
     random.shuffle(mtdata)
 
-    with bagz.Writer(outname) as writer:
+    with sackli.Writer(outname) as writer:
         for i, ex in enumerate(mtdata if not args.flatten else flatten(mtdata)):
             print(f"\rWriting {split_name} ex {i+1}/{len(mtdata)}", flush=True, end="")
             buf = io.BytesIO()

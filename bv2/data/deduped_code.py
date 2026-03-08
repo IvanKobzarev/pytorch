@@ -5,7 +5,7 @@ from zipfile import ZipFile
 import numpy as np
 
 import bv2.data.dpack as d
-from bv2.data.common import get_bagz_reader, shuffled_iota_exids
+from bv2.data.common import get_sackli_reader, shuffled_iota_exids
 from bv2.data.pp import sanity_check
 from bv2.data.tokenizer import get_tiktoken
 
@@ -25,7 +25,7 @@ PATH = {
 class Dataset:
     def __init__(self, split, first_N=float("inf"), tokenizer=None, seed=0, epochs=None):
         # Idea: here or in pp: randomize sub-seqlen, because many are >32k!
-        self.reader = get_bagz_reader(PATH[split])
+        self.reader = get_sackli_reader(PATH[split])
         self.tt = get_tiktoken(**tokenizer or {})
         self.first_N = first_N
         self.epochs = epochs

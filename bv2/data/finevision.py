@@ -11,7 +11,7 @@ import bv2.data.dpack as d
 import bv2.data.finevision_info as fvi
 import bv2.utils as u
 from bv2.data import pp
-from bv2.data.common import cycle_qas, get_bagz_reader, shuffled_iota_exids
+from bv2.data.common import cycle_qas, get_sackli_reader, shuffled_iota_exids
 from bv2.data.tokenizer import get_tiktoken
 
 
@@ -28,7 +28,7 @@ class Dataset:
                 continue
             paths.append(os.path.join(base_path, name, bag_pattern))
 
-        self.reader = get_bagz_reader(",".join(paths))
+        self.reader = get_sackli_reader(",".join(paths))
         self.ps = {"ph": ps, "pw": ps}
         self.max_patches = max_patches
         self.rand_max_patches = rand_max_patches or {}

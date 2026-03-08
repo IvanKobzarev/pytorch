@@ -1,4 +1,3 @@
-bagz
 blobfile
 editdistance
 einops
@@ -13,6 +12,7 @@ pytest
 pytest-json-report
 rich
 ruff
+sackli
 sws-config
 tiktoken
 wandb

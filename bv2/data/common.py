@@ -1,7 +1,7 @@
 from functools import cache
 
-import bagz
 import numpy as np
+import sackli
 
 import bv2.utils as u
 
@@ -64,16 +64,16 @@ def cycle_qas(qas, epoch, seed):
 
 
 @cache
-def get_bagz_reader(fspec, cache_limits=True):
+def get_sackli_reader(fspec, cache_limits=True):
     # NOTE1: See this file for the full definition of `fspec`:
     # https://github.com/google-deepmind/bagz/blob/main/src/file/file_system/shard_spec.h
 
-    # NOTE2: The bagz reader (on posix) always opens all files from the spec using mmap.
+    # NOTE2: The sackli reader (on posix) always opens all files from the spec using mmap.
     # If we wanted to only open a subset, we'd have to pass only that subset, but also
     # maybe first open all to get the total dataset length. Let's think about that only
     # when number of open files on a machine become an issue, which might be never?
 
-    return bagz.Reader(fspec, bagz.Reader.Options(
-        limits_storage=bagz.LimitsStorage.IN_MEMORY if cache_limits else bagz.LimitsStorage.ON_DISK,
+    return sackli.Reader(fspec, sackli.Reader.Options(
+        limits_storage=sackli.LimitsStorage.IN_MEMORY if cache_limits else sackli.LimitsStorage.ON_DISK,
         max_parallelism=1,  # We do our own prefetch, and don't read ranges.
     ))  # fmt: skip

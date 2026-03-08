@@ -1,5 +1,5 @@
 """
-Convert FineVision datasets from parquet format to sharded bagz format.
+Convert FineVision datasets from parquet format to sharded sackli format.
 
 Usage:
 python bv2/data/finevision_to_bagz.py --data_path /checkpoint/rigi/zhai/tmp/data/FineVision --output_base /checkpoint/rigi/zhai/tmp/data/t1
@@ -14,9 +14,9 @@ import time
 import zipfile
 from pathlib import Path
 
-import bagz
 import numpy as np
 import pyarrow.parquet as pq  # type: ignore (not in pip, but it's ok, as this file not used for training)
+import sackli
 
 
 def array_tolist(obj):
@@ -39,8 +39,8 @@ def get_shard_count(input_count):
 
 def is_already_converted(output_dir, shard_count):
     for shard_idx in range(shard_count):
-        bagz_filename = f"train-{shard_idx:05d}-of-{shard_count:05d}.bag"
-        if not (output_dir / bagz_filename).exists():
+        bag_filename = f"train-{shard_idx:05d}-of-{shard_count:05d}.bag"
+        if not (output_dir / bag_filename).exists():
             return False
 
     return True
@@ -99,7 +99,7 @@ def process_row(row, parquet_path, idx, output_shards, shard_writers, subset_nam
     shard_writers[shard_idx].write(zipfile_data)
 
 
-def convert_parquets_to_sharded_bagz(parquet_paths, output_dir):
+def convert_parquets_to_sharded_sackli(parquet_paths, output_dir):
     start_time = time.time()
     output_shards = get_shard_count(len(parquet_paths))
     subset_name = output_dir.name
@@ -112,13 +112,13 @@ def convert_parquets_to_sharded_bagz(parquet_paths, output_dir):
     temp_and_final_files = []
 
     for shard_idx in range(output_shards):
-        bagz_filename = f"train-{shard_idx:05d}-of-{output_shards:05d}.bag"
+        bag_filename = f"train-{shard_idx:05d}-of-{output_shards:05d}.bag"
         temp_file = tempfile.NamedTemporaryFile(
             dir=output_dir, delete=False, suffix=f".{shard_idx}.tmp"
         )
         temp_path = Path(temp_file.name)
-        temp_and_final_files.append((temp_path, output_dir / bagz_filename))
-        shard_writers[shard_idx] = bagz.Writer(temp_path)
+        temp_and_final_files.append((temp_path, output_dir / bag_filename))
+        shard_writers[shard_idx] = sackli.Writer(temp_path)
 
     total_rows = 0
     for parquet_path in parquet_paths:
@@ -164,7 +164,7 @@ def main():
 
         output_dir = Path(args.output_base) / dataset_dir.name
         output_dir.mkdir(parents=True, exist_ok=True)
-        convert_parquets_to_sharded_bagz(parquet_files, output_dir)
+        convert_parquets_to_sharded_sackli(parquet_files, output_dir)
 
     # Makes it 2x faster. Probably ProcessPoolExecutor even more, but didn't try.
     from concurrent.futures import ThreadPoolExecutor

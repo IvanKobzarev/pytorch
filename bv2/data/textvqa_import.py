@@ -17,7 +17,7 @@ import random
 import zipfile
 from collections import defaultdict
 
-import bagz
+import sackli
 
 
 def convert(outname, inname, image_dir, args):
@@ -39,7 +39,7 @@ def convert(outname, inname, image_dir, args):
     random.seed(args.shuffle_seed)
     random.shuffle(mtdata)
 
-    with bagz.Writer(outname) as writer:
+    with sackli.Writer(outname) as writer:
         for i, ex in enumerate(mtdata if not args.flatten else flatten(mtdata)):
             print(f"\r{outname}: {i+1}/{len(mtdata)}", flush=True, end="")
             buf = io.BytesIO()
