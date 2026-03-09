@@ -44,7 +44,7 @@ def _find_dense_regions_vec(ar, s, e):
     mask = vals > 0
     if not np.any(mask):
         return []
-    return list(zip((starts[mask] + s).tolist(), (ends[mask] + s).tolist()))
+    return list(zip((starts[mask] + s).tolist(), (ends[mask] + s).tolist(), vals[mask].tolist()))
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +75,7 @@ if HAS_NUMBA:
             MAX_DENSE = max_dense
             dense_s = np.empty(MAX_DENSE, dtype=np.int64)
             dense_e = np.empty(MAX_DENSE, dtype=np.int64)
+            dense_v = np.empty(MAX_DENSE, dtype=np.int64)
             nd = 0
             j = s
             while j < e:
@@ -86,6 +87,7 @@ if HAS_NUMBA:
                     assert nd < MAX_DENSE, "too many dense regions in one segment"
                     dense_s[nd] = j
                     dense_e[nd] = k
+                    dense_v[nd] = v
                     nd += 1
                     j = k
                 else:
@@ -118,19 +120,34 @@ if HAS_NUMBA:
 
                 # above diagonal
                 for kvb in range(qb + 1, lb + 1):
-                    for d in range(nd):
-                        ds = dense_s[d]
-                        de = dense_e[d]
-                        q_ov = (qb * BS < de) and (ds < (qb + 1) * BS)
-                        kv_ov = (kvb * BS < de) and (ds < (kvb + 1) * BS)
-                        if q_ov and kv_ov:
-                            q_fi = (ds <= qb * BS) and ((qb + 1) * BS <= de)
-                            kv_fi = (ds <= kvb * BS) and ((kvb + 1) * BS <= de)
-                            if q_fi and kv_fi:
-                                i = fkv_num[qb]; fkv_idx[qb, i] = kvb; fkv_num[qb] = i + 1
-                            else:
-                                i = kv_num[qb]; kv_idx[qb, i] = kvb; kv_num[qb] = i + 1
+                    found_partial = False
+                    found_full = False
+                    for d1 in range(nd):
+                        ds1 = dense_s[d1]
+                        de1 = dense_e[d1]
+                        q_ov = (qb * BS < de1) and (ds1 < (qb + 1) * BS)
+                        if not q_ov:
+                            continue
+                        q_fi = (ds1 <= qb * BS) and ((qb + 1) * BS <= de1)
+                        for d2 in range(nd):
+                            if dense_v[d2] != dense_v[d1]:
+                                continue
+                            ds2 = dense_s[d2]
+                            de2 = dense_e[d2]
+                            kv_ov = (kvb * BS < de2) and (ds2 < (kvb + 1) * BS)
+                            if kv_ov:
+                                kv_fi = (ds2 <= kvb * BS) and ((kvb + 1) * BS <= de2)
+                                if q_fi and kv_fi:
+                                    found_full = True
+                                else:
+                                    found_partial = True
+                                break
+                        if found_full:
                             break
+                    if found_full:
+                        i = fkv_num[qb]; fkv_idx[qb, i] = kvb; fkv_num[qb] = i + 1
+                    elif found_partial:
+                        i = kv_num[qb]; kv_idx[qb, i] = kvb; kv_num[qb] = i + 1
 
         # --- transpose: kv -> q ---
         q_num = np.zeros(NB, dtype=np.int32)
@@ -176,10 +193,9 @@ def _compute_segments_and_mpr(di, ntoks, BS, NB, max_per_row):
         fb = int(seg_starts[si]) // BS
         lb = (int(seg_ends[si]) - 1) // BS
         per_block[fb:lb+1] += seg_block_spans[si]
-    needed_mpr = int(per_block.max())
+    needed_mpr = int(per_block.max()) if len(per_block) > 0 else 1
     if isinstance(max_per_row, int):
-        assert needed_mpr <= max_per_row, f"max_per_row={max_per_row} too small, need {needed_mpr}"
-        mpr = max_per_row
+        mpr = max(max_per_row, needed_mpr)
     else:
         mpr = needed_mpr
     return seg_starts, seg_ends, mpr
@@ -198,9 +214,13 @@ def _apply_dynamic(mask, max_per_row):
 # make_docmask_numba — numba JIT path
 # ---------------------------------------------------------------------------
 
-def make_docmask_numba(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_per_row=None, max_dense=32):
+def make_docmask_numba(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_per_row=None, max_dense=32, compact=True):
     assert HAS_NUMBA, "numba is required for make_docmask_numba"
     ar, di, BS, NB, ntoks, seq_len = _prepare_inputs(ntoks, attn_regions, document_ids, BLOCK_SIZE)
+    if compact:
+        max_per_row = "dynamic"
+    elif max_per_row is None:
+        max_per_row = NB
     seg_starts, seg_ends, mpr = _compute_segments_and_mpr(di, ntoks, BS, NB, max_per_row)
 
     kv_num, kv_idx, fkv_num, fkv_idx, q_num, q_idx, fq_num, fq_idx = \
@@ -222,7 +242,14 @@ def make_docmask_numba(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_pe
         mask_mod=mask_mod,
         seq_lengths=(seq_len, seq_len),
     )
-    _apply_dynamic(mask, max_per_row)
+    if compact:
+        d = mask.kv_indices.ndim - 1
+        torch._dynamo.mark_dynamic(mask.kv_indices, d)
+        torch._dynamo.mark_dynamic(mask.full_kv_indices, d)
+        torch._dynamo.mark_dynamic(mask.q_indices, d)
+        torch._dynamo.mark_dynamic(mask.full_q_indices, d)
+    elif max_per_row == "dynamic":
+        _apply_dynamic(mask, max_per_row)
     return mask
 
 
@@ -230,7 +257,7 @@ def make_docmask_numba(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_pe
 # make_docmask_numpy — pure numpy path
 # ---------------------------------------------------------------------------
 
-def make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_per_row=None):
+def make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_per_row=None, compact=True):
     ar, di, BS, NB, ntoks, seq_len = _prepare_inputs(ntoks, attn_regions, document_ids, BLOCK_SIZE)
 
     partial_sets = [set() for _ in range(NB)]
@@ -239,6 +266,10 @@ def make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_pe
     if ntoks == 0:
         return _build_blockmask(partial_sets, full_sets, NB, BS, seq_len, ar, di, 1)
 
+    if compact:
+        max_per_row = "dynamic"
+    elif max_per_row is None:
+        max_per_row = NB
     seg_starts, seg_ends, mpr = _compute_segments_and_mpr(di, ntoks, BS, NB, max_per_row)
 
     for si in range(len(seg_starts)):
@@ -264,7 +295,7 @@ def make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_pe
             # --- Diagonal ---
             diag_full = False
             if qp:
-                for ds, de in dense:
+                for ds, de, _ in dense:
                     if ds <= qb * BS and (qb + 1) * BS <= de:
                         diag_full = True
                         break
@@ -275,20 +306,40 @@ def make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_pe
 
             # --- Above diagonal ---
             for kvb in range(qb + 1, lb + 1):
-                for ds, de in dense:
-                    q_ov = (qb * BS < de) and (ds < (qb + 1) * BS)
-                    kv_ov = (kvb * BS < de) and (ds < (kvb + 1) * BS)
-                    if q_ov and kv_ov:
-                        q_fi = (ds <= qb * BS) and ((qb + 1) * BS <= de)
-                        kv_fi = (ds <= kvb * BS) and ((kvb + 1) * BS <= de)
-                        if q_fi and kv_fi:
-                            full_sets[qb].add(kvb)
-                        else:
-                            partial_sets[qb].add(kvb)
+                is_partial = False
+                is_full = False
+                for ds1, de1, v1 in dense:
+                    q_ov = (qb * BS < de1) and (ds1 < (qb + 1) * BS)
+                    if not q_ov:
+                        continue
+                    q_fi = (ds1 <= qb * BS) and ((qb + 1) * BS <= de1)
+                    for ds2, de2, v2 in dense:
+                        if v2 != v1:
+                            continue
+                        kv_ov = (kvb * BS < de2) and (ds2 < (kvb + 1) * BS)
+                        if kv_ov:
+                            kv_fi = (ds2 <= kvb * BS) and ((kvb + 1) * BS <= de2)
+                            if q_fi and kv_fi:
+                                is_full = True
+                            else:
+                                is_partial = True
+                            break
+                    if is_full:
                         break
+                if is_full:
+                    full_sets[qb].add(kvb)
+                elif is_partial:
+                    partial_sets[qb].add(kvb)
 
     mask = _build_blockmask(partial_sets, full_sets, NB, BS, seq_len, ar, di, mpr)
-    _apply_dynamic(mask, max_per_row)
+    if compact:
+        d = mask.kv_indices.ndim - 1
+        torch._dynamo.mark_dynamic(mask.kv_indices, d)
+        torch._dynamo.mark_dynamic(mask.full_kv_indices, d)
+        torch._dynamo.mark_dynamic(mask.q_indices, d)
+        torch._dynamo.mark_dynamic(mask.full_q_indices, d)
+    elif max_per_row == "dynamic":
+        _apply_dynamic(mask, max_per_row)
     return mask
 
 
@@ -296,13 +347,27 @@ def make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_pe
 # make_docmask_cpu — dispatcher
 # ---------------------------------------------------------------------------
 
-def make_docmask_cpu(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_per_row=None, max_dense=32):
+def make_docmask_cpu(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_per_row=None, max_dense=32, compact=True):
+    """CPU document mask for packed multi-document sequences.
+
+    compact: if True (default), auto-compute the minimum index width needed
+        and use mark_dynamic so torch.compile doesn't recompile when the width
+        changes between batches.  This gives large speedups and memory savings
+        for long sequences (e.g. 26x faster / 98% less memory at 512k tokens
+        with short documents).  If False, use full NB-width index arrays.
+
+        Caveat: compact uses torch._dynamo.mark_dynamic on the last dimension
+        of the 4 BlockMask index tensors.  All 4 arrays share the same dynamic
+        width (unified), which works correctly with compiled flex_attention.
+        Independent widths per array are buggy in current PyTorch (see
+        repro_mark_dynamic_batchmask.py).
+    """
     if ntoks == 0:
         ar, di, BS, NB, ntoks, seq_len = _prepare_inputs(ntoks, attn_regions, document_ids, BLOCK_SIZE)
         return _build_blockmask([set() for _ in range(NB)], [set() for _ in range(NB)], NB, BS, seq_len, ar, di, 1)
     if HAS_NUMBA:
-        return make_docmask_numba(ntoks, attn_regions, document_ids, BLOCK_SIZE, max_per_row, max_dense)
-    return make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE, max_per_row)
+        return make_docmask_numba(ntoks, attn_regions, document_ids, BLOCK_SIZE, max_per_row, max_dense, compact)
+    return make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE, max_per_row, compact)
 
 
 # ---------------------------------------------------------------------------

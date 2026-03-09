@@ -2,40 +2,7 @@ import pytest
 import torch
 
 import flexlimaskli.docmask_gpu as uf
-from flexlimaskli.test_utils import blockmask_to_dense
-
-
-def compare_block_masks(mask1, mask2, structural=True):
-    # Move to CPU for comparison so mixed-device masks work.
-    def cpu(t): return t.cpu() if t.is_cuda else t
-
-    if structural:
-        # Check block-level structure matches exactly
-        assert torch.equal(cpu(mask1.kv_num_blocks), cpu(mask2.kv_num_blocks)), f"kv_num_blocks mismatch: {mask1.kv_num_blocks} vs {mask2.kv_num_blocks}"
-        assert mask1.seq_lengths == mask2.seq_lengths, f"seq_lengths mismatch: {mask1.seq_lengths} vs {mask2.seq_lengths}"
-        assert mask1.BLOCK_SIZE == mask2.BLOCK_SIZE, f"BLOCK_SIZE mismatch: {mask1.BLOCK_SIZE} vs {mask2.BLOCK_SIZE}"
-
-        # Compare the sparse representation (valid entries in kv_indices)
-        B, H, num_q_blocks, _ = mask1.kv_indices.shape
-        for b in range(B):
-            for h in range(H):
-                for q_block in range(num_q_blocks):
-                    num_valid = mask1.kv_num_blocks[b, h, q_block].item()
-                    valid_indices1 = cpu(mask1.kv_indices[b, h, q_block, :num_valid])
-                    valid_indices2 = cpu(mask2.kv_indices[b, h, q_block, :num_valid])
-                    assert torch.equal(valid_indices1, valid_indices2), f"kv_indices mismatch at [{b},{h},{q_block}]: {valid_indices1} vs {valid_indices2}"
-
-    # Dense comparison using helper that works with compact indices
-    dense1 = blockmask_to_dense(mask1)
-    dense2 = blockmask_to_dense(mask2)
-    # CPU impl may conservatively include extra blocks (e.g. for intra-document
-    # padding that the GPU can detect as empty). So for non-structural comparison,
-    # only check that mask2 is a superset of mask1 (all blocks in ref are present).
-    if structural:
-        assert torch.equal(dense1, dense2), f"Dense masks differ! Shape: {dense1.shape}, diff locations: {(dense1 != dense2).sum().item()}"
-    else:
-        missing = dense1 & ~dense2
-        assert not missing.any(), f"CPU mask is missing blocks present in GPU ref! Missing: {missing.sum().item()}"
+from flexlimaskli.test_utils import blockmask_to_dense, compare_block_masks
 
 
 @pytest.mark.parametrize("variant", [
@@ -395,8 +362,8 @@ def test_stable_shapes_numpy():
     ar_b = torch.zeros(ntoks, dtype=torch.int32)
 
     for mpr in [NB, "dynamic"]:
-        mask_a = ufn.make_docmask_numpy(ntoks, ar_a, doc_a, BLOCK_SIZE=BS, max_per_row=mpr)
-        mask_b = ufn.make_docmask_numpy(ntoks, ar_b, doc_b, BLOCK_SIZE=BS, max_per_row=mpr)
+        mask_a = ufn.make_docmask_numpy(ntoks, ar_a, doc_a, BLOCK_SIZE=BS, max_per_row=mpr, compact=False)
+        mask_b = ufn.make_docmask_numpy(ntoks, ar_b, doc_b, BLOCK_SIZE=BS, max_per_row=mpr, compact=False)
         if mpr == "dynamic":
             continue  # shapes may differ, just verify no crash
         for attr in ["kv_indices", "full_kv_indices", "q_indices", "full_q_indices"]:
@@ -588,3 +555,346 @@ def test_block_boundary_straddle_large(variant):
     for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba, ufn.make_docmask_cpu]:
         mask = fn(ntoks, cpu_ar, cpu_di, BLOCK_SIZE=BS)
         compare_block_masks(ref, mask)
+
+
+# ---------------------------------------------------------------------------
+# Non-contiguous same-value dense regions
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("variant", [
+    "cpu",
+    pytest.param("gpu", marks=pytest.mark.gpu),
+])
+def test_noncontiguous_same_value_regions(variant):
+    """CPU must not miss blocks when two dense regions share the same value
+    but are separated by a gap (0 or -1).
+
+    This is the docmask equivalent of the batchmask bug: the above-diagonal
+    loop breaks after the first dense region that overlaps both q and kv blocks,
+    missing cross-region pairs when a later region has the same value."""
+    device = "cuda" if variant == "gpu" else "cpu"
+    BS = 64
+    ntoks = 512
+
+    document_ids = torch.zeros(ntoks, dtype=torch.int64, device=device)
+    attn_regions = torch.zeros(ntoks, dtype=torch.int32, device=device)
+
+    # Two value=1 regions separated by a zero gap
+    attn_regions[:100] = 1
+    attn_regions[200:400] = 1
+
+    ref = uf.make_docmask_gpu(ntoks, attn_regions, document_ids, BLOCK_SIZE=BS)
+
+    import flexlimaskli.docmask_cpu as ufn
+    cpu_di, cpu_ar = document_ids.cpu(), attn_regions.cpu()
+    for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba, ufn.make_docmask_cpu]:
+        mask = fn(ntoks, cpu_ar, cpu_di, BLOCK_SIZE=BS)
+        compare_block_masks(ref, mask, structural=False)
+
+
+@pytest.mark.parametrize("variant", [
+    "cpu",
+    pytest.param("gpu", marks=pytest.mark.gpu),
+])
+def test_noncontiguous_same_value_with_negative_gap(variant):
+    """Same-value regions separated by -1 (invisible) tokens, like attn_regions2."""
+    device = "cuda" if variant == "gpu" else "cpu"
+    BS = 64
+    ntoks = 512
+
+    document_ids = torch.zeros(ntoks, dtype=torch.int64, device=device)
+    attn_regions = torch.zeros(ntoks, dtype=torch.int32, device=device)
+
+    # attn_regions2 pattern: question=1, image=-1, registers=1
+    attn_regions[:52] = 1
+    attn_regions[52:248] = -1
+    attn_regions[248:260] = 1
+
+    ref = uf.make_docmask_gpu(ntoks, attn_regions, document_ids, BLOCK_SIZE=BS)
+
+    import flexlimaskli.docmask_cpu as ufn
+    cpu_di, cpu_ar = document_ids.cpu(), attn_regions.cpu()
+    for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba, ufn.make_docmask_cpu]:
+        mask = fn(ntoks, cpu_ar, cpu_di, BLOCK_SIZE=BS)
+        compare_block_masks(ref, mask, structural=False)
+
+
+@pytest.mark.parametrize("variant", [
+    "cpu",
+    pytest.param("gpu", marks=pytest.mark.gpu),
+])
+def test_decode_like_docmask_patterns(variant):
+    """Decode-like layouts within a single document:
+    [image(1)] [AR(0)] [padding gap(0)] [decode token(0)]
+    and attn_regions2 variants with -1 holes."""
+    device = "cuda" if variant == "gpu" else "cpu"
+    BS = 64
+    ntoks = 512
+
+    import flexlimaskli.docmask_cpu as ufn
+
+    patterns = [
+        # Simple: [img(1)] [AR+pad(0)]
+        {"ar": [(0, 100, 1)]},
+        # attn_regions2: [Q(1)] [img(-1)] [reg(1)] [AR+pad(0)]
+        {"ar": [(0, 30, 1), (30, 220, -1), (220, 230, 1)]},
+        # Larger image
+        {"ar": [(0, 50, 1), (50, 350, -1), (350, 370, 1)]},
+        # Multi-image: [Q(1)] [img1(-1)] [reg(1)] [img2(-1)] [reg(1)]
+        {"ar": [(0, 20, 1), (20, 120, -1), (120, 130, 1),
+                (130, 230, -1), (230, 240, 1)]},
+    ]
+
+    for i, pat in enumerate(patterns):
+        document_ids = torch.zeros(ntoks, dtype=torch.int64, device=device)
+        attn_regions = torch.zeros(ntoks, dtype=torch.int32, device=device)
+        for s, e, v in pat["ar"]:
+            attn_regions[s:e] = v
+
+        ref = uf.make_docmask_gpu(ntoks, attn_regions, document_ids, BLOCK_SIZE=BS)
+
+        cpu_di, cpu_ar = document_ids.cpu(), attn_regions.cpu()
+        for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba, ufn.make_docmask_cpu]:
+            mask = fn(ntoks, cpu_ar, cpu_di, BLOCK_SIZE=BS)
+            compare_block_masks(ref, mask, structural=False), \
+                f"Pattern {i}: {fn.__name__} disagrees with GPU ref"
+
+
+@pytest.mark.parametrize("variant", [
+    "cpu",
+    pytest.param("gpu", marks=pytest.mark.gpu),
+])
+def test_complex_noncontiguous_docmask(variant):
+    """Complex patterns: multiple non-contiguous same-value regions,
+    mixed values, multi-document with holes."""
+    device = "cuda" if variant == "gpu" else "cpu"
+    BS = 64
+    ntoks = 1024
+
+    import flexlimaskli.docmask_cpu as ufn
+
+    # --- Pattern 0: [img(1)] [hole(-1)] [reg(1)] [hole(-1)] [AR(0)] [hole(-1)] [reg(1)] ---
+    document_ids = torch.zeros(ntoks, dtype=torch.int64, device=device)
+    attn_regions = torch.zeros(ntoks, dtype=torch.int32, device=device)
+    attn_regions[:100] = 1
+    attn_regions[100:150] = -1
+    attn_regions[150:170] = 1
+    attn_regions[170:200] = -1
+    attn_regions[200:400] = 0  # AR
+    attn_regions[400:450] = -1
+    attn_regions[450:470] = 1
+
+    ref = uf.make_docmask_gpu(ntoks, attn_regions, document_ids, BLOCK_SIZE=BS)
+    cpu_di, cpu_ar = document_ids.cpu(), attn_regions.cpu()
+    for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba]:
+        mask = fn(ntoks, cpu_ar, cpu_di, BLOCK_SIZE=BS)
+        compare_block_masks(ref, mask, structural=False)
+
+    # --- Pattern 1: three value=1 regions with -1 gaps ---
+    attn_regions2 = torch.zeros(ntoks, dtype=torch.int32, device=device)
+    attn_regions2[:80] = 1
+    attn_regions2[80:200] = -1
+    attn_regions2[200:250] = 1
+    attn_regions2[250:400] = -1
+    attn_regions2[400:430] = 1
+
+    ref2 = uf.make_docmask_gpu(ntoks, attn_regions2, document_ids, BLOCK_SIZE=BS)
+    cpu_ar2 = attn_regions2.cpu()
+    for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba]:
+        mask = fn(ntoks, cpu_ar2, cpu_di, BLOCK_SIZE=BS)
+        compare_block_masks(ref2, mask, structural=False)
+
+    # --- Pattern 2: mixed value=1 and value=2, both non-contiguous ---
+    attn_regions3 = torch.zeros(ntoks, dtype=torch.int32, device=device)
+    attn_regions3[:60] = 1
+    attn_regions3[60:200] = 2
+    attn_regions3[200:220] = 1   # same as first region
+    attn_regions3[220:400] = -1
+    attn_regions3[400:420] = 2   # same as second region
+
+    ref3 = uf.make_docmask_gpu(ntoks, attn_regions3, document_ids, BLOCK_SIZE=BS)
+    cpu_ar3 = attn_regions3.cpu()
+    for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba]:
+        mask = fn(ntoks, cpu_ar3, cpu_di, BLOCK_SIZE=BS)
+        compare_block_masks(ref3, mask, structural=False)
+
+    # --- Pattern 3: multi-doc, each with non-contiguous same-value regions ---
+    document_ids4 = torch.zeros(ntoks, dtype=torch.int64, device=device)
+    document_ids4[512:] = 1
+    attn_regions4 = torch.zeros(ntoks, dtype=torch.int32, device=device)
+    # Doc 0: value=1 at [0:100], value=-1 at [100:300], value=1 at [300:350]
+    attn_regions4[:100] = 1
+    attn_regions4[100:300] = -1
+    attn_regions4[300:350] = 1
+    # Doc 1: value=1 at [512:600], value=-1 at [600:800], value=1 at [800:850]
+    attn_regions4[512:600] = 1
+    attn_regions4[600:800] = -1
+    attn_regions4[800:850] = 1
+
+    ref4 = uf.make_docmask_gpu(ntoks, attn_regions4, document_ids4, BLOCK_SIZE=BS)
+    cpu_di4, cpu_ar4 = document_ids4.cpu(), attn_regions4.cpu()
+    for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba]:
+        mask = fn(ntoks, cpu_ar4, cpu_di4, BLOCK_SIZE=BS)
+        compare_block_masks(ref4, mask, structural=False)
+
+
+@pytest.mark.gpu
+def test_compiled_flex_attention_docmask_cpu_dynamic():
+    """Diagnose: does compiled flex_attention produce correct results when
+    called with docmask_cpu masks using max_per_row="dynamic"?
+
+    This mirrors the exact production usage in simple_data.py:
+        make_docmask_cpu(maxtok, v, seq["iseq"], ..., max_per_row="dynamic")
+
+    Two different document packings (same ntoks) produce masks with different
+    compact index widths. If mark_dynamic doesn't properly communicate the
+    dynamic dimension to the triton kernel, the second call will produce
+    wrong outputs (stale kernel reads indices at the first call's width).
+    """
+    from torch.nn.attention.flex_attention import flex_attention
+    from flexlimaskli.docmask_cpu import make_docmask_cpu
+    from flexlimaskli.to_gpu import blockmask_to_gpu
+
+    BS = 128
+    ntoks = 4096
+    head_dim = 64
+
+    # Packing 1: one huge document → max_per_row is large (many blocks per row)
+    di1 = torch.zeros(ntoks, dtype=torch.int64)
+    ar1 = torch.zeros(ntoks, dtype=torch.int32)
+    ar1[:3000] = 1  # large dense prefix
+
+    # Packing 2: many tiny documents (64 tokens each) → max_per_row is small
+    di2 = torch.tensor([i // 64 for i in range(ntoks)], dtype=torch.int64)
+    ar2 = torch.zeros(ntoks, dtype=torch.int32)
+
+    # Build CPU masks with dynamic max_per_row (production config)
+    cpu1 = make_docmask_cpu(ntoks, ar1, di1, BLOCK_SIZE=BS, max_per_row="dynamic")
+    cpu2 = make_docmask_cpu(ntoks, ar2, di2, BLOCK_SIZE=BS, max_per_row="dynamic")
+
+    # Verify shapes actually differ (otherwise test is vacuous)
+    w1 = cpu1.kv_indices.shape[-1]
+    w2 = cpu2.kv_indices.shape[-1]
+    assert w1 != w2, \
+        f"Test setup error: compact widths should differ, got {w1} and {w2}"
+
+    # GPU reference masks (full NB width, no compact issues)
+    gpu1 = uf.make_docmask_gpu(ntoks, ar1.cuda(), di1.cuda(), BLOCK_SIZE=BS)
+    gpu2 = uf.make_docmask_gpu(ntoks, ar2.cuda(), di2.cuda(), BLOCK_SIZE=BS)
+
+    # Move all masks to GPU
+    cpu1 = blockmask_to_gpu(cpu1, "cuda")
+    cpu2 = blockmask_to_gpu(cpu2, "cuda")
+
+    # Fixed Q, K, V
+    q = torch.randn(1, 1, ntoks, head_dim, device="cuda", dtype=torch.bfloat16)
+    k = torch.randn(1, 1, ntoks, head_dim, device="cuda", dtype=torch.bfloat16)
+    v = torch.randn(1, 1, ntoks, head_dim, device="cuda", dtype=torch.bfloat16)
+
+    # --- Reference: non-compiled flex_attention ---
+    torch.nn.attention.flex_attention._FLEX_ATTENTION_DISABLE_COMPILE_DEBUG = True
+    with torch.no_grad():
+        ref1 = flex_attention(q, k, v, block_mask=gpu1)
+        ref2 = flex_attention(q, k, v, block_mask=gpu2)
+    torch.nn.attention.flex_attention._FLEX_ATTENTION_DISABLE_COMPILE_DEBUG = False
+
+    # Sanity: different masks should produce different outputs
+    assert not torch.allclose(ref1, ref2, atol=1e-2), \
+        "Test setup error: different masks should give different outputs"
+
+    # --- Test: compiled flex_attention with CPU dynamic masks ---
+    torch._dynamo.reset()
+    cflex = torch.compile(flex_attention, dynamic=False, fullgraph=True)
+    with torch.no_grad():
+        out1 = cflex(q, k, v, block_mask=cpu1)
+        out2 = cflex(q, k, v, block_mask=cpu2)
+
+    diff1 = (out1 - ref1).abs().max().item()
+    diff2 = (out2 - ref2).abs().max().item()
+    diff2_vs_ref1 = (out2 - ref1).abs().max().item()
+    stale = torch.allclose(out1, out2, atol=1e-3)
+
+    print(f"\n=== DOCMASK CPU DYNAMIC DIAGNOSTICS ===")
+    print(f"  Compact widths: mask1={w1}, mask2={w2}")
+    print(f"  Call 1 vs ref1: max_diff={diff1:.6f}  (should be ~0)")
+    print(f"  Call 2 vs ref2: max_diff={diff2:.6f}  (should be ~0)")
+    print(f"  Call 2 vs ref1: max_diff={diff2_vs_ref1:.6f}  (closeness to wrong ref)")
+    print(f"  Call 1 == Call 2: {stale}")
+
+    assert diff1 < 0.02, f"Docmask CPU call 1 wrong! {diff1:.6f}"
+    assert diff2 < 0.02, \
+        f"Docmask CPU call 2 wrong! Max diff vs ref: {diff2:.6f}. " \
+        f"Same as call 1: {stale}. vs ref1: {diff2_vs_ref1:.6f}"
+
+
+@pytest.mark.gpu
+def test_compiled_flex_attention_docmask_compact():
+    """Verify compact=True produces correct results under compiled flex_attention."""
+    from torch.nn.attention.flex_attention import flex_attention
+    from flexlimaskli.docmask_cpu import make_docmask_cpu
+    from flexlimaskli.to_gpu import blockmask_to_gpu
+
+    BS = 128
+    ntoks = 4096
+    head_dim = 64
+
+    di1 = torch.zeros(ntoks, dtype=torch.int64)
+    ar1 = torch.zeros(ntoks, dtype=torch.int32)
+    ar1[:3000] = 1
+
+    di2 = torch.tensor([i // 64 for i in range(ntoks)], dtype=torch.int64)
+    ar2 = torch.zeros(ntoks, dtype=torch.int32)
+
+    cpu1 = make_docmask_cpu(ntoks, ar1, di1, BLOCK_SIZE=BS, compact=True)
+    cpu2 = make_docmask_cpu(ntoks, ar2, di2, BLOCK_SIZE=BS, compact=True)
+
+    # Verify compact uses smaller width and has mark_dynamic
+    assert cpu1.kv_indices.shape[-1] <= ntoks // BS
+    assert hasattr(cpu1.kv_indices, '_dynamo_dynamic_indices')
+
+    # GPU reference
+    gpu1 = uf.make_docmask_gpu(ntoks, ar1.cuda(), di1.cuda(), BLOCK_SIZE=BS)
+    gpu2 = uf.make_docmask_gpu(ntoks, ar2.cuda(), di2.cuda(), BLOCK_SIZE=BS)
+
+    cpu1 = blockmask_to_gpu(cpu1, "cuda")
+    cpu2 = blockmask_to_gpu(cpu2, "cuda")
+
+    q = torch.randn(1, 1, ntoks, head_dim, device="cuda", dtype=torch.bfloat16)
+    k = torch.randn(1, 1, ntoks, head_dim, device="cuda", dtype=torch.bfloat16)
+    v = torch.randn(1, 1, ntoks, head_dim, device="cuda", dtype=torch.bfloat16)
+
+    torch.nn.attention.flex_attention._FLEX_ATTENTION_DISABLE_COMPILE_DEBUG = True
+    with torch.no_grad():
+        ref1 = flex_attention(q, k, v, block_mask=gpu1)
+        ref2 = flex_attention(q, k, v, block_mask=gpu2)
+    torch.nn.attention.flex_attention._FLEX_ATTENTION_DISABLE_COMPILE_DEBUG = False
+
+    torch._dynamo.reset()
+    cflex = torch.compile(flex_attention, dynamic=False, fullgraph=True)
+    with torch.no_grad():
+        out1 = cflex(q, k, v, block_mask=cpu1)
+        out2 = cflex(q, k, v, block_mask=cpu2)
+
+    diff1 = (out1 - ref1).abs().max().item()
+    diff2 = (out2 - ref2).abs().max().item()
+    assert diff1 < 0.02, f"compact=True call 1 wrong: {diff1:.6f}"
+    assert diff2 < 0.02, f"compact=True call 2 wrong: {diff2:.6f}"
+
+
+def test_docmask_compact_shapes():
+    """compact=True (default) uses auto-computed width; compact=False uses NB width."""
+    import flexlimaskli.docmask_cpu as ufn
+    BS = 128
+    ntoks = 4096
+    NB = ntoks // BS
+
+    di = torch.tensor([i // 64 for i in range(ntoks)], dtype=torch.int64)
+    ar = torch.zeros(ntoks, dtype=torch.int32)
+
+    full = ufn.make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=BS, compact=False)
+    comp = ufn.make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=BS)  # compact=True by default
+
+    assert full.kv_indices.shape[-1] == NB
+    assert comp.kv_indices.shape[-1] <= NB
+    assert hasattr(comp.kv_indices, '_dynamo_dynamic_indices')
+    assert not hasattr(full.kv_indices, '_dynamo_dynamic_indices')

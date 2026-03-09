@@ -6,9 +6,17 @@ import torch
 
 
 def blockmask_to_gpu(bm, device):
-    """Move a BlockMask to device, handling closure tensors and _dynamo_dynamic_indices."""
-    src_bm = bm
+    """Move a BlockMask to device, handling closure tensors."""
+    # Preserve mark_dynamic annotations: bm.to() creates new tensors that
+    # lose _dynamo_dynamic_indices. Re-apply after moving.
+    dynamic_marks = {}
+    for attr in ("kv_indices", "full_kv_indices", "q_indices", "full_q_indices"):
+        t = getattr(bm, attr)
+        if hasattr(t, '_dynamo_dynamic_indices'):
+            dynamic_marks[attr] = t._dynamo_dynamic_indices
     bm = bm.to(device)
+    for attr, marks in dynamic_marks.items():
+        getattr(bm, attr)._dynamo_dynamic_indices = marks
     # BlockMask.to() moves block indices but not tensors captured
     # in the mask_mod closure. Move those too so flex_attention
     # doesn't hit CPU tensors during inductor lowering.
@@ -25,12 +33,4 @@ def blockmask_to_gpu(bm, device):
                     cell.cell_contents = v.to(device)
             except ValueError:
                 pass  # empty cell
-    # .to() creates new tensors that lose _dynamo_dynamic_indices.
-    # Re-apply from the originals.
-    for attr in ('kv_indices', 'full_kv_indices', 'q_indices', 'full_q_indices'):
-        src = getattr(src_bm, attr)
-        if hasattr(src, '_dynamo_dynamic_indices'):
-            dst = getattr(bm, attr)
-            for dim in src._dynamo_dynamic_indices:
-                torch._dynamo.mark_dynamic(dst, dim)
     return bm

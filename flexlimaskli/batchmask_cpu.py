@@ -21,9 +21,10 @@ except ImportError:
 
 def _mask_fn_batched(b, h, q_idx, kv_idx, attn_regions):
     causal = q_idx >= kv_idx
+    is_padding = (attn_regions[b, q_idx] == -1) | (attn_regions[b, kv_idx] == -1)
     dense_region = (attn_regions[b, q_idx] > 0) & (attn_regions[b, kv_idx] > 0)
     same_region = attn_regions[b, q_idx] == attn_regions[b, kv_idx]
-    return causal | (dense_region & same_region)
+    return (causal | (dense_region & same_region)) & ~is_padding
 
 
 # ---------------------------------------------------------------------------
@@ -43,19 +44,8 @@ def _prepare_inputs(ntoks, attn_regions_batch, BLOCK_SIZE):
 
 
 def _build_mask(kv_num, kv_idx, fkv_num, fkv_idx, q_num, q_idx, fq_num, fq_idx, BS, seq_len, ar):
-    # Trim each array type to its actual needed width independently.
-    # For single-doc batchmask: partial arrays (kv, q) are narrow (~1-3 cols,
-    # just the diagonal), full arrays (fkv, fq) stay wide (~NB, the causal triangle).
-    def _compact(num, idx):
-        w = max(1, int(num.max()))
-        return idx[:, :, :w].copy()
-    kv_idx = _compact(kv_num, kv_idx)
-    fkv_idx = _compact(fkv_num, fkv_idx)
-    q_idx = _compact(q_num, q_idx)
-    fq_idx = _compact(fq_num, fq_idx)
-
     to_t = torch.from_numpy
-    mask = BlockMask(
+    return BlockMask(
         kv_num_blocks=to_t(kv_num)[:, None, :],
         kv_indices=to_t(kv_idx)[:, None, :, :],
         full_kv_num_blocks=to_t(fkv_num)[:, None, :],
@@ -68,12 +58,6 @@ def _build_mask(kv_num, kv_idx, fkv_num, fkv_idx, q_num, q_idx, fq_num, fq_idx, 
         mask_mod=partial(_mask_fn_batched, attn_regions=to_t(ar)),
         seq_lengths=(seq_len, seq_len),
     )
-    d = mask.kv_indices.ndim - 1
-    torch._dynamo.mark_dynamic(mask.kv_indices, d)
-    torch._dynamo.mark_dynamic(mask.full_kv_indices, d)
-    torch._dynamo.mark_dynamic(mask.q_indices, d)
-    torch._dynamo.mark_dynamic(mask.full_q_indices, d)
-    return mask
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +81,7 @@ if HAS_NUMBA:
             MAX_DENSE = max_dense
             dense_s = np.empty(MAX_DENSE, dtype=np.int64)
             dense_e = np.empty(MAX_DENSE, dtype=np.int64)
+            dense_v = np.empty(MAX_DENSE, dtype=np.int64)
             nd = 0
             j = 0
             while j < ntoks:
@@ -108,40 +93,77 @@ if HAS_NUMBA:
                     assert nd < MAX_DENSE, "too many dense regions in one batch element"
                     dense_s[nd] = j
                     dense_e[nd] = k
+                    dense_v[nd] = v
                     nd += 1
                     j = k
                 else:
                     j += 1
 
-            for qb in range(NB):
-                # below diagonal: all full (single doc, all blocks pure)
-                for kvb in range(qb):
-                    i = fkv_num[b, qb]; fkv_idx[b, qb, i] = kvb; fkv_num[b, qb] = i + 1
+            # --- per-block negative flags for -1 handling ---
+            any_neg = np.zeros(NB, dtype=nb.boolean)
+            all_neg = np.zeros(NB, dtype=nb.boolean)
+            for blk in range(NB):
+                neg = 0
+                for t in range(BS):
+                    if ar[b, blk * BS + t] == -1:
+                        neg += 1
+                any_neg[blk] = neg > 0
+                all_neg[blk] = neg == BS
 
-                # diagonal: full only if a dense region fully covers this block
+            for qb in range(NB):
+                if all_neg[qb]:
+                    continue
+
+                # below diagonal: full unless -1 involved
+                for kvb in range(qb):
+                    if all_neg[kvb]:
+                        continue
+                    if any_neg[qb] or any_neg[kvb]:
+                        i = kv_num[b, qb]; kv_idx[b, qb, i] = kvb; kv_num[b, qb] = i + 1
+                    else:
+                        i = fkv_num[b, qb]; fkv_idx[b, qb, i] = kvb; fkv_num[b, qb] = i + 1
+
+                # diagonal: full only if a dense region fully covers this block and no -1
                 diag_full = False
                 for d in range(nd):
                     if dense_s[d] <= qb * BS and (qb + 1) * BS <= dense_e[d]:
                         diag_full = True
                         break
-                if diag_full:
+                if diag_full and not any_neg[qb]:
                     i = fkv_num[b, qb]; fkv_idx[b, qb, i] = qb; fkv_num[b, qb] = i + 1
                 else:
                     i = kv_num[b, qb]; kv_idx[b, qb, i] = qb; kv_num[b, qb] = i + 1
 
                 # above diagonal: only through dense regions
                 for kvb in range(qb + 1, NB):
-                    for d in range(nd):
-                        q_ov = (qb * BS < dense_e[d]) and (dense_s[d] < (qb + 1) * BS)
-                        kv_ov = (kvb * BS < dense_e[d]) and (dense_s[d] < (kvb + 1) * BS)
-                        if q_ov and kv_ov:
-                            q_fi = (dense_s[d] <= qb * BS) and ((qb + 1) * BS <= dense_e[d])
-                            kv_fi = (dense_s[d] <= kvb * BS) and ((kvb + 1) * BS <= dense_e[d])
-                            if q_fi and kv_fi:
-                                i = fkv_num[b, qb]; fkv_idx[b, qb, i] = kvb; fkv_num[b, qb] = i + 1
-                            else:
-                                i = kv_num[b, qb]; kv_idx[b, qb, i] = kvb; kv_num[b, qb] = i + 1
+                    found_partial = False
+                    found_full = False
+                    for d1 in range(nd):
+                        ds1 = dense_s[d1]
+                        de1 = dense_e[d1]
+                        q_ov = (qb * BS < de1) and (ds1 < (qb + 1) * BS)
+                        if not q_ov:
+                            continue
+                        q_fi = (ds1 <= qb * BS) and ((qb + 1) * BS <= de1)
+                        for d2 in range(nd):
+                            if dense_v[d2] != dense_v[d1]:
+                                continue
+                            ds2 = dense_s[d2]
+                            de2 = dense_e[d2]
+                            kv_ov = (kvb * BS < de2) and (ds2 < (kvb + 1) * BS)
+                            if kv_ov:
+                                kv_fi = (ds2 <= kvb * BS) and ((kvb + 1) * BS <= de2)
+                                if q_fi and kv_fi:
+                                    found_full = True
+                                else:
+                                    found_partial = True
+                                break
+                        if found_full:
                             break
+                    if found_full:
+                        i = fkv_num[b, qb]; fkv_idx[b, qb, i] = kvb; fkv_num[b, qb] = i + 1
+                    elif found_partial:
+                        i = kv_num[b, qb]; kv_idx[b, qb, i] = kvb; kv_num[b, qb] = i + 1
 
         # --- transpose: kv -> q ---
         q_num = np.zeros((B, NB), dtype=np.int32)
@@ -198,36 +220,62 @@ def make_batchmask_numpy(ntoks, attn_regions_batch, BLOCK_SIZE=128):
                 k = j + 1
                 while k < padded_ntoks and ar[b, k] == v:
                     k += 1
-                dense.append((j, k))
+                dense.append((j, k, v))
                 j = k
             else:
                 j += 1
 
-        for qb in range(NB):
-            # below diagonal: all full (single doc, all blocks pure)
-            for kvb in range(qb):
-                i = fkv_num[b, qb]; fkv_idx[b, qb, i] = kvb; fkv_num[b, qb] = i + 1
+        # Per-block negative flags for -1 handling
+        ar_blk = ar[b].reshape(NB, BS)
+        any_neg = (ar_blk == -1).any(axis=1)
+        all_neg = (ar_blk == -1).all(axis=1)
 
-            # diagonal: full only if a dense region fully covers this block
-            diag_full = any(ds <= qb * BS and (qb + 1) * BS <= de for ds, de in dense)
-            if diag_full:
+        for qb in range(NB):
+            if all_neg[qb]:
+                continue
+
+            # below diagonal: full unless -1 involved
+            for kvb in range(qb):
+                if all_neg[kvb]:
+                    continue
+                if any_neg[qb] or any_neg[kvb]:
+                    i = kv_num[b, qb]; kv_idx[b, qb, i] = kvb; kv_num[b, qb] = i + 1
+                else:
+                    i = fkv_num[b, qb]; fkv_idx[b, qb, i] = kvb; fkv_num[b, qb] = i + 1
+
+            # diagonal: full only if a dense region fully covers this block and no -1
+            diag_full = any(ds <= qb * BS and (qb + 1) * BS <= de for ds, de, _ in dense)
+            if diag_full and not any_neg[qb]:
                 i = fkv_num[b, qb]; fkv_idx[b, qb, i] = qb; fkv_num[b, qb] = i + 1
             else:
                 i = kv_num[b, qb]; kv_idx[b, qb, i] = qb; kv_num[b, qb] = i + 1
 
             # above diagonal: only through dense regions
             for kvb in range(qb + 1, NB):
-                for ds, de in dense:
-                    q_ov = (qb * BS < de) and (ds < (qb + 1) * BS)
-                    kv_ov = (kvb * BS < de) and (ds < (kvb + 1) * BS)
-                    if q_ov and kv_ov:
-                        q_fi = (ds <= qb * BS) and ((qb + 1) * BS <= de)
-                        kv_fi = (ds <= kvb * BS) and ((kvb + 1) * BS <= de)
-                        if q_fi and kv_fi:
-                            i = fkv_num[b, qb]; fkv_idx[b, qb, i] = kvb; fkv_num[b, qb] = i + 1
-                        else:
-                            i = kv_num[b, qb]; kv_idx[b, qb, i] = kvb; kv_num[b, qb] = i + 1
+                is_partial = False
+                is_full = False
+                for ds1, de1, v1 in dense:
+                    q_ov = (qb * BS < de1) and (ds1 < (qb + 1) * BS)
+                    if not q_ov:
+                        continue
+                    q_fi = (ds1 <= qb * BS) and ((qb + 1) * BS <= de1)
+                    for ds2, de2, v2 in dense:
+                        if v2 != v1:
+                            continue
+                        kv_ov = (kvb * BS < de2) and (ds2 < (kvb + 1) * BS)
+                        if kv_ov:
+                            kv_fi = (ds2 <= kvb * BS) and ((kvb + 1) * BS <= de2)
+                            if q_fi and kv_fi:
+                                is_full = True
+                            else:
+                                is_partial = True
+                            break
+                    if is_full:
                         break
+                if is_full:
+                    i = fkv_num[b, qb]; fkv_idx[b, qb, i] = kvb; fkv_num[b, qb] = i + 1
+                elif is_partial:
+                    i = kv_num[b, qb]; kv_idx[b, qb, i] = kvb; kv_num[b, qb] = i + 1
 
     # --- transpose: kv -> q ---
     q_num = np.zeros((B, NB), dtype=np.int32)
@@ -254,8 +302,6 @@ def make_batchmask_cpu(ntoks, attn_regions_batch, BLOCK_SIZE=128, max_dense=32):
     """Batched flexmask for single-document-per-batch-element (e.g. decoding).
 
     attn_regions_batch: (B, ntoks) array. Returns a BlockMask with batch dim B.
-    Uses compact index arrays (per-type trimming) with mark_dynamic for
-    torch.compile compatibility.
     """
     if HAS_NUMBA:
         return make_batchmask_numba(ntoks, attn_regions_batch, BLOCK_SIZE, max_dense)

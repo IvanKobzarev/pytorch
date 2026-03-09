@@ -18,9 +18,10 @@ def _compiled_cbm(compiled):
 
 def _mask_fn(b, h, q_idx, kv_idx, attn_regions):
     causal = q_idx >= kv_idx
+    is_padding = (attn_regions[b, q_idx] == -1) | (attn_regions[b, kv_idx] == -1)
     dense_region = (attn_regions[b, q_idx] > 0) & (attn_regions[b, kv_idx] > 0)
     same_region = attn_regions[b, q_idx] == attn_regions[b, kv_idx]
-    return causal | (dense_region & same_region)
+    return (causal | (dense_region & same_region)) & ~is_padding
 
 
 def make_batchmask_gpu(ntoks, attn_regions_batch, BLOCK_SIZE=128, compile=True):

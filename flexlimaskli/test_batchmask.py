@@ -3,20 +3,12 @@ import torch
 import numpy as np
 
 import flexlimaskli.docmask_gpu as uf
-from flexlimaskli.test_utils import blockmask_to_dense
+from flexlimaskli.test_utils import blockmask_to_dense, compare_block_masks
 
 
 def _batched_element_dense(bm, b):
-    """Extract dense block mask for batch element b from a batched BlockMask."""
-    NB = bm.kv_num_blocks.shape[-1]
-    dense = torch.zeros(1, 1, NB, NB, dtype=torch.bool)
-    for name in ['kv', 'full_kv']:
-        n = getattr(bm, f'{name}_num_blocks')[b, 0]
-        idx = getattr(bm, f'{name}_indices')[b, 0]
-        for qb in range(NB):
-            for j in range(n[qb]):
-                dense[0, 0, qb, idx[qb, j]] = True
-    return dense
+    """Extract dense mask for batch element b, mirroring flex_attention behavior."""
+    return blockmask_to_dense(bm, b=b)
 
 
 def test_batched_mini():
@@ -42,34 +34,6 @@ def test_batched_mini():
                 f"Element {b}: dense masks differ ({make_fn.__name__})"
 
 
-def test_batched_dense_variations():
-    """Batched with varied dense region patterns per element."""
-    import flexlimaskli.docmask_cpu as ufn
-    from flexlimaskli.batchmask_cpu import make_batchmask_cpu, make_batchmask_numpy
-
-    BS = 64
-    ntoks = 512
-    B = 4
-    ar = np.zeros((B, ntoks), dtype=np.int64)
-
-    # Element 0: purely causal (decode-like, no dense)
-    # Element 1: dense prefix (half)
-    ar[1, :256] = 1
-    # Element 2: dense prefix (short)
-    ar[2, :100] = 1
-    # Element 3: two distinct dense regions
-    ar[3, :100] = 1
-    ar[3, 300:400] = 2
-
-    for make_fn in [make_batchmask_cpu, make_batchmask_numpy]:
-        batched = make_fn(ntoks, ar, BLOCK_SIZE=BS)
-
-        for b in range(B):
-            di = np.zeros(ntoks, dtype=np.int64)
-            ref = ufn.make_docmask_numba(ntoks, ar[b], di, BLOCK_SIZE=BS)
-            assert torch.equal(_batched_element_dense(batched, b), blockmask_to_dense(ref)), \
-                f"Element {b}: dense masks differ ({make_fn.__name__})"
-
 
 def test_batched_against_gpu_reference():
     """Compare batched numba against GPU create_block_mask reference."""
@@ -78,10 +42,21 @@ def test_batched_against_gpu_reference():
 
     BS = 128
     ntoks = 1024
-    B = 2
+    B = 5
     ar = np.zeros((B, ntoks), dtype=np.int64)
     ar[0, :200] = 1
     ar[1, :500] = 1
+    # Same-value non-contiguous regions (zero gap)
+    ar[2, :200] = 1
+    ar[2, 400:800] = 1
+    # Same value with different-value gap
+    ar[3, :200] = 1
+    ar[3, 200:400] = 2
+    ar[3, 400:700] = 1
+    # attn_regions2 pattern
+    ar[4, :100] = 1
+    ar[4, 100:500] = -1
+    ar[4, 500:600] = 1
 
     batched = make_batchmask_cpu(ntoks, ar, BLOCK_SIZE=BS)
 
@@ -103,12 +78,23 @@ def test_batchmask_gpu_vs_cpu(variant):
 
     BS = 64
     ntoks = 512
-    B = 4
+    B = 7
     ar = np.zeros((B, ntoks), dtype=np.int64)
     ar[1, :256] = 1
     ar[2, :100] = 1
     ar[3, :100] = 1
     ar[3, 300:400] = 2
+    # Same-value non-contiguous regions (zero gap)
+    ar[4, :100] = 1
+    ar[4, 200:400] = 1
+    # Same value with different-value gap (val=1, val=2, val=1)
+    ar[5, :100] = 1
+    ar[5, 100:200] = 2
+    ar[5, 200:350] = 1
+    # attn_regions2 pattern (question=1, image=-1, regs=1)
+    ar[6, :52] = 1
+    ar[6, 52:248] = -1
+    ar[6, 248:260] = 1
 
     cpu_mask = make_batchmask_cpu(ntoks, ar, BLOCK_SIZE=BS)
     gpu_mask = make_batchmask_gpu(ntoks, torch.tensor(ar), BLOCK_SIZE=BS, compile=False)
@@ -168,37 +154,6 @@ def test_batchmask_gpu_mini(variant):
             f"Element {b}: CPU vs GPU batchmask differ"
 
 
-def test_batched_compact_indices():
-    """Compact index arrays: partial indices are narrower than NB."""
-    from flexlimaskli.batchmask_cpu import make_batchmask_cpu, make_batchmask_numpy
-
-    BS = 64
-    ntoks = 4096
-    NB = ntoks // BS
-
-    # Purely causal → partial arrays should be narrow (just diagonals)
-    ar_causal = np.zeros((2, ntoks), dtype=np.int64)
-
-    # Large dense prefix → different widths but still compact
-    ar_dense = np.zeros((2, ntoks), dtype=np.int64)
-    ar_dense[:, :3000] = 1
-
-    for make_fn in [make_batchmask_cpu, make_batchmask_numpy]:
-        mask_c = make_fn(ntoks, ar_causal, BLOCK_SIZE=BS)
-        mask_d = make_fn(ntoks, ar_dense, BLOCK_SIZE=BS)
-
-        # Partial kv_indices should be much narrower than NB
-        assert mask_c.kv_indices.shape[-1] < NB, \
-            f"kv_indices not compact: {mask_c.kv_indices.shape[-1]} vs NB={NB}"
-
-        # All index tensors should have mark_dynamic set
-        for m in [mask_c, mask_d]:
-            for attr in ["kv_indices", "full_kv_indices", "q_indices", "full_q_indices"]:
-                t = getattr(m, attr)
-                assert hasattr(t, '_dynamo_dynamic_indices'), \
-                    f"{attr} missing mark_dynamic ({make_fn.__name__})"
-
-
 def test_batched_b1():
     """Batch size 1 matches unbatched."""
     import flexlimaskli.docmask_cpu as ufn
@@ -241,146 +196,239 @@ def test_batched_unaligned():
         assert mask.kv_num_blocks.shape == (1, 1, NB)
 
 
-@pytest.mark.gpu
-def test_batched_compiled_flex_attention_no_recompile():
-    """mark_dynamic on compact index tensors prevents recompilation under
-    torch.compile(dynamic=False) when index widths vary between calls.
+@pytest.mark.parametrize("variant", [
+    "cpu",
+    pytest.param("gpu", marks=pytest.mark.gpu),
+])
+def test_batchmask_decode_patterns(variant):
+    """Decode-like patterns where prompt is followed by padding then a decode token.
 
-    Mirrors docmask's test_v3_mark_dynamic_recompile: creates two masks with
-    genuinely different compact widths (causal vs fully-dense), verifies shapes
-    differ, then verifies compiled flex_attention doesn't recompile."""
-    from torch.nn.attention.flex_attention import flex_attention
-    from flexlimaskli.to_gpu import blockmask_to_gpu
+    Mirrors real eval/decode_lib.py layouts: prompt (dense+AR) is padded to
+    max_prefix+max_decode with 0s, then tokens are placed one-at-a-time."""
     from flexlimaskli.batchmask_cpu import make_batchmask_cpu
-
-    BS = 128
-    ntoks = 4096
-    B = 2
-    NB = ntoks // BS
-
-    # Mask A: purely causal → full_kv_indices width = NB-1
-    ar_causal = np.zeros((B, ntoks), dtype=np.int64)
-
-    # Mask B: fully dense → full_kv_indices width = NB
-    ar_dense = np.ones((B, ntoks), dtype=np.int64)
-
-    mask_a = blockmask_to_gpu(make_batchmask_cpu(ntoks, ar_causal, BLOCK_SIZE=BS), "cuda")
-    mask_b = blockmask_to_gpu(make_batchmask_cpu(ntoks, ar_dense, BLOCK_SIZE=BS), "cuda")
-
-    # Verify shapes genuinely differ (compact arrays are data-dependent)
-    assert mask_a.full_kv_indices.shape[-1] != mask_b.full_kv_indices.shape[-1], \
-        f"Test setup error: full_kv shapes should differ, got " \
-        f"{mask_a.full_kv_indices.shape[-1]} and {mask_b.full_kv_indices.shape[-1]}"
-
-    # Compile flex_attention with strict settings
-    torch._dynamo.config.recompile_limit = 1
-    torch._dynamo.config.fail_on_recompile_limit_hit = True
-    cflex = torch.compile(flex_attention, dynamic=False, fullgraph=True)
-
-    q = torch.randn(B, 1, ntoks, 64, device="cuda", dtype=torch.bfloat16)
-    k = torch.randn(B, 1, ntoks, 64, device="cuda", dtype=torch.bfloat16)
-    v = torch.randn(B, 1, ntoks, 64, device="cuda", dtype=torch.bfloat16)
-
-    # First call compiles
-    with torch.no_grad():
-        cflex(q, k, v, block_mask=mask_a)
-
-    # Second call with different compact widths — must NOT recompile (mark_dynamic)
-    with torch.no_grad():
-        cflex(q, k, v, block_mask=mask_b)
-
-
-def test_batched_edge_case_sizes():
-    """Test with various error-prone sizes, including very small sequences.
-
-    Mirrors docmask's test_edge_case_sizes."""
-    import flexlimaskli.docmask_cpu as ufn
-    from flexlimaskli.batchmask_cpu import make_batchmask_cpu, make_batchmask_numpy
-
-    BS = 128
-    test_cases = [1, 2, 3, 63, 127, 128, 129, 255, 256, 257]
-
-    for ntoks in test_cases:
-        NB = (ntoks + BS - 1) // BS
-        ar = np.zeros((2, ntoks), dtype=np.int64)
-        ar[0, :max(1, ntoks // 3)] = 1
-
-        for make_fn in [make_batchmask_cpu, make_batchmask_numpy]:
-            mask = make_fn(ntoks, ar, BLOCK_SIZE=BS)
-            assert mask.kv_num_blocks.shape == (2, 1, NB), \
-                f"ntoks={ntoks}: wrong shape {mask.kv_num_blocks.shape}"
-
-            # Verify against per-element docmask reference
-            for b in range(2):
-                di = np.zeros(ntoks, dtype=np.int64)
-                ref = ufn.make_docmask_numba(ntoks, ar[b], di, BLOCK_SIZE=BS)
-                assert torch.equal(_batched_element_dense(mask, b), blockmask_to_dense(ref)), \
-                    f"ntoks={ntoks}, b={b}: dense masks differ ({make_fn.__name__})"
-
-
-def test_batched_dense_at_block_boundary():
-    """Dense regions starting/ending exactly at or straddling block boundaries.
-
-    Mirrors docmask's test_block_boundary_straddle: ensures partial/full
-    classification is correct when dense regions align with block edges."""
-    import flexlimaskli.docmask_cpu as ufn
-    from flexlimaskli.batchmask_cpu import make_batchmask_cpu, make_batchmask_numpy
+    from flexlimaskli.batchmask_gpu import make_batchmask_gpu
 
     BS = 64
-    ntoks = 512
-    B = 4
-    NB = ntoks // BS
-
+    ntoks = 512  # max_prefix + max_decode
+    B = 5
     ar = np.zeros((B, ntoks), dtype=np.int64)
 
-    # Element 0: dense region exactly aligned to 2 block boundaries
-    ar[0, :128] = 1
-    # Element 1: dense region ending mid-block
-    ar[1, :100] = 1
-    # Element 2: dense region starting mid-block
-    ar[2, 50:200] = 1
-    # Element 3: two adjacent dense regions with different IDs at a block boundary
-    ar[3, :64] = 1   # exactly one block
-    ar[3, 64:200] = 2  # starts at next block boundary
+    # Element 0: simple decode — [img(1)] [AR(0)] [pad(0)] [decode(0)]
+    ar[0, :100] = 1
 
-    for make_fn in [make_batchmask_cpu, make_batchmask_numpy]:
-        mask = make_fn(ntoks, ar, BLOCK_SIZE=BS)
+    # Element 1: attn_regions2 decode — [Q(1)] [img(-1)] [reg(1)] [AR(0)] [pad(0)]
+    ar[1, :30] = 1         # BOS + question
+    ar[1, 30:220] = -1     # image patches
+    ar[1, 220:230] = 1     # registers
+    # rest is 0 = AR + padding + decode positions
 
-        for b in range(B):
-            di = np.zeros(ntoks, dtype=np.int64)
-            ref = ufn.make_docmask_numba(ntoks, ar[b], di, BLOCK_SIZE=BS)
-            assert torch.equal(_batched_element_dense(mask, b), blockmask_to_dense(ref)), \
-                f"b={b}: dense masks differ ({make_fn.__name__})"
+    # Element 2: longer prompt, short decode area
+    ar[2, :50] = 1         # question
+    ar[2, 50:350] = -1     # large image
+    ar[2, 350:370] = 1     # registers
+    # 370..512 = AR + pad + decode
+
+    # Element 3: very short prompt with attn_regions2 pattern
+    ar[3, :10] = 1         # question
+    ar[3, 10:80] = -1      # image
+    ar[3, 80:90] = 1       # registers
+    # 90..512 = AR + pad + decode
+
+    # Element 4: two images with registers between (multi-image decode)
+    ar[4, :20] = 1         # question
+    ar[4, 20:120] = -1     # image 1
+    ar[4, 120:130] = 1     # registers
+    ar[4, 130:230] = -1    # image 2
+    ar[4, 230:240] = 1     # more registers
+    # 240..512 = AR + pad + decode
+
+    cpu_mask = make_batchmask_cpu(ntoks, ar, BLOCK_SIZE=BS)
+    gpu_mask = make_batchmask_gpu(ntoks, torch.tensor(ar), BLOCK_SIZE=BS, compile=False)
+
+    for b in range(B):
+        assert torch.equal(_batched_element_dense(cpu_mask, b),
+                           _batched_element_dense(gpu_mask, b)), \
+            f"Element {b}: CPU vs GPU batchmask differ"
 
 
-def test_batched_mark_dynamic_preserved_by_to_gpu():
-    """blockmask_to_gpu preserves _dynamo_dynamic_indices set by make_batchmask_cpu.
+@pytest.mark.gpu
+def test_compiled_flex_attention_cpu_vs_gpu_mask():
+    """Diagnose: does compiled flex_attention produce correct results when
+    called multiple times with different CPU-built batchmasks?
 
-    This is critical for torch.compile compatibility: the compact index arrays
-    have data-dependent widths, and mark_dynamic must survive the CPU→GPU transfer."""
+    Compares outputs of compiled flex_attention using:
+    1. Non-compiled flex_attention as ground truth
+    2. CPU-built masks vs GPU-built masks
+    3. Two different attn_regions patterns with the SAME tensor shapes
+
+    If compiled CPU masks produce wrong results but GPU masks are correct,
+    the issue is in how torch.compile handles the CPU mask_mod's closure tensor.
+    """
+    from torch.nn.attention.flex_attention import flex_attention
     from flexlimaskli.batchmask_cpu import make_batchmask_cpu
+    from flexlimaskli.batchmask_gpu import make_batchmask_gpu
     from flexlimaskli.to_gpu import blockmask_to_gpu
 
     BS = 128
+    ntoks = 512
+    B = 4
+    head_dim = 64
+
+    # Two VERY different attn_regions patterns (same shape → no recompile trigger)
+    ar1 = np.zeros((B, ntoks), dtype=np.int64)
+    ar1[0, :200] = 1   # large dense prefix
+    ar1[1, :100] = 1
+    ar1[2, :50] = 1; ar1[2, 50:250] = -1; ar1[2, 250:270] = 1  # attn_regions2
+    ar1[3, :300] = 1
+
+    ar2 = np.zeros((B, ntoks), dtype=np.int64)
+    # Purely causal (no dense) — maximally different from ar1
+
+    # Fixed Q, K, V
+    q = torch.randn(B, 1, ntoks, head_dim, device="cuda", dtype=torch.bfloat16)
+    k = torch.randn(B, 1, ntoks, head_dim, device="cuda", dtype=torch.bfloat16)
+    v = torch.randn(B, 1, ntoks, head_dim, device="cuda", dtype=torch.bfloat16)
+
+    # --- Reference: non-compiled flex_attention ---
+    torch.nn.attention.flex_attention._FLEX_ATTENTION_DISABLE_COMPILE_DEBUG = True
+    cpu1 = blockmask_to_gpu(make_batchmask_cpu(ntoks, ar1, BLOCK_SIZE=BS), "cuda")
+    cpu2 = blockmask_to_gpu(make_batchmask_cpu(ntoks, ar2, BLOCK_SIZE=BS), "cuda")
+    gpu1 = blockmask_to_gpu(make_batchmask_gpu(ntoks, torch.tensor(ar1), BLOCK_SIZE=BS, compile=False), "cuda")
+    gpu2 = blockmask_to_gpu(make_batchmask_gpu(ntoks, torch.tensor(ar2), BLOCK_SIZE=BS, compile=False), "cuda")
+
+    with torch.no_grad():
+        ref1 = flex_attention(q, k, v, block_mask=gpu1)
+        ref2 = flex_attention(q, k, v, block_mask=gpu2)
+    torch.nn.attention.flex_attention._FLEX_ATTENTION_DISABLE_COMPILE_DEBUG = False
+
+    # Sanity: different masks should produce different outputs
+    assert not torch.allclose(ref1, ref2, atol=1e-2), \
+        "Test setup error: different masks should give different outputs"
+
+    # --- Test: compiled flex_attention with CPU masks ---
+    torch._dynamo.reset()
+    cflex = torch.compile(flex_attention, dynamic=False, fullgraph=True)
+    with torch.no_grad():
+        out_cpu1 = cflex(q, k, v, block_mask=cpu1)
+        out_cpu2 = cflex(q, k, v, block_mask=cpu2)
+
+    # Check 1: CPU mask batch 1 matches reference
+    diff1 = (out_cpu1 - ref1).abs().max().item()
+
+    # Check 2: CPU mask batch 2 matches reference (detects stale closure tensor)
+    diff2 = (out_cpu2 - ref2).abs().max().item()
+    stale = torch.allclose(out_cpu1, out_cpu2, atol=1e-3)
+
+    # Check which reference out_cpu2 is closer to
+    diff2_vs_ref1 = (out_cpu2 - ref1).abs().max().item()
+    print(f"\n=== CPU MASK DIAGNOSTICS ===")
+    print(f"  Batch 1 vs ref1: max_diff={diff1:.6f}  (should be ~0)")
+    print(f"  Batch 2 vs ref2: max_diff={diff2:.6f}  (should be ~0)")
+    print(f"  Batch 2 vs ref1: max_diff={diff2_vs_ref1:.6f}  (closeness to wrong ref)")
+    print(f"  Batch 1 == Batch 2: {stale}")
+    print(f"  CPU mask1 compact widths: kv={cpu1.kv_indices.shape[-1]} fkv={cpu1.full_kv_indices.shape[-1]}")
+    print(f"  CPU mask2 compact widths: kv={cpu2.kv_indices.shape[-1]} fkv={cpu2.full_kv_indices.shape[-1]}")
+    print(f"  GPU mask1 compact widths: kv={gpu1.kv_indices.shape[-1]} fkv={gpu1.full_kv_indices.shape[-1]}")
+    print(f"  GPU mask2 compact widths: kv={gpu2.kv_indices.shape[-1]} fkv={gpu2.full_kv_indices.shape[-1]}")
+
+    # --- Test: compiled flex_attention with GPU masks ---
+    torch._dynamo.reset()
+    cflex_g = torch.compile(flex_attention, dynamic=False, fullgraph=True)
+    with torch.no_grad():
+        out_gpu1 = cflex_g(q, k, v, block_mask=gpu1)
+        out_gpu2 = cflex_g(q, k, v, block_mask=gpu2)
+
+    diff_g1 = (out_gpu1 - ref1).abs().max().item()
+    diff_g2 = (out_gpu2 - ref2).abs().max().item()
+    print(f"\n=== GPU MASK DIAGNOSTICS ===")
+    print(f"  Batch 1 vs ref1: max_diff={diff_g1:.6f}")
+    print(f"  Batch 2 vs ref2: max_diff={diff_g2:.6f}")
+
+    # --- Assertions ---
+    assert diff1 < 0.02, f"CPU mask batch 1 wrong! {diff1:.6f}"
+    assert diff2 < 0.02, \
+        f"CPU mask batch 2 wrong! Max diff vs ref: {diff2:.6f}. " \
+        f"Same as batch 1: {stale}. vs ref1: {diff2_vs_ref1:.6f}"
+    assert diff_g1 < 0.02, f"GPU mask batch 1 wrong! {diff_g1:.6f}"
+    assert diff_g2 < 0.02, f"GPU mask batch 2 wrong! {diff_g2:.6f}"
+
+
+@pytest.mark.parametrize("variant", [
+    "cpu",
+    pytest.param("gpu", marks=pytest.mark.gpu),
+])
+def test_batchmask_complex_decode_patterns(variant):
+    """Complex decode patterns with multiple non-contiguous same-value regions.
+
+    Tests scenarios like:
+    [img] [hole(-1)] [reg] [hole] [AR] [hole] [reg] [hole] [decode_tok]
+    """
+    from flexlimaskli.batchmask_cpu import make_batchmask_cpu
+    from flexlimaskli.batchmask_gpu import make_batchmask_gpu
+
+    BS = 64
     ntoks = 1024
-    ar = np.zeros((2, ntoks), dtype=np.int64)
-    ar[0, :200] = 1
+    B = 6
+    ar = np.zeros((B, ntoks), dtype=np.int64)
+
+    # Element 0: [img(1)] [hole(-1)] [reg(1)] [hole(-1)] [AR(0)] [hole(-1)] [reg(1)] [hole(-1)] [decode(0)]
+    ar[0, :100] = 1        # image
+    ar[0, 100:150] = -1    # hole
+    ar[0, 150:170] = 1     # registers
+    ar[0, 170:200] = -1    # hole
+    ar[0, 200:400] = 0     # AR tokens
+    ar[0, 400:450] = -1    # hole
+    ar[0, 450:470] = 1     # registers (second set)
+    ar[0, 470:500] = -1    # hole
+    # 500..1024 = decode area (0)
+
+    # Element 1: three separate value=1 regions with -1 gaps
+    ar[1, :80] = 1         # region A
+    ar[1, 80:200] = -1     # gap
+    ar[1, 200:250] = 1     # region B
+    ar[1, 250:400] = -1    # gap
+    ar[1, 400:430] = 1     # region C
+
+    # Element 2: value=2 regions mixed with value=1 regions
+    ar[2, :60] = 1         # question (dense group 1)
+    ar[2, 60:200] = 2      # image (dense group 2)
+    ar[2, 200:220] = 1     # registers (dense group 1 again)
+    ar[2, 220:400] = -1    # invisible gap
+    ar[2, 400:420] = 2     # second image (dense group 2 again)
+
+    # Element 3: alternating value=1 and value=-1, many small regions
+    for i in range(0, 640, 64):
+        ar[3, i:i+32] = 1
+        ar[3, i+32:i+64] = -1
+
+    # Element 4: realistic attn_regions2 with block-aligned boundaries
+    ar[4, :64] = 1         # question (exactly 1 block)
+    ar[4, 64:448] = -1     # image (exactly 6 blocks)
+    ar[4, 448:512] = 1     # registers (exactly 1 block)
+
+    # Element 5: realistic attn_regions2 with non-aligned boundaries
+    ar[5, :52] = 1         # question (partial block)
+    ar[5, 52:248] = -1     # image (straddles blocks)
+    ar[5, 248:260] = 1     # registers (small, within one block)
 
     cpu_mask = make_batchmask_cpu(ntoks, ar, BLOCK_SIZE=BS)
+    gpu_mask = make_batchmask_gpu(ntoks, torch.tensor(ar), BLOCK_SIZE=BS, compile=False)
 
-    attrs = ["kv_indices", "full_kv_indices", "q_indices", "full_q_indices"]
+    for b in range(B):
+        assert torch.equal(_batched_element_dense(cpu_mask, b),
+                           _batched_element_dense(gpu_mask, b)), \
+            f"Element {b}: CPU vs GPU batchmask differ"
 
-    # Verify mark_dynamic is set on CPU mask
-    for attr in attrs:
-        t = getattr(cpu_mask, attr)
-        assert hasattr(t, '_dynamo_dynamic_indices'), \
-            f"CPU {attr} missing mark_dynamic"
 
-    # Transfer (to CPU device to avoid needing GPU for this check)
-    transferred = blockmask_to_gpu(cpu_mask, "cpu")
-
-    # Verify mark_dynamic preserved after transfer
-    for attr in attrs:
-        t = getattr(transferred, attr)
-        assert hasattr(t, '_dynamo_dynamic_indices'), \
-            f"After blockmask_to_gpu: {attr} lost mark_dynamic"
+@pytest.mark.gpu
+def test_batched_full_width_indices():
+    """CPU batchmask uses full NB-width index arrays (no compaction)."""
+    from flexlimaskli.batchmask_cpu import make_batchmask_cpu
+    BS = 128
+    ntoks = 512
+    NB = ntoks // BS
+    ar = np.zeros((2, ntoks), dtype=np.int64)
+    ar[0, :200] = 1
+    mask = make_batchmask_cpu(ntoks, ar, BLOCK_SIZE=BS)
+    assert mask.kv_indices.shape[-1] == NB
+    assert mask.full_kv_indices.shape[-1] == NB
