@@ -18,6 +18,7 @@ from bv2.data.tokenizer import get_tiktoken
 class Dataset:
     def __init__(self, ps=16, max_patches=16_384, rand_max_patches=None, nreg=0, include=[".*"], exclude=[], tokenizer=None, greyout_frac=0.0, seed=0, epochs=None):
         base_path = "/checkpoint/rigi/data/FineVision-1.0.1"
+        self._name = f"finevision({','.join(include)})"
 
         paths = []
         re_inc = [re.compile(p) for p in include]
@@ -118,6 +119,9 @@ class Dataset:
         if nreg:  # Only add if needed, because mask creation is expensive.
             example["attn_regions2"] = np.r_[1, [1] * npre, 1, [-1] * nimg, [1] * nreg, [0] * nsuf].astype(np.int64)
         return pp.sanity_check(example)
+
+    def __str__(self):
+        return self._name
 
     def make_exids(self, **kw):
         yield from shuffled_iota_exids(len(self.reader), epochs=self.epochs, **kw)

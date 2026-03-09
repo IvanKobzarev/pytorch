@@ -20,6 +20,7 @@ PATH = "/checkpoint/rigi/data/{split}.bag"
 
 class Dataset:
     def __init__(self, split, basepath=PATH, ps=16, max_patches=16_384, rand_max_patches=None, nreg=0, greyout_frac=0.0, tokenizer=None, qfmt="{q}", lower_q=False, lower_a=False, seed=0, epochs=None):
+        self._name = f"vqa({split})"
         self.reader = get_bagz_reader(basepath.format(split=split))
         self.ps = dict(ph=ps, pw=ps)
         self.max_patches = max_patches
@@ -87,6 +88,9 @@ class Dataset:
             # regonly
             # example["attn_regions2"] = np.r_[-1, [-1] * npre, -1, [-1] * nimg, [1] * nreg, 1, [0] * nsuf, 0].astype(np.int64)
         return pp.sanity_check(example)
+
+    def __str__(self):
+        return self._name
 
     def make_exids(self, **kw):
         yield from shuffled_iota_exids(len(self.reader), epochs=self.epochs, **kw)

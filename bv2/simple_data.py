@@ -37,7 +37,12 @@ def data_iter(ds, *, maxtok, device, seed=0, rank=0, world_size=1, resume={}, pa
 
     def make_example(exid_and_state_after):
         make_example_kw, state_after = exid_and_state_after
-        return {**ds.make_example(**make_example_kw), "state_after": state_after}
+        try:
+            return {**ds.make_example(**make_example_kw), "state_after": state_after}
+        except Exception as e:
+            kw = ", ".join(f"{k}={v!r}" for k, v in make_example_kw.items())
+            e.add_note(f"{ds} make_example({kw})")
+            raise
 
     def cpu_data_gen():
         ex_gen = pmap(make_exids(), make_example, n_prefetch=pmap_chunksz, n_threads=pmap_threads)
