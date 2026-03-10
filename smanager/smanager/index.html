@@ -1749,7 +1749,6 @@
                 <span class="xid-btn ${favorites.has(xid) ? 'active' : ''}" onclick="toggleFavoriteDetail('${xid}')" title="Favorite">${favorites.has(xid) ? '❤︎' : '♡'}</span>
                 <span class="xid-btn fa-icon" onclick="window.open('${serverUrl}/code/${xid}', '_blank')" title="Browse source code">🗎</span>
                 <span class="xid-btn fa-icon" onclick="window.open('${serverUrl}/files/${xid}', '_blank')" title="Browse workdir">🗁</span>
-                <span class="xid-btn fa-icon" onclick="stopXid('${serverUrl}', '${xid}')" title="Stop all jobs (scancel -n ${xid})">⏹</span>
                 ${!hasActiveJobs ? `<span class="xid-btn" onclick="deleteXidDetail('${serverUrl}', ${serverIdx}, '${xid}')" title="Delete ${xid}">🗑</span>` : ''}
                 <span class="xid-note ${note ? 'has-note' : ''}" onclick="editXidNote(this, ${serverIdx}, '${xid}', '${escapedNote}')">${note || '<span style="opacity:0.3">click to add note</span>'}</span>
             `;
@@ -1913,9 +1912,12 @@
             if (!restartBtn || !stopBtn || !requeueBtn) return;
 
             if (selectedRows.length === 0) {
-                requeueBtn.classList.remove('enabled');
-                restartBtn.classList.remove('enabled');
-                stopBtn.classList.remove('enabled');
+                requeueBtn.classList.add('enabled');
+                restartBtn.classList.add('enabled');
+                stopBtn.classList.add('enabled');
+                requeueBtn.title = 'Requeue all running runs';
+                restartBtn.title = 'Start all non-active runs';
+                stopBtn.title = 'Stop all active runs';
                 return;
             }
 
@@ -1934,6 +1936,9 @@
             requeueBtn.classList.toggle('enabled', allCanRequeue);
             restartBtn.classList.toggle('enabled', allCanRestart);
             stopBtn.classList.toggle('enabled', allCanStop);
+            requeueBtn.title = 'Requeue selected';
+            restartBtn.title = 'Restart selected';
+            stopBtn.title = 'Stop selected';
         }
 
         function bulkFlattli() {
@@ -1956,15 +1961,26 @@
 
         async function bulkStop() {
             if (!document.getElementById('bulkStopBtn').classList.contains('enabled')) return;
-            const selectedRows = [...document.querySelectorAll('#xidContent tbody tr.row-selected')].filter(r => r.style.display !== 'none');
-            const jids = selectedRows.map(r => r.dataset.jid);
-            if (!confirm(`Stop ${jids.length} job(s)?`)) return;
-
             const serverIdx = document.getElementById('xidServer').value;
             const serverUrl = servers[serverIdx]?.url || '';
+            const selectedRows = [...document.querySelectorAll('#xidContent tbody tr.row-selected')].filter(r => r.style.display !== 'none');
 
-            document.body.style.cursor = 'wait';
-            await Promise.all(jids.map(jid => fetch(`${serverUrl}/api/action/stop/${jid}`, { method: 'POST' })));
+            if (selectedRows.length === 0) {
+                const xid = document.getElementById('xidInput').value;
+                if (!xid) return;
+                const activeStatuses = ['RUNNING', 'PENDING', 'REQUEUE_HOLD', 'COMPLETING'];
+                const n = (currentXidData?.wus || []).filter(wu => activeStatuses.includes(wu.status)).length;
+                if (n === 0) { alert('No active runs to stop'); return; }
+                if (!confirm(`Stop all ${n} active run(s)?`)) return;
+                document.body.style.cursor = 'wait';
+                await fetch(`${serverUrl}/api/action/stop_xid/${xid}`, { method: 'POST' });
+            } else {
+                const jids = selectedRows.map(r => r.dataset.jid);
+                if (!confirm(`Stop ${jids.length} selected run(s)?`)) return;
+                document.body.style.cursor = 'wait';
+                await Promise.all(jids.map(jid => fetch(`${serverUrl}/api/action/stop/${jid}`, { method: 'POST' })));
+            }
+
             document.body.style.cursor = '';
             document.getElementById('rowFilterInput').value = '';
             loadXidDetail();
@@ -1972,12 +1988,22 @@
 
         async function bulkRequeue() {
             if (!document.getElementById('bulkRequeueBtn').classList.contains('enabled')) return;
-            const selectedRows = [...document.querySelectorAll('#xidContent tbody tr.row-selected')].filter(r => r.style.display !== 'none');
-            const jids = selectedRows.map(r => r.dataset.jid);
-            if (!confirm(`Requeue ${jids.length} job(s)?`)) return;
-
             const serverIdx = document.getElementById('xidServer').value;
             const serverUrl = servers[serverIdx]?.url || '';
+            const selectedRows = [...document.querySelectorAll('#xidContent tbody tr.row-selected')].filter(r => r.style.display !== 'none');
+
+            let jids;
+            if (selectedRows.length === 0) {
+                const requeueStatuses = ['RUNNING', 'REQUEUE_HOLD', 'COMPLETING'];
+                jids = (currentXidData?.wus || [])
+                    .filter(wu => requeueStatuses.includes(wu.status) && wu.jid)
+                    .map(wu => wu.jid);
+                if (jids.length === 0) { alert('No running runs to requeue'); return; }
+                if (!confirm(`Requeue all ${jids.length} running run(s)?`)) return;
+            } else {
+                jids = selectedRows.map(r => r.dataset.jid);
+                if (!confirm(`Requeue ${jids.length} selected run(s)?`)) return;
+            }
 
             document.body.style.cursor = 'wait';
             await Promise.all(jids.map(jid => fetch(`${serverUrl}/api/action/requeue/${jid}`, { method: 'POST' })));
@@ -1988,19 +2014,25 @@
 
         async function bulkRestart() {
             if (!document.getElementById('bulkRestartBtn').classList.contains('enabled')) return;
-            const selectedRows = [...document.querySelectorAll('#xidContent tbody tr.row-selected')].filter(r => r.style.display !== 'none');
-            const wids = selectedRows.map(r => r.dataset.wid);
-            const wuMap = Object.fromEntries((currentXidData?.wus || []).map(wu => [String(wu.wid), wu]));
-            const scripts = wids.map(wid => wuMap[wid]?.launch_script).filter(Boolean);
-
-            if (scripts.length !== wids.length) {
-                alert('Some selected jobs cannot be restarted');
-                return;
-            }
-            if (!confirm(`Restart ${scripts.length} job(s)?`)) return;
-
             const serverIdx = document.getElementById('xidServer').value;
             const serverUrl = servers[serverIdx]?.url || '';
+            const wuMap = Object.fromEntries((currentXidData?.wus || []).map(wu => [String(wu.wid), wu]));
+            const selectedRows = [...document.querySelectorAll('#xidContent tbody tr.row-selected')].filter(r => r.style.display !== 'none');
+
+            let scripts;
+            if (selectedRows.length === 0) {
+                const activeStatuses = ['RUNNING', 'PENDING', 'REQUEUE_HOLD', 'COMPLETING'];
+                scripts = (currentXidData?.wus || [])
+                    .filter(wu => !activeStatuses.includes(wu.status) && wu.status !== 'UNKNOWN' && wu.launch_script)
+                    .map(wu => wu.launch_script);
+                if (scripts.length === 0) { alert('No non-active runs to start'); return; }
+                if (!confirm(`Start all ${scripts.length} non-active run(s)?`)) return;
+            } else {
+                const wids = selectedRows.map(r => r.dataset.wid);
+                scripts = wids.map(wid => wuMap[wid]?.launch_script).filter(Boolean);
+                if (scripts.length !== wids.length) { alert('Some selected jobs cannot be restarted'); return; }
+                if (!confirm(`Start ${scripts.length} selected run(s)?`)) return;
+            }
 
             document.body.style.cursor = 'wait';
             await Promise.all(scripts.map(script => fetch(`${serverUrl}/api/action/resume?script=${encodeURIComponent(script)}`, { method: 'POST' })));
