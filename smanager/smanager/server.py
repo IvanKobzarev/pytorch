@@ -877,7 +877,7 @@ def get_xid_info(xid: str):
             "name": config.get("name", ""),
             "qwait": qwait,
             "runtime": hms(elapsed),
-            "workdir": str(config.get("workdir", "")),
+            "workdir": f"{wd_path.name}/{config['_wuwd_name']}" if "_wuwd_name" in config else "",
             "launch_script": str(wd_path / f"launch_{wid}.sh"),
             "warnings": warnings.get(wid, []),
         })

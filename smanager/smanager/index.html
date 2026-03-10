@@ -1948,7 +1948,7 @@
                 const runs = selectedRows.map(r => {
                     const wid = r.dataset.wid;
                     const wu = wuMap[wid];
-                    return wu ? `${xid}/${wu.name}` : null;
+                    return wu?.workdir || null;
                 }).filter(Boolean);
                 window.open(`${baseUrl}?${runs.map(r => 'run=' + r).join('&')}`, '_blank');
             }
