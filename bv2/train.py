@@ -635,6 +635,18 @@ def load_ckpt(path, model, optim, weights_only=False):
 
     prints0(f"Resuming from {path}")
 
+    # Workaround for Python 3.13 + PyTorch DCP bug:
+    # https://fb.workplace.com/groups/319878845696681/permalink/1657362868614932/
+    _orig_wrap = dcp.utils._wrap_exception
+    def _wrap_exception_fixed(exc):
+        result = _orig_wrap(exc)
+        for frame in result[1]:  # result is (exc, StackSummary)
+            if hasattr(frame, '_code'):
+                object.__setattr__(frame, '_code', None)
+        return result
+    dcp.utils._wrap_exception = _wrap_exception_fixed
+    # Workaround end.
+
     # We `allow_partial_load` because...
     dcp.load(
         {"model": ModelState(model)} | ({} if weights_only else {"optim": OptimState(model, optim)}),
