@@ -174,9 +174,9 @@ def make_docmask_gpu_v3(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, SUPER
     Uses compact (NB, max_per_row) index arrays instead of (NB, NB).
 
     max_per_row: controls index array column width.
-      None: computed from data (shapes vary — breaks torch.compile).
-      "dynamic": computed from data, dims marked dynamic via mark_dynamic.
+      "dynamic" (default): computed from data, dims marked dynamic via mark_dynamic.
       int: fixed width (asserts if too small). Use for torch.compile(dynamic=False).
+      None: computed from data (shapes vary, no mark_dynamic).
     """
     attn_regions = torch.as_tensor(attn_regions)
     document_ids = torch.as_tensor(document_ids)

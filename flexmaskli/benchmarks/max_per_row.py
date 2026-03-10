@@ -1,12 +1,10 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
-Comprehensive benchmark: compact=True vs compact=False for both batchmask and docmask.
-
-Measures CPU mask creation time and memory for diverse scenarios.
+Benchmark docmask max_per_row modes (dynamic/auto/fixed) and batchmask reference.
 
 Usage:
-    NCCL_SOCKET_IFNAME=lo python -m flexmaskli.benchmarks.compact_vs_fullwidth
-    NCCL_SOCKET_IFNAME=lo python -m flexmaskli.benchmarks.compact_vs_fullwidth --gpu
+    NCCL_SOCKET_IFNAME=lo python -m flexmaskli.benchmarks.max_per_row
+    NCCL_SOCKET_IFNAME=lo python -m flexmaskli.benchmarks.max_per_row --gpu
 """
 
 import argparse
@@ -42,8 +40,6 @@ def widths(mask):
                  ["kv_indices", "full_kv_indices", "q_indices", "full_q_indices"])
 
 
-# ---- Batchmask scenarios ----
-
 def batchmask_scenarios():
     scenarios = []
     for ntoks in [512, 1024, 2048, 4096, 8192]:
@@ -76,8 +72,6 @@ def batchmask_scenarios():
             scenarios.append((f"variable-{ntoks}-B{B}", ntoks, ar))
     return scenarios
 
-
-# ---- Docmask scenarios ----
 
 def docmask_scenarios():
     scenarios = []
@@ -115,112 +109,87 @@ if __name__ == "__main__":
     from flexmaskli.batchmask_cpu import make_batchmask_cpu
     from flexmaskli.docmask_cpu import make_docmask_cpu
 
-    # Warmup
     print("Warming up numba...", end="", flush=True)
     ar_w = np.zeros((1, 1024), dtype=np.int64); ar_w[0, :300] = 1
     make_batchmask_cpu(1024, ar_w, BLOCK_SIZE=args.block)
-    make_batchmask_cpu(1024, ar_w, BLOCK_SIZE=args.block, compact=True)
     di_w = torch.zeros(8192, dtype=torch.int64); ar_dw = torch.zeros(8192, dtype=torch.int32)
-    make_docmask_cpu(8192, ar_dw, di_w, BLOCK_SIZE=args.block)
-    make_docmask_cpu(8192, ar_dw, di_w, BLOCK_SIZE=args.block, compact=True)
+    make_docmask_cpu(8192, ar_dw, di_w, BLOCK_SIZE=args.block, max_per_row="dynamic")
+    make_docmask_cpu(8192, ar_dw, di_w, BLOCK_SIZE=args.block, max_per_row=None)
+    make_docmask_cpu(8192, ar_dw, di_w, BLOCK_SIZE=args.block, max_per_row=8192 // args.block)
     print(" done.\n")
 
-    # ---- Batchmask ----
-    print("=" * 100)
-    print("BATCHMASK (batched single-doc decode masks, B > 1)")
-    print("=" * 100)
+    print("=" * 110)
+    print("BATCHMASK (reference, fixed NB width)")
+    print("=" * 110)
 
     b_scenarios = batchmask_scenarios()
-    hdr = f"{'scenario':<22s}  {'full_ms':>7s}  {'comp_ms':>7s}  {'ratio':>6s}  {'full_KB':>8s}  {'comp_KB':>8s}  {'mem%':>6s}  {'NB':>3s}  {'comp_w':>6s}"
+    hdr = f"{'scenario':<22s}  {'ms':>7s}  {'mem_KB':>8s}  {'NB':>3s}  {'w':>4s}"
     print(hdr)
     print("-" * len(hdr))
-
     for name, ntoks, ar in b_scenarios:
         NB = (ntoks + args.block - 1) // args.block
-        t_f = bench_one(lambda ar=ar: make_batchmask_cpu(ntoks, ar, BLOCK_SIZE=args.block), args.runs)
-        t_c = bench_one(lambda ar=ar: make_batchmask_cpu(ntoks, ar, BLOCK_SIZE=args.block, compact=True), args.runs)
-        m_f = make_batchmask_cpu(ntoks, ar, BLOCK_SIZE=args.block)
-        m_c = make_batchmask_cpu(ntoks, ar, BLOCK_SIZE=args.block, compact=True)
-        mem_f = index_memory_bytes(m_f) / 1024
-        mem_c = index_memory_bytes(m_c) / 1024
-        w_c = widths(m_c)[0]
-        print(f"{name:<22s}  {t_f:>5.1f}ms  {t_c:>5.1f}ms  {t_c/t_f:>5.2f}x  {mem_f:>6.1f}KB  {mem_c:>6.1f}KB  {mem_c/mem_f*100:>5.1f}%  {NB:>3d}  {w_c:>6d}")
+        t = bench_one(lambda ar=ar: make_batchmask_cpu(ntoks, ar, BLOCK_SIZE=args.block), args.runs)
+        m = make_batchmask_cpu(ntoks, ar, BLOCK_SIZE=args.block)
+        mem = index_memory_bytes(m) / 1024
+        w = widths(m)[0]
+        print(f"{name:<22s}  {t:>5.1f}ms  {mem:>6.1f}KB  {NB:>3d}  {w:>4d}")
 
-    # ---- Docmask ----
     print()
-    print("=" * 100)
-    print("DOCMASK (packed multi-doc training masks, B = 1)")
-    print("=" * 100)
+    print("=" * 110)
+    print("DOCMASK (max_per_row modes)")
+    print("=" * 110)
 
     d_scenarios = docmask_scenarios()
-    hdr = f"{'scenario':<22s}  {'full_ms':>8s}  {'comp_ms':>8s}  {'ratio':>6s}  {'full_KB':>9s}  {'comp_KB':>9s}  {'mem%':>6s}  {'NB':>5s}  {'comp_w':>6s}"
+    hdr = (
+        f"{'scenario':<22s}  "
+        f"{'dyn_ms':>7s}  {'auto_ms':>7s}  {'fixed_ms':>8s}  "
+        f"{'dyn_KB':>8s}  {'auto_KB':>8s}  {'fixed_KB':>9s}  "
+        f"{'NB':>5s}  {'dyn_w':>6s}  {'auto_w':>6s}"
+    )
     print(hdr)
     print("-" * len(hdr))
 
     for name, ntoks, ar, di in d_scenarios:
         NB = (ntoks + args.block - 1) // args.block
-        t_f = bench_one(lambda: make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=args.block), args.runs)
-        t_c = bench_one(lambda: make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=args.block, compact=True), args.runs)
-        m_f = make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=args.block)
-        m_c = make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=args.block, compact=True)
-        mem_f = index_memory_bytes(m_f) / 1024
-        mem_c = index_memory_bytes(m_c) / 1024
-        w_c = widths(m_c)[0]
-        print(f"{name:<22s}  {t_f:>6.1f}ms  {t_c:>6.1f}ms  {t_c/t_f:>5.2f}x  {mem_f:>7.1f}KB  {mem_c:>7.1f}KB  {mem_c/mem_f*100:>5.1f}%  {NB:>5d}  {w_c:>6d}")
+        t_dyn = bench_one(lambda: make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=args.block, max_per_row="dynamic"), args.runs)
+        t_auto = bench_one(lambda: make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=args.block, max_per_row=None), args.runs)
+        t_fix = bench_one(lambda: make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=args.block, max_per_row=NB), args.runs)
+
+        m_dyn = make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=args.block, max_per_row="dynamic")
+        m_auto = make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=args.block, max_per_row=None)
+        m_fix = make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=args.block, max_per_row=NB)
+
+        mem_dyn = index_memory_bytes(m_dyn) / 1024
+        mem_auto = index_memory_bytes(m_auto) / 1024
+        mem_fix = index_memory_bytes(m_fix) / 1024
+        w_dyn = widths(m_dyn)[0]
+        w_auto = widths(m_auto)[0]
+        print(
+            f"{name:<22s}  "
+            f"{t_dyn:>5.1f}ms  {t_auto:>5.1f}ms  {t_fix:>6.1f}ms  "
+            f"{mem_dyn:>6.1f}KB  {mem_auto:>6.1f}KB  {mem_fix:>7.1f}KB  "
+            f"{NB:>5d}  {w_dyn:>6d}  {w_auto:>6d}"
+        )
 
     if args.gpu:
         print()
-        print("=" * 100)
-        print("GPU COMPILED FLEX_ATTENTION KERNEL TIME")
-        print("=" * 100)
+        print("=" * 110)
+        print("GPU COMPILED FLEX_ATTENTION KERNEL TIME (docmask dynamic vs fixed)")
+        print("=" * 110)
         from torch.nn.attention.flex_attention import flex_attention
         from flexmaskli.to_gpu import blockmask_to_gpu
         head_dim = 64
 
-        # Batchmask GPU
-        print("\nBatchmask GPU:")
-        gpu_bm = [(n, nt, ar) for n, nt, ar in b_scenarios
-                   if any(x in n for x in ["decode-1024-B4", "decode-4096-B16",
-                                             "ar2-1024-B16", "variable-4096-B32"])]
-        print(f"{'scenario':<22s}  {'full_ms':>8s}  {'compact_ms':>10s}")
-        print("-" * 46)
-        for name, ntoks, ar in gpu_bm:
-            B = ar.shape[0]
-            q = torch.randn(B, 1, ntoks, head_dim, device="cuda", dtype=torch.bfloat16)
-            k = torch.randn(B, 1, ntoks, head_dim, device="cuda", dtype=torch.bfloat16)
-            v = torch.randn(B, 1, ntoks, head_dim, device="cuda", dtype=torch.bfloat16)
-            results = {}
-            for label, kw in [("full", {}), ("compact", {"compact": True})]:
-                mask = blockmask_to_gpu(make_batchmask_cpu(ntoks, ar, BLOCK_SIZE=args.block, **kw), "cuda")
-                torch._dynamo.reset()
-                cflex = torch.compile(flex_attention, dynamic=False, fullgraph=True)
-                with torch.no_grad():
-                    for _ in range(3):
-                        cflex(q, k, v, block_mask=mask)
-                torch.cuda.synchronize()
-                ts = []
-                with torch.no_grad():
-                    for _ in range(args.runs):
-                        torch.cuda.synchronize()
-                        t0 = time.monotonic_ns()
-                        cflex(q, k, v, block_mask=mask)
-                        torch.cuda.synchronize()
-                        ts.append((time.monotonic_ns() - t0) / 1_000_000)
-                results[label] = np.median(ts)
-            print(f"{name:<22s}  {results['full']:>6.1f}ms  {results['compact']:>8.1f}ms")
-
-        # Docmask GPU
-        print("\nDocmask GPU:")
         gpu_dm = [(n, nt, ar, di) for n, nt, ar, di in d_scenarios
-                   if any(x in n for x in ["doc-8k-med", "doc-32k-short", "doc-32k-med"])]
-        print(f"{'scenario':<22s}  {'full_ms':>8s}  {'compact_ms':>10s}")
+                  if any(x in n for x in ["doc-8k-med", "doc-32k-short", "doc-32k-med"])]
+        print(f"{'scenario':<22s}  {'dynamic_ms':>10s}  {'fixed_ms':>8s}")
         print("-" * 46)
         for name, ntoks, ar, di in gpu_dm:
             q = torch.randn(1, 1, ntoks, head_dim, device="cuda", dtype=torch.bfloat16)
             k = torch.randn(1, 1, ntoks, head_dim, device="cuda", dtype=torch.bfloat16)
             v = torch.randn(1, 1, ntoks, head_dim, device="cuda", dtype=torch.bfloat16)
             results = {}
-            for label, kw in [("full", {}), ("compact", {"compact": True})]:
+            for label, kw in [("dynamic", {"max_per_row": "dynamic"}), ("fixed", {"max_per_row": (ntoks + args.block - 1) // args.block})]:
                 mask = blockmask_to_gpu(make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=args.block, **kw), "cuda")
                 torch._dynamo.reset()
                 cflex = torch.compile(flex_attention, dynamic=False, fullgraph=True)
@@ -237,4 +206,4 @@ if __name__ == "__main__":
                         torch.cuda.synchronize()
                         ts.append((time.monotonic_ns() - t0) / 1_000_000)
                 results[label] = np.median(ts)
-            print(f"{name:<22s}  {results['full']:>6.1f}ms  {results['compact']:>8.1f}ms")
+            print(f"{name:<22s}  {results['dynamic']:>8.1f}ms  {results['fixed']:>6.1f}ms")

@@ -362,13 +362,25 @@ def test_stable_shapes_numpy():
     ar_b = torch.zeros(ntoks, dtype=torch.int32)
 
     for mpr in [NB, "dynamic"]:
-        mask_a = ufn.make_docmask_numpy(ntoks, ar_a, doc_a, BLOCK_SIZE=BS, max_per_row=mpr, compact=False)
-        mask_b = ufn.make_docmask_numpy(ntoks, ar_b, doc_b, BLOCK_SIZE=BS, max_per_row=mpr, compact=False)
+        mask_a = ufn.make_docmask_numpy(ntoks, ar_a, doc_a, BLOCK_SIZE=BS, max_per_row=mpr)
+        mask_b = ufn.make_docmask_numpy(ntoks, ar_b, doc_b, BLOCK_SIZE=BS, max_per_row=mpr)
         if mpr == "dynamic":
             continue  # shapes may differ, just verify no crash
         for attr in ["kv_indices", "full_kv_indices", "q_indices", "full_q_indices"]:
             assert getattr(mask_a, attr).shape == getattr(mask_b, attr).shape, \
                 f"numpy mpr={mpr}: {attr} shape differs"
+
+
+def test_max_per_row_too_small_raises():
+    import flexmaskli.docmask_cpu as ufn
+    BS = 128
+    ntoks = 1024
+    di = torch.zeros(ntoks, dtype=torch.int64)
+    ar = torch.zeros(ntoks, dtype=torch.int32)
+    with pytest.raises(AssertionError, match="max_per_row=.*too small"):
+        ufn.make_docmask_numpy(ntoks, ar, di, BLOCK_SIZE=BS, max_per_row=1)
+    with pytest.raises(AssertionError, match="max_per_row=.*too small"):
+        ufn.make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=BS, max_per_row=1)
 
 
 @pytest.mark.gpu
@@ -393,8 +405,10 @@ def test_v3_cross_superblock_max_per_row():
     v3_nb = uf.make_docmask_gpu_v3(ntoks, att, ids, BLOCK_SIZE=BS, SUPERBLOCK_SIZE=SB, max_per_row=NB, compile=False)
     compare_block_masks(ref, v3_nb)
 
-    # v3 with auto-computed max_per_row
-    v3_auto = uf.make_docmask_gpu_v3(ntoks, att, ids, BLOCK_SIZE=BS, SUPERBLOCK_SIZE=SB, compile=False)
+    # v3 with auto-computed max_per_row (no mark_dynamic)
+    v3_auto = uf.make_docmask_gpu_v3(
+        ntoks, att, ids, BLOCK_SIZE=BS, SUPERBLOCK_SIZE=SB, max_per_row=None, compile=False
+    )
     compare_block_masks(ref, v3_auto)
 
 
@@ -828,8 +842,8 @@ def test_compiled_flex_attention_docmask_cpu_dynamic():
 
 
 @pytest.mark.gpu
-def test_compiled_flex_attention_docmask_compact():
-    """Verify compact=True produces correct results under compiled flex_attention."""
+def test_compiled_flex_attention_docmask_dynamic():
+    """Verify max_per_row=\"dynamic\" works under compiled flex_attention."""
     from torch.nn.attention.flex_attention import flex_attention
     from flexmaskli.docmask_cpu import make_docmask_cpu
     from flexmaskli.to_gpu import blockmask_to_gpu
@@ -845,10 +859,10 @@ def test_compiled_flex_attention_docmask_compact():
     di2 = torch.tensor([i // 64 for i in range(ntoks)], dtype=torch.int64)
     ar2 = torch.zeros(ntoks, dtype=torch.int32)
 
-    cpu1 = make_docmask_cpu(ntoks, ar1, di1, BLOCK_SIZE=BS, compact=True)
-    cpu2 = make_docmask_cpu(ntoks, ar2, di2, BLOCK_SIZE=BS, compact=True)
+    cpu1 = make_docmask_cpu(ntoks, ar1, di1, BLOCK_SIZE=BS, max_per_row="dynamic")
+    cpu2 = make_docmask_cpu(ntoks, ar2, di2, BLOCK_SIZE=BS, max_per_row="dynamic")
 
-    # Verify compact uses smaller width and has mark_dynamic
+    # Verify dynamic uses smaller width and has mark_dynamic
     assert cpu1.kv_indices.shape[-1] <= ntoks // BS
     assert hasattr(cpu1.kv_indices, '_dynamo_dynamic_indices')
 
@@ -877,12 +891,12 @@ def test_compiled_flex_attention_docmask_compact():
 
     diff1 = (out1 - ref1).abs().max().item()
     diff2 = (out2 - ref2).abs().max().item()
-    assert diff1 < 0.02, f"compact=True call 1 wrong: {diff1:.6f}"
-    assert diff2 < 0.02, f"compact=True call 2 wrong: {diff2:.6f}"
+    assert diff1 < 0.02, f"max_per_row=dynamic call 1 wrong: {diff1:.6f}"
+    assert diff2 < 0.02, f"max_per_row=dynamic call 2 wrong: {diff2:.6f}"
 
 
-def test_docmask_compact_shapes():
-    """compact=True (default) uses auto-computed width; compact=False uses NB width."""
+def test_docmask_max_per_row_shapes():
+    """dynamic/auto/fixed max_per_row modes have expected shape+marking behavior."""
     import flexmaskli.docmask_cpu as ufn
     BS = 128
     ntoks = 4096
@@ -891,10 +905,13 @@ def test_docmask_compact_shapes():
     di = torch.tensor([i // 64 for i in range(ntoks)], dtype=torch.int64)
     ar = torch.zeros(ntoks, dtype=torch.int32)
 
-    full = ufn.make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=BS, compact=False)
-    comp = ufn.make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=BS)  # compact=True by default
+    full = ufn.make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=BS, max_per_row=NB)
+    auto = ufn.make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=BS, max_per_row=None)
+    comp = ufn.make_docmask_cpu(ntoks, ar, di, BLOCK_SIZE=BS)  # default: "dynamic"
 
     assert full.kv_indices.shape[-1] == NB
+    assert auto.kv_indices.shape[-1] <= NB
     assert comp.kv_indices.shape[-1] <= NB
+    assert not hasattr(auto.kv_indices, '_dynamo_dynamic_indices')
     assert hasattr(comp.kv_indices, '_dynamo_dynamic_indices')
     assert not hasattr(full.kv_indices, '_dynamo_dynamic_indices')

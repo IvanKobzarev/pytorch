@@ -195,32 +195,28 @@ def _compute_segments_and_mpr(di, ntoks, BS, NB, max_per_row):
         per_block[fb:lb+1] += seg_block_spans[si]
     needed_mpr = int(per_block.max()) if len(per_block) > 0 else 1
     if isinstance(max_per_row, int):
-        mpr = max(max_per_row, needed_mpr)
-    else:
+        assert needed_mpr <= max_per_row, f"max_per_row={max_per_row} too small, need {needed_mpr}"
+        mpr = max_per_row
+    else:  # None or "dynamic"
         mpr = needed_mpr
     return seg_starts, seg_ends, mpr
 
 
-def _apply_dynamic(mask, max_per_row):
-    if max_per_row == "dynamic":
-        d = mask.kv_indices.ndim - 1
-        torch._dynamo.mark_dynamic(mask.kv_indices, d)
-        torch._dynamo.mark_dynamic(mask.full_kv_indices, d)
-        torch._dynamo.mark_dynamic(mask.q_indices, d)
-        torch._dynamo.mark_dynamic(mask.full_q_indices, d)
+def _apply_dynamic(mask):
+    d = mask.kv_indices.ndim - 1
+    torch._dynamo.mark_dynamic(mask.kv_indices, d)
+    torch._dynamo.mark_dynamic(mask.full_kv_indices, d)
+    torch._dynamo.mark_dynamic(mask.q_indices, d)
+    torch._dynamo.mark_dynamic(mask.full_q_indices, d)
 
 
 # ---------------------------------------------------------------------------
 # make_docmask_numba — numba JIT path
 # ---------------------------------------------------------------------------
 
-def make_docmask_numba(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_per_row=None, max_dense=32, compact=True):
+def make_docmask_numba(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_per_row="dynamic", max_dense=32):
     assert HAS_NUMBA, "numba is required for make_docmask_numba"
     ar, di, BS, NB, ntoks, seq_len = _prepare_inputs(ntoks, attn_regions, document_ids, BLOCK_SIZE)
-    if compact:
-        max_per_row = "dynamic"
-    elif max_per_row is None:
-        max_per_row = NB
     seg_starts, seg_ends, mpr = _compute_segments_and_mpr(di, ntoks, BS, NB, max_per_row)
 
     kv_num, kv_idx, fkv_num, fkv_idx, q_num, q_idx, fq_num, fq_idx = \
@@ -242,14 +238,8 @@ def make_docmask_numba(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_pe
         mask_mod=mask_mod,
         seq_lengths=(seq_len, seq_len),
     )
-    if compact:
-        d = mask.kv_indices.ndim - 1
-        torch._dynamo.mark_dynamic(mask.kv_indices, d)
-        torch._dynamo.mark_dynamic(mask.full_kv_indices, d)
-        torch._dynamo.mark_dynamic(mask.q_indices, d)
-        torch._dynamo.mark_dynamic(mask.full_q_indices, d)
-    elif max_per_row == "dynamic":
-        _apply_dynamic(mask, max_per_row)
+    if max_per_row == "dynamic":
+        _apply_dynamic(mask)
     return mask
 
 
@@ -257,7 +247,7 @@ def make_docmask_numba(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_pe
 # make_docmask_numpy — pure numpy path
 # ---------------------------------------------------------------------------
 
-def make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_per_row=None, compact=True):
+def make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_per_row="dynamic"):
     ar, di, BS, NB, ntoks, seq_len = _prepare_inputs(ntoks, attn_regions, document_ids, BLOCK_SIZE)
 
     partial_sets = [set() for _ in range(NB)]
@@ -266,10 +256,6 @@ def make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_pe
     if ntoks == 0:
         return _build_blockmask(partial_sets, full_sets, NB, BS, seq_len, ar, di, 1)
 
-    if compact:
-        max_per_row = "dynamic"
-    elif max_per_row is None:
-        max_per_row = NB
     seg_starts, seg_ends, mpr = _compute_segments_and_mpr(di, ntoks, BS, NB, max_per_row)
 
     for si in range(len(seg_starts)):
@@ -332,14 +318,8 @@ def make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_pe
                     partial_sets[qb].add(kvb)
 
     mask = _build_blockmask(partial_sets, full_sets, NB, BS, seq_len, ar, di, mpr)
-    if compact:
-        d = mask.kv_indices.ndim - 1
-        torch._dynamo.mark_dynamic(mask.kv_indices, d)
-        torch._dynamo.mark_dynamic(mask.full_kv_indices, d)
-        torch._dynamo.mark_dynamic(mask.q_indices, d)
-        torch._dynamo.mark_dynamic(mask.full_q_indices, d)
-    elif max_per_row == "dynamic":
-        _apply_dynamic(mask, max_per_row)
+    if max_per_row == "dynamic":
+        _apply_dynamic(mask)
     return mask
 
 
@@ -347,27 +327,23 @@ def make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_pe
 # make_docmask_cpu — dispatcher
 # ---------------------------------------------------------------------------
 
-def make_docmask_cpu(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_per_row=None, max_dense=32, compact=True):
+def make_docmask_cpu(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_per_row="dynamic", max_dense=32):
     """CPU document mask for packed multi-document sequences.
 
-    compact: if True (default), auto-compute the minimum index width needed
-        and use mark_dynamic so torch.compile doesn't recompile when the width
-        changes between batches.  This gives large speedups and memory savings
-        for long sequences (e.g. 26x faster / 98% less memory at 512k tokens
-        with short documents).  If False, use full NB-width index arrays.
-
-        Caveat: compact uses torch._dynamo.mark_dynamic on the last dimension
-        of the 4 BlockMask index tensors.  All 4 arrays share the same dynamic
-        width (unified), which works correctly with compiled flex_attention.
-        Independent widths per array are buggy in current PyTorch (see
-        repro_mark_dynamic_batchmask.py).
+    max_per_row controls index array width:
+      None: auto-compute width from data (shapes vary, no mark_dynamic).
+      "dynamic" (default): auto-compute width and mark last dim dynamic.
+      int: fixed width, asserts if too small.
     """
     if ntoks == 0:
         ar, di, BS, NB, ntoks, seq_len = _prepare_inputs(ntoks, attn_regions, document_ids, BLOCK_SIZE)
-        return _build_blockmask([set() for _ in range(NB)], [set() for _ in range(NB)], NB, BS, seq_len, ar, di, 1)
+        mask = _build_blockmask([set() for _ in range(NB)], [set() for _ in range(NB)], NB, BS, seq_len, ar, di, 1)
+        if max_per_row == "dynamic":
+            _apply_dynamic(mask)
+        return mask
     if HAS_NUMBA:
-        return make_docmask_numba(ntoks, attn_regions, document_ids, BLOCK_SIZE, max_per_row, max_dense, compact)
-    return make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE, max_per_row, compact)
+        return make_docmask_numba(ntoks, attn_regions, document_ids, BLOCK_SIZE, max_per_row, max_dense)
+    return make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE, max_per_row)
 
 
 # ---------------------------------------------------------------------------

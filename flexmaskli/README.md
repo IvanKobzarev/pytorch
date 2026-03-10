@@ -8,7 +8,7 @@ Flexmaskli is a PyTorch `flex_attention` BlockMask creation library for two use 
 
 It provides CPU (numpy/numba) and GPU implementations with progressive optimizations from O(n²) baseline to memory-efficient O(n) superblock approaches.
 
-All implementations produce compact index arrays and use `mark_dynamic` for compatibility with `torch.compile(dynamic=False)` and strict `recompile_limit=1` — shapes can vary between batches without triggering recompilation.
+Docmask implementations use compact `(NB, max_per_row)` index arrays. For `max_per_row="dynamic"` (the default in `make_docmask_cpu` and `make_docmask_gpu_v3`), index width is auto-computed per batch and marked dynamic for `torch.compile(dynamic=False)` compatibility.
 
 ## Two mask types
 
@@ -35,8 +35,8 @@ Fork of v2 with compact `(NB, max_per_row)` index arrays instead of `(NB, NB)`:
 - **GPU-native transpose**: uses argsort + scatter on device to transpose kv→q arrays without leaving the GPU.
 - **Direct `BlockMask` constructor**: passes all 8 tensors directly, avoiding any NB-wide intermediates.
 - **`max_per_row` parameter**:
+  - `"dynamic"` (default): computed from data, dims marked via `mark_dynamic` for `torch.compile(dynamic=False)` compatibility. Shapes can vary between batches without recompilation.
   - `None`: computed from data (shapes vary per batch — not torch.compile compatible).
-  - `"dynamic"`: computed from data, dims marked via `mark_dynamic` for `torch.compile(dynamic=False)` compatibility. Shapes can vary between batches without recompilation.
   - `int`: fixed width (asserts if too small). Always compile-safe.
 
 ### CPU docmask (in `docmask_cpu.py`)
@@ -61,7 +61,7 @@ Specialized for the **decoding iterator** use-case: one document per batch eleme
 
 Key simplifications over the multi-document docmask:
 - **No document segmentation**: single doc per element, so all below-diagonal blocks are trivially full.
-- **Compact per-type trimming**: each of the 4 index array types (kv, full_kv, q, full_q) is trimmed to its actual needed width. Partial arrays (kv, q) shrink to ~1-3 columns (just the diagonal), while full arrays (full_kv, full_q) stay at ~NB (the causal triangle). All dims are marked dynamic via `mark_dynamic`.
+- **Fixed NB-width arrays**: uses `(B, NB, NB)` index tensors for all four index types. Shapes are stable across batches.
 - **No padding/stacking overhead**: one JIT call produces all B masks with uniform shapes, eliminating the per-element pad + `torch.cat` that caused GPU memory fragmentation in `decode_lib.py`.
 
 The `mask_mod` closure uses 2D indexing (`attn_regions[b, q_idx]`) which is compatible with `torch.compile`'s pointwise subgraph lowering (chained indexing `attn_regions[b][q_idx]` would fail).
@@ -81,12 +81,14 @@ Standalone utility for moving a BlockMask to a device. Handles three things that
 
 - **Docmask `max_per_row="dynamic"`**: dims marked dynamic via `mark_dynamic` → no recompilation when index width varies between batches. Recommended for gpu_v3 and cpu.
 - **Docmask `max_per_row=<int>`**: fixed shape, no dynamism. Use NB (always safe) or a tighter bound.
-- **Batchmask**: compact per-type arrays with `mark_dynamic` on all index tensors. Partial arrays (kv, q) are narrow, full arrays (full_kv, full_q) are ~NB-wide.
+- **Batchmask**: fixed NB-width arrays (stable shapes by construction).
 - `make_docmask_gpu` and `gpu_v2` produce stable shapes inherently (NB-wide arrays).
 
 **Note**: `mark_dynamic` must be called with **positive** dimension indices. Negative indices (e.g. `-1`) are silently ignored due to a PyTorch bug. Our code uses `ndim - 1`.
 
 ## Benchmark results (H200, torch 2.9.1+cu126)
+
+Local benchmark script for current API: `python -m flexmaskli.benchmarks.max_per_row`.
 
 ### Docmask: GPU (superblock=8k, docs 1k-4k)
 
@@ -112,7 +114,7 @@ Standalone utility for moving a BlockMask to a device. Handles three things that
 |    1M |90.4ms | 10.2ms |
 |    4M |395.7ms| 45.3ms |
 
-### Compiled flex_attention: compact (dynamic) vs full-width (fixed) BlockMask
+### Compiled flex_attention: dynamic max_per_row vs fixed max_per_row BlockMask
 
 Benchmark script: `bv2/tools/bench_flex_compile.py`.
 
