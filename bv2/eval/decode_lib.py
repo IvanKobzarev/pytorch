@@ -9,7 +9,7 @@ import functools
 
 import numpy as np
 import torch
-from flexlimaskli import make_batchmask_cpu
+from flexmaskli import make_batchmask_cpu
 
 import bv2.data.dpack as dpack
 import bv2.utils as u

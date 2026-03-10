@@ -1,8 +1,8 @@
 import pytest
 import torch
 
-import flexlimaskli.docmask_gpu as uf
-from flexlimaskli.test_utils import blockmask_to_dense, compare_block_masks
+import flexmaskli.docmask_gpu as uf
+from flexmaskli.test_utils import blockmask_to_dense, compare_block_masks
 
 
 @pytest.mark.parametrize("variant", [
@@ -41,7 +41,7 @@ def test_mini(variant):
     super_mask_v3 = uf.make_docmask_gpu_v3(BLOCK_SIZE=2, SUPERBLOCK_SIZE=4, **kwargs)
     compare_block_masks(ref_mask, super_mask_v3)
 
-    import flexlimaskli.docmask_cpu as ufn
+    import flexmaskli.docmask_cpu as ufn
     cpu_kwargs = dict(ntoks=len(document_ids), document_ids=document_ids.cpu(), attn_regions=attn_regions.cpu())
     for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba]:
         compare_block_masks(ref_mask, fn(BLOCK_SIZE=2, **cpu_kwargs))
@@ -65,7 +65,7 @@ def test_simple_case(variant):
     super_mask_v2 = uf.make_docmask_gpu_v2(ntoks, attn_regions, document_ids, SUPERBLOCK_SIZE=256, compile="compile" in variant)
     compare_block_masks(ref_mask, super_mask_v2)
 
-    import flexlimaskli.docmask_cpu as ufn
+    import flexmaskli.docmask_cpu as ufn
     for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba]:
         compare_block_masks(ref_mask, fn(ntoks, attn_regions.cpu(), document_ids.cpu()))
 
@@ -87,7 +87,7 @@ def test_edge_case_sizes(variant):
 
         ref_mask = uf.make_docmask_gpu(ntoks, attn_regions, document_ids, compile="compile" in variant)
 
-        import flexlimaskli.docmask_cpu as ufn
+        import flexmaskli.docmask_cpu as ufn
         for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba]:
             compare_block_masks(ref_mask, fn(ntoks, attn_regions.cpu(), document_ids.cpu()), structural=False)
 
@@ -107,7 +107,7 @@ def test_complex_document_structure(variant):
 
     ref_mask = uf.make_docmask_gpu(ntoks, attn_regions, document_ids, compile="compile" in variant)
 
-    import flexlimaskli.docmask_cpu as ufn
+    import flexmaskli.docmask_cpu as ufn
     for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba]:
         compare_block_masks(ref_mask, fn(ntoks, attn_regions.cpu(), document_ids.cpu()), structural=False)
 
@@ -128,7 +128,7 @@ def test_with_padding(variant):
 
     ref_mask = uf.make_docmask_gpu(ntoks, attn_regions, document_ids, compile="compile" in variant)
 
-    import flexlimaskli.docmask_cpu as ufn
+    import flexmaskli.docmask_cpu as ufn
     for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba]:
         compare_block_masks(ref_mask, fn(ntoks, attn_regions.cpu(), document_ids.cpu()), structural=False)
 
@@ -137,7 +137,7 @@ def test_with_padding(variant):
 # Test functions that require SUPERBLOCK_SIZE alignment
 def _test_super_functions_helper(ntoks, document_ids, attn_regions, device, compile_flag, BLOCK_SIZE=128, SUPERBLOCK_SIZE=1024):
     """Helper to test super functions with proper size constraints"""
-    import flexlimaskli.docmask_cpu as ufn
+    import flexmaskli.docmask_cpu as ufn
 
     # Ensure ntoks is aligned to SUPERBLOCK_SIZE
     aligned_ntoks = ((ntoks + SUPERBLOCK_SIZE - 1) // SUPERBLOCK_SIZE) * SUPERBLOCK_SIZE
@@ -350,7 +350,7 @@ def test_stable_shapes_for_compile(make_fn, kw_extra):
 
 def test_stable_shapes_numpy():
     """Test that numpy implementations support max_per_row for stable shapes."""
-    import flexlimaskli.docmask_cpu as ufn
+    import flexmaskli.docmask_cpu as ufn
 
     BS = 64
     ntoks = 4096
@@ -507,7 +507,7 @@ def test_block_boundary_straddle(variant):
 
     ref = uf.make_docmask_gpu(ntoks, attn_regions, document_ids, BLOCK_SIZE=2)
 
-    import flexlimaskli.docmask_cpu as ufn
+    import flexmaskli.docmask_cpu as ufn
     cpu_di, cpu_ar = document_ids.cpu(), attn_regions.cpu()
     for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba, ufn.make_docmask_cpu]:
         mask = fn(ntoks, cpu_ar, cpu_di, BLOCK_SIZE=2)
@@ -550,7 +550,7 @@ def test_block_boundary_straddle_large(variant):
 
     ref = uf.make_docmask_gpu(ntoks, attn_regions, document_ids, BLOCK_SIZE=BS)
 
-    import flexlimaskli.docmask_cpu as ufn
+    import flexmaskli.docmask_cpu as ufn
     cpu_di, cpu_ar = document_ids.cpu(), attn_regions.cpu()
     for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba, ufn.make_docmask_cpu]:
         mask = fn(ntoks, cpu_ar, cpu_di, BLOCK_SIZE=BS)
@@ -585,7 +585,7 @@ def test_noncontiguous_same_value_regions(variant):
 
     ref = uf.make_docmask_gpu(ntoks, attn_regions, document_ids, BLOCK_SIZE=BS)
 
-    import flexlimaskli.docmask_cpu as ufn
+    import flexmaskli.docmask_cpu as ufn
     cpu_di, cpu_ar = document_ids.cpu(), attn_regions.cpu()
     for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba, ufn.make_docmask_cpu]:
         mask = fn(ntoks, cpu_ar, cpu_di, BLOCK_SIZE=BS)
@@ -612,7 +612,7 @@ def test_noncontiguous_same_value_with_negative_gap(variant):
 
     ref = uf.make_docmask_gpu(ntoks, attn_regions, document_ids, BLOCK_SIZE=BS)
 
-    import flexlimaskli.docmask_cpu as ufn
+    import flexmaskli.docmask_cpu as ufn
     cpu_di, cpu_ar = document_ids.cpu(), attn_regions.cpu()
     for fn in [ufn.make_docmask_numpy, ufn.make_docmask_numba, ufn.make_docmask_cpu]:
         mask = fn(ntoks, cpu_ar, cpu_di, BLOCK_SIZE=BS)
@@ -631,7 +631,7 @@ def test_decode_like_docmask_patterns(variant):
     BS = 64
     ntoks = 512
 
-    import flexlimaskli.docmask_cpu as ufn
+    import flexmaskli.docmask_cpu as ufn
 
     patterns = [
         # Simple: [img(1)] [AR+pad(0)]
@@ -671,7 +671,7 @@ def test_complex_noncontiguous_docmask(variant):
     BS = 64
     ntoks = 1024
 
-    import flexlimaskli.docmask_cpu as ufn
+    import flexmaskli.docmask_cpu as ufn
 
     # --- Pattern 0: [img(1)] [hole(-1)] [reg(1)] [hole(-1)] [AR(0)] [hole(-1)] [reg(1)] ---
     document_ids = torch.zeros(ntoks, dtype=torch.int64, device=device)
@@ -752,8 +752,8 @@ def test_compiled_flex_attention_docmask_cpu_dynamic():
     wrong outputs (stale kernel reads indices at the first call's width).
     """
     from torch.nn.attention.flex_attention import flex_attention
-    from flexlimaskli.docmask_cpu import make_docmask_cpu
-    from flexlimaskli.to_gpu import blockmask_to_gpu
+    from flexmaskli.docmask_cpu import make_docmask_cpu
+    from flexmaskli.to_gpu import blockmask_to_gpu
 
     BS = 128
     ntoks = 4096
@@ -831,8 +831,8 @@ def test_compiled_flex_attention_docmask_cpu_dynamic():
 def test_compiled_flex_attention_docmask_compact():
     """Verify compact=True produces correct results under compiled flex_attention."""
     from torch.nn.attention.flex_attention import flex_attention
-    from flexlimaskli.docmask_cpu import make_docmask_cpu
-    from flexlimaskli.to_gpu import blockmask_to_gpu
+    from flexmaskli.docmask_cpu import make_docmask_cpu
+    from flexmaskli.to_gpu import blockmask_to_gpu
 
     BS = 128
     ntoks = 4096
@@ -883,7 +883,7 @@ def test_compiled_flex_attention_docmask_compact():
 
 def test_docmask_compact_shapes():
     """compact=True (default) uses auto-computed width; compact=False uses NB width."""
-    import flexlimaskli.docmask_cpu as ufn
+    import flexmaskli.docmask_cpu as ufn
     BS = 128
     ntoks = 4096
     NB = ntoks // BS

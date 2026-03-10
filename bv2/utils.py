@@ -207,7 +207,7 @@ def to_gpu(seq, device):
         if isinstance(x, dict):
             return {k: maybe_to_gpu(v) for k, v in x.items()}
         if isinstance(x, BlockMask):
-            from flexlimaskli import blockmask_to_gpu
+            from flexmaskli import blockmask_to_gpu
             return blockmask_to_gpu(x, device)
         if isinstance(x, np.ndarray) and any(x.dtype == t for t in _can_torch):
             x = torch.from_numpy(x)

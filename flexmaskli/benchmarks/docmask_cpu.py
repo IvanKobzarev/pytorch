@@ -3,10 +3,10 @@
 Benchmark for numpy-based document mask creation.
 
 Usage:
-    python3 -m flexlimaskli.benchmarks.docmask_cpu --ntoks 32768
-    python3 -m flexlimaskli.benchmarks.docmask_cpu --ntoks 1048576
-    python3 -m flexlimaskli.benchmarks.docmask_cpu --ntoks 32768 --verify
-    python3 -m flexlimaskli.benchmarks.docmask_cpu --compare   # compare numpy vs numba
+    python3 -m flexmaskli.benchmarks.docmask_cpu --ntoks 32768
+    python3 -m flexmaskli.benchmarks.docmask_cpu --ntoks 1048576
+    python3 -m flexmaskli.benchmarks.docmask_cpu --ntoks 32768 --verify
+    python3 -m flexmaskli.benchmarks.docmask_cpu --compare   # compare numpy vs numba
 """
 
 import argparse
@@ -16,7 +16,7 @@ import time
 import numpy as np
 import torch
 
-from flexlimaskli.docmask_cpu import make_docmask_cpu, make_docmask_numpy, make_docmask_numba
+from flexmaskli.docmask_cpu import make_docmask_cpu, make_docmask_numpy, make_docmask_numba
 
 
 def create_random_documents(ntoks, nmin=1024, nmax=4096, seed=42):
@@ -83,7 +83,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.compare:
-        from flexlimaskli.docmask_cpu import HAS_NUMBA
+        from flexmaskli.docmask_cpu import HAS_NUMBA
 
         sizes = [32768, 65536, 131072, 524288, 1048576, 4194304]
         labels = ["numpy", "numba"]
@@ -134,7 +134,7 @@ if __name__ == "__main__":
         if args.verify:
             from functools import partial as fpartial
             from torch.nn.attention.flex_attention import create_block_mask
-            from flexlimaskli.docmask_cpu import _mask_fn
+            from flexmaskli.docmask_cpu import _mask_fn
 
             NB = args.ntoks // args.block
             print("\nVerifying against create_block_mask (ground truth)...")

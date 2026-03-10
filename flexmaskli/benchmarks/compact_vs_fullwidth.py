@@ -5,8 +5,8 @@ Comprehensive benchmark: compact=True vs compact=False for both batchmask and do
 Measures CPU mask creation time and memory for diverse scenarios.
 
 Usage:
-    NCCL_SOCKET_IFNAME=lo python -m flexlimaskli.benchmarks.compact_vs_fullwidth
-    NCCL_SOCKET_IFNAME=lo python -m flexlimaskli.benchmarks.compact_vs_fullwidth --gpu
+    NCCL_SOCKET_IFNAME=lo python -m flexmaskli.benchmarks.compact_vs_fullwidth
+    NCCL_SOCKET_IFNAME=lo python -m flexmaskli.benchmarks.compact_vs_fullwidth --gpu
 """
 
 import argparse
@@ -112,8 +112,8 @@ if __name__ == "__main__":
     parser.add_argument("--block", type=int, default=128)
     args = parser.parse_args()
 
-    from flexlimaskli.batchmask_cpu import make_batchmask_cpu
-    from flexlimaskli.docmask_cpu import make_docmask_cpu
+    from flexmaskli.batchmask_cpu import make_batchmask_cpu
+    from flexmaskli.docmask_cpu import make_docmask_cpu
 
     # Warmup
     print("Warming up numba...", end="", flush=True)
@@ -174,7 +174,7 @@ if __name__ == "__main__":
         print("GPU COMPILED FLEX_ATTENTION KERNEL TIME")
         print("=" * 100)
         from torch.nn.attention.flex_attention import flex_attention
-        from flexlimaskli.to_gpu import blockmask_to_gpu
+        from flexmaskli.to_gpu import blockmask_to_gpu
         head_dim = 64
 
         # Batchmask GPU

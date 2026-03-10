@@ -3,8 +3,8 @@
 Benchmark for batched CPU mask creation: per-element+stack vs batched numba.
 
 Usage:
-    python3 -m flexlimaskli.benchmarks.batchmask_cpu
-    python3 -m flexlimaskli.benchmarks.batchmask_cpu --runs 10
+    python3 -m flexmaskli.benchmarks.batchmask_cpu
+    python3 -m flexmaskli.benchmarks.batchmask_cpu --runs 10
 """
 
 import argparse
@@ -14,8 +14,8 @@ import time
 import numpy as np
 import torch
 
-from flexlimaskli.batchmask_cpu import make_batchmask_cpu
-from flexlimaskli.docmask_cpu import make_docmask_numba
+from flexmaskli.batchmask_cpu import make_batchmask_cpu
+from flexmaskli.docmask_cpu import make_docmask_numba
 
 
 def create_random_documents(ntoks, nmin=1024, nmax=4096, seed=42):

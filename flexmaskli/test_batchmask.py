@@ -2,8 +2,8 @@ import pytest
 import torch
 import numpy as np
 
-import flexlimaskli.docmask_gpu as uf
-from flexlimaskli.test_utils import blockmask_to_dense, compare_block_masks
+import flexmaskli.docmask_gpu as uf
+from flexmaskli.test_utils import blockmask_to_dense, compare_block_masks
 
 
 def _batched_element_dense(bm, b):
@@ -13,8 +13,8 @@ def _batched_element_dense(bm, b):
 
 def test_batched_mini():
     """Batched with BLOCK_SIZE=2, single doc per element."""
-    import flexlimaskli.docmask_cpu as ufn
-    from flexlimaskli.batchmask_cpu import make_batchmask_cpu, make_batchmask_numpy
+    import flexmaskli.docmask_cpu as ufn
+    from flexmaskli.batchmask_cpu import make_batchmask_cpu, make_batchmask_numpy
 
     BS = 2
     ntoks = 12
@@ -37,8 +37,8 @@ def test_batched_mini():
 
 def test_batched_against_gpu_reference():
     """Compare batched numba against GPU create_block_mask reference."""
-    import flexlimaskli.docmask_cpu as ufn
-    from flexlimaskli.batchmask_cpu import make_batchmask_cpu
+    import flexmaskli.docmask_cpu as ufn
+    from flexmaskli.batchmask_cpu import make_batchmask_cpu
 
     BS = 128
     ntoks = 1024
@@ -73,8 +73,8 @@ def test_batched_against_gpu_reference():
 ])
 def test_batchmask_gpu_vs_cpu(variant):
     """Compare make_batchmask_gpu against make_batchmask_cpu element-by-element."""
-    from flexlimaskli.batchmask_cpu import make_batchmask_cpu
-    from flexlimaskli.batchmask_gpu import make_batchmask_gpu
+    from flexmaskli.batchmask_cpu import make_batchmask_cpu
+    from flexmaskli.batchmask_gpu import make_batchmask_gpu
 
     BS = 64
     ntoks = 512
@@ -111,7 +111,7 @@ def test_batchmask_gpu_vs_cpu(variant):
 ])
 def test_batchmask_gpu_vs_docmask(variant):
     """Compare make_batchmask_gpu against per-element make_docmask_gpu."""
-    from flexlimaskli.batchmask_gpu import make_batchmask_gpu
+    from flexmaskli.batchmask_gpu import make_batchmask_gpu
 
     BS = 128
     ntoks = 1024
@@ -135,8 +135,8 @@ def test_batchmask_gpu_vs_docmask(variant):
 ])
 def test_batchmask_gpu_mini(variant):
     """Batchmask GPU with BLOCK_SIZE=2, matching the CPU mini test."""
-    from flexlimaskli.batchmask_cpu import make_batchmask_cpu
-    from flexlimaskli.batchmask_gpu import make_batchmask_gpu
+    from flexmaskli.batchmask_cpu import make_batchmask_cpu
+    from flexmaskli.batchmask_gpu import make_batchmask_gpu
 
     BS = 2
     ntoks = 12
@@ -156,8 +156,8 @@ def test_batchmask_gpu_mini(variant):
 
 def test_batched_b1():
     """Batch size 1 matches unbatched."""
-    import flexlimaskli.docmask_cpu as ufn
-    from flexlimaskli.batchmask_cpu import make_batchmask_cpu, make_batchmask_numpy
+    import flexmaskli.docmask_cpu as ufn
+    from flexmaskli.batchmask_cpu import make_batchmask_cpu, make_batchmask_numpy
 
     BS = 128
     ntoks = 512
@@ -173,7 +173,7 @@ def test_batched_b1():
 
 def test_batched_unaligned():
     """Non-block-aligned ntoks are handled internally (no caller padding needed)."""
-    from flexlimaskli.batchmask_cpu import make_batchmask_cpu, make_batchmask_numpy
+    from flexmaskli.batchmask_cpu import make_batchmask_cpu, make_batchmask_numpy
 
     BS = 128
     for make_fn in [make_batchmask_cpu, make_batchmask_numpy]:
@@ -186,7 +186,7 @@ def test_batched_unaligned():
             assert mask.kv_num_blocks.shape == (2, 1, NB)
 
     # Also test make_docmask_numba (unbatched)
-    import flexlimaskli.docmask_cpu as ufn
+    import flexmaskli.docmask_cpu as ufn
     for ntoks in [100, 200, 300, 500, 1000]:
         NB = (ntoks + BS - 1) // BS
         ar = np.zeros(ntoks, dtype=np.int64)
@@ -205,8 +205,8 @@ def test_batchmask_decode_patterns(variant):
 
     Mirrors real eval/decode_lib.py layouts: prompt (dense+AR) is padded to
     max_prefix+max_decode with 0s, then tokens are placed one-at-a-time."""
-    from flexlimaskli.batchmask_cpu import make_batchmask_cpu
-    from flexlimaskli.batchmask_gpu import make_batchmask_gpu
+    from flexmaskli.batchmask_cpu import make_batchmask_cpu
+    from flexmaskli.batchmask_gpu import make_batchmask_gpu
 
     BS = 64
     ntoks = 512  # max_prefix + max_decode
@@ -265,9 +265,9 @@ def test_compiled_flex_attention_cpu_vs_gpu_mask():
     the issue is in how torch.compile handles the CPU mask_mod's closure tensor.
     """
     from torch.nn.attention.flex_attention import flex_attention
-    from flexlimaskli.batchmask_cpu import make_batchmask_cpu
-    from flexlimaskli.batchmask_gpu import make_batchmask_gpu
-    from flexlimaskli.to_gpu import blockmask_to_gpu
+    from flexmaskli.batchmask_cpu import make_batchmask_cpu
+    from flexmaskli.batchmask_gpu import make_batchmask_gpu
+    from flexmaskli.to_gpu import blockmask_to_gpu
 
     BS = 128
     ntoks = 512
@@ -363,8 +363,8 @@ def test_batchmask_complex_decode_patterns(variant):
     Tests scenarios like:
     [img] [hole(-1)] [reg] [hole] [AR] [hole] [reg] [hole] [decode_tok]
     """
-    from flexlimaskli.batchmask_cpu import make_batchmask_cpu
-    from flexlimaskli.batchmask_gpu import make_batchmask_gpu
+    from flexmaskli.batchmask_cpu import make_batchmask_cpu
+    from flexmaskli.batchmask_gpu import make_batchmask_gpu
 
     BS = 64
     ntoks = 1024
@@ -423,7 +423,7 @@ def test_batchmask_complex_decode_patterns(variant):
 @pytest.mark.gpu
 def test_batched_full_width_indices():
     """CPU batchmask uses full NB-width index arrays (no compaction)."""
-    from flexlimaskli.batchmask_cpu import make_batchmask_cpu
+    from flexmaskli.batchmask_cpu import make_batchmask_cpu
     BS = 128
     ntoks = 512
     NB = ntoks // BS

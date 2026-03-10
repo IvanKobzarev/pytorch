@@ -3,13 +3,13 @@
 Benchmark for faster document-based mask creation.
 
 Usage:
-    python3 -m flexlimaskli.benchmarks.docmask_gpu --fn make_docmask_gpu --device cuda --ntoks 32768
+    python3 -m flexmaskli.benchmarks.docmask_gpu --fn make_docmask_gpu --device cuda --ntoks 32768
 
 Some results on a H200 machine, with random documents of sizes 1024 to 4096:
 
 Reference `make_docmask_gpu`:
 
-for s in 8 16 32 64 128 256 512 1024; echo -n "s="(math "$s * 1024")" " ; python3 -m flexlimaskli.benchmarks.docmask_gpu --fn make_docmask_gpu --device cuda --ntoks (math "$s * 1024"); end
+for s in 8 16 32 64 128 256 512 1024; echo -n "s="(math "$s * 1024")" " ; python3 -m flexmaskli.benchmarks.docmask_gpu --fn make_docmask_gpu --device cuda --ntoks (math "$s * 1024"); end
 s=8192    -> Median:    0.3ms, Compile:  20.2s, Peak mem: 60MiB
 s=16384   -> Median:    0.8ms, Compile:   7.5s, Peak mem: 61MiB
 s=32768   -> Median:    3.1ms, Compile:  23.1s, Peak mem: 63MiB
@@ -43,7 +43,7 @@ import numpy as np
 import torch
 from torch.profiler import ProfilerActivity, profile
 
-import flexlimaskli.docmask_gpu
+import flexmaskli.docmask_gpu
 
 
 def create_random_documents(ntoks, nmin=1024, nmax=4096, seed=42):
@@ -152,7 +152,7 @@ if __name__ == "__main__":
 
     document_ids, attn_regions = create_random_documents(args.ntoks, args.docmin, args.docmax, args.seed)
     document_ids, attn_regions = document_ids.to(args.device), attn_regions.to(args.device)
-    mask_fn = getattr(flexlimaskli.docmask_gpu, args.fn)
+    mask_fn = getattr(flexmaskli.docmask_gpu, args.fn)
     fn = lambda: mask_fn(args.ntoks, attn_regions, document_ids)
 
     if args.profile:  # NOTE: once I get a 2nd benchmark, I'll make them generic.

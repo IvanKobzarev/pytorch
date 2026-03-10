@@ -99,7 +99,7 @@ def compare_one(fn_name, make_fn, ar, ntoks, BS, gt):
 
 
 def compare_masks(name, ar, ntoks, BS):
-    from flexlimaskli.batchmask_cpu import make_batchmask_cpu, make_batchmask_numpy
+    from flexmaskli.batchmask_cpu import make_batchmask_cpu, make_batchmask_numpy
 
     print(f"Testing: {name}")
     gt = ground_truth_mask(ar.shape[0], ntoks, ar)

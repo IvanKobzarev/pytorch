@@ -1,8 +1,8 @@
-# Flexlimaskli: flex-attention BlockMask creation
+# Flexmaskli: flex-attention BlockMask creation
 
 ## Overview
 
-Flexlimaskli is a PyTorch `flex_attention` BlockMask creation library for two use cases:
+Flexmaskli is a PyTorch `flex_attention` BlockMask creation library for two use cases:
 - **Docmask**: multi-document packed sequences (training)
 - **Batchmask**: batched single-document sequences (decoding)
 
@@ -130,7 +130,7 @@ No performance difference in the attention kernel. `flex_attention` scans only u
 
 ### Batchmask: `make_batchmask_cpu` vs per-element + stack
 
-Benchmark script: `python -m flexlimaskli.benchmarks.batchmask_cpu`.
+Benchmark script: `python -m flexmaskli.benchmarks.batchmask_cpu`.
 
 Setup: single-document inputs with random dense prefix (30-70% of ntoks) per batch element. "per-elem+stack" is the old approach (B calls to `make_docmask_numba` + pad indices to max width + `torch.cat`). "batched" is a single `make_batchmask_cpu` call.
 

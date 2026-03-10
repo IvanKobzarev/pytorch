@@ -2,7 +2,7 @@ from functools import partial
 from importlib import import_module
 
 import numpy as np
-from flexlimaskli import make_docmask_cpu
+from flexmaskli import make_docmask_cpu
 
 import bv2.utils as u
 from bv2.simple_input import iter_packed_examples, pmap, prefetch, to_len

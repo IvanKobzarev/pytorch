@@ -1,4 +1,4 @@
-"""Flexlimaskli: flex-attention BlockMask creation library.
+"""Flexmaskli: flex-attention BlockMask creation library.
 
 Two mask types:
 - **docmask**: Multi-document packed sequences. Multiple documents in one sequence,
