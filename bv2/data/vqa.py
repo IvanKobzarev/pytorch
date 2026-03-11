@@ -12,7 +12,7 @@ import numpy as np
 import bv2.data.dpack as d
 import bv2.utils as u
 from bv2.data import pp
-from bv2.data.common import cycle_qas, get_bagz_reader, shuffled_iota_exids
+from bv2.data.common import cycle_qas, get_bagz_reader, iota_exids, shuffled_iota_exids
 from bv2.data.tokenizer import get_tiktoken
 
 PATH = "/checkpoint/rigi/data/{split}.bag"
@@ -38,7 +38,7 @@ class Dataset:
         with ZipFile(BytesIO(self.reader[exid])) as zf:
             return json.load(zf.open("data.json"))
 
-    def make_example(self, exid, epoch):
+    def make_example(self, exid, epoch=0):
         with ZipFile(BytesIO(self.reader[exid])) as zf:
             data = json.load(zf.open("data.json"))
             img = cv2.imdecode(np.frombuffer(zf.open("image").read(), np.uint8), cv2.IMREAD_COLOR)
@@ -92,8 +92,11 @@ class Dataset:
     def __str__(self):
         return self._name
 
-    def make_exids(self, **kw):
-        yield from shuffled_iota_exids(len(self.reader), epochs=self.epochs, **kw)
+    def make_exids(self, seed, **kw):
+        if self.epochs == 1:
+            yield from iota_exids(len(self.reader), **kw)
+        else:
+            yield from shuffled_iota_exids(len(self.reader), epochs=self.epochs, seed=seed, **kw)
 
     def vocab_size(self):
         return self.tt.n_vocab

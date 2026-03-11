@@ -117,15 +117,15 @@ def get_config():
 
     # NOTE: The max_q was increased to cover the fmt!
     for max_p, bs in [(196, 128), (784, 64), (3136, 8)]:  # 224/448/896
-        c.evals[f"docvqa/{max_p}/vqa"] = vqa_eval("docvqa_flat/val", max_q=25, max_a=16, max_p=max_p, bs=bs)    # covers 99% ; do 40, 33 for all
-        c.evals[f"docvqa_fmt/{max_p}/vqa"] = vqa_eval("docvqa_flat/val", max_q=28, max_a=16, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["docvqa"])    # covers 99% ; do 44, 33 for all
-        c.evals[f"docvqa_fmt/{max_p}/blind/vqa"] = vqa_eval("docvqa_flat/val", max_q=28, max_a=16, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["docvqa"], blind=True)
-        c.evals[f"infovqa/{max_p}/vqa"] = vqa_eval("infovqa_flat/val", max_q=28, max_a=11, max_p=max_p, bs=bs)  # covers 99% ; do 38, 11 for all
-        c.evals[f"infovqa_fmt/{max_p}/vqa"] = vqa_eval("infovqa_flat/val", max_q=33, max_a=11, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["infovqa"])  # covers 99% ; do 46, 11 for all
-        c.evals[f"infovqa_fmt/{max_p}/blind/vqa"] = vqa_eval("infovqa_flat/val", max_q=33, max_a=11, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["infovqa"], blind=True)
-        c.evals[f"stvqa/{max_p}/vqa"] = vqa_eval("stvqa_flat/val", max_q=18, max_a=11, max_p=max_p, bs=bs)      # covers 99% ; do 27, 23 for all
-        c.evals[f"stvqa_fmt/{max_p}/vqa"] = vqa_eval("stvqa_flat/val", max_q=20, max_a=11, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["stvqa"])      # covers 99% ; do 30, 23 for all
-        c.evals[f"stvqa_fmt/{max_p}/blind/vqa"] = vqa_eval("stvqa_flat/val", max_q=20, max_a=11, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["stvqa"], blind=True)
+        c.evals[f"docvqa/{max_p}/vqa"] = vqa_eval("docvqa_flat/val_sorted", max_q=25, max_a=16, max_p=max_p, bs=bs)    # covers 99% ; do 40, 33 for all
+        c.evals[f"docvqa_fmt/{max_p}/vqa"] = vqa_eval("docvqa_flat/val_sorted", max_q=28, max_a=16, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["docvqa"])    # covers 99% ; do 44, 33 for all
+        c.evals[f"docvqa_fmt/{max_p}/blind/vqa"] = vqa_eval("docvqa_flat/val_sorted", max_q=28, max_a=16, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["docvqa"], blind=True)
+        c.evals[f"infovqa/{max_p}/vqa"] = vqa_eval("infovqa_flat/val_sorted", max_q=28, max_a=11, max_p=max_p, bs=bs)  # covers 99% ; do 38, 11 for all
+        c.evals[f"infovqa_fmt/{max_p}/vqa"] = vqa_eval("infovqa_flat/val_sorted", max_q=33, max_a=11, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["infovqa"])  # covers 99% ; do 46, 11 for all
+        c.evals[f"infovqa_fmt/{max_p}/blind/vqa"] = vqa_eval("infovqa_flat/val_sorted", max_q=33, max_a=11, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["infovqa"], blind=True)
+        c.evals[f"stvqa/{max_p}/vqa"] = vqa_eval("stvqa_flat/val_sorted", max_q=18, max_a=11, max_p=max_p, bs=bs)      # covers 99% ; do 27, 23 for all
+        c.evals[f"stvqa_fmt/{max_p}/vqa"] = vqa_eval("stvqa_flat/val_sorted", max_q=20, max_a=11, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["stvqa"])      # covers 99% ; do 30, 23 for all
+        c.evals[f"stvqa_fmt/{max_p}/blind/vqa"] = vqa_eval("stvqa_flat/val_sorted", max_q=20, max_a=11, max_p=max_p, bs=bs, qfmt=CUSTOM_QFMT["stvqa"], blind=True)
 
     # Nice to visualize predictions in W&B periodically. Very small/short decode for sanity-check only.
     # Single resolution to avoid bugginess.
