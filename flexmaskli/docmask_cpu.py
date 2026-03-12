@@ -56,11 +56,28 @@ if HAS_NUMBA:
     @nb.jit(nopython=True, cache=False)
     def _numba_core(ar, di, BS, NB, seg_starts, seg_ends, max_per_row, max_dense):
         """JIT-compiled block iteration + dense region finding + transpose."""
+        ntoks = len(ar)
         kv_num = np.zeros(NB, dtype=np.int32)
         kv_idx = np.zeros((NB, max_per_row), dtype=np.int32)
         fkv_num = np.zeros(NB, dtype=np.int32)
         fkv_idx = np.zeros((NB, max_per_row), dtype=np.int32)
         diag_done = np.zeros(NB, dtype=nb.boolean)
+        any_neg = np.zeros(NB, dtype=nb.boolean)
+        all_neg = np.zeros(NB, dtype=nb.boolean)
+        nonneg_prefix = np.zeros(ntoks + 1, dtype=np.int32)
+        blk_nonneg = np.zeros(NB, dtype=nb.boolean)
+        dense_s = np.empty(max_dense, dtype=np.int64)
+        dense_e = np.empty(max_dense, dtype=np.int64)
+        dense_v = np.empty(max_dense, dtype=np.int64)
+        for blk in range(NB):
+            neg = 0
+            for t in range(BS):
+                if ar[blk * BS + t] == -1:
+                    neg += 1
+            any_neg[blk] = neg > 0
+            all_neg[blk] = neg == BS
+        for t in range(ntoks):
+            nonneg_prefix[t + 1] = nonneg_prefix[t] + (1 if ar[t] != -1 else 0)
 
         for si in range(len(seg_starts)):
             s = seg_starts[si]
@@ -70,12 +87,15 @@ if HAS_NUMBA:
 
             fb = s // BS
             lb = (e - 1) // BS
+            if fb == lb:
+                blk_nonneg[fb] = (nonneg_prefix[e] - nonneg_prefix[s]) > 0
+            else:
+                blk_nonneg[fb] = (nonneg_prefix[(fb + 1) * BS] - nonneg_prefix[s]) > 0
+                for b in range(fb + 1, lb):
+                    blk_nonneg[b] = not all_neg[b]
+                blk_nonneg[lb] = (nonneg_prefix[e] - nonneg_prefix[lb * BS]) > 0
 
             # --- inline dense region finding ---
-            MAX_DENSE = max_dense
-            dense_s = np.empty(MAX_DENSE, dtype=np.int64)
-            dense_e = np.empty(MAX_DENSE, dtype=np.int64)
-            dense_v = np.empty(MAX_DENSE, dtype=np.int64)
             nd = 0
             j = s
             while j < e:
@@ -84,7 +104,7 @@ if HAS_NUMBA:
                     k = j + 1
                     while k < e and ar[k] == v:
                         k += 1
-                    assert nd < MAX_DENSE, "too many dense regions in one segment"
+                    assert nd < max_dense, "too many dense regions in one segment"
                     dense_s[nd] = j
                     dense_e[nd] = k
                     dense_v[nd] = v
@@ -94,12 +114,21 @@ if HAS_NUMBA:
                     j += 1
 
             for qb in range(fb, lb + 1):
+                if all_neg[qb]:
+                    continue
+                if not blk_nonneg[qb]:
+                    continue
                 qp = (s <= qb * BS) and ((qb + 1) * BS <= e)
 
                 # below diagonal
                 for kvb in range(fb, qb):
+                    if all_neg[kvb]:
+                        continue
+                    if not blk_nonneg[kvb]:
+                        continue
                     kvp = (s <= kvb * BS) and ((kvb + 1) * BS <= e)
-                    if qp and kvp:
+                    is_full = qp and kvp and not any_neg[qb] and not any_neg[kvb]
+                    if is_full:
                         i = fkv_num[qb]; fkv_idx[qb, i] = kvb; fkv_num[qb] = i + 1
                     else:
                         i = kv_num[qb]; kv_idx[qb, i] = kvb; kv_num[qb] = i + 1
@@ -113,13 +142,18 @@ if HAS_NUMBA:
                             if dense_s[d] <= qb * BS and (qb + 1) * BS <= dense_e[d]:
                                 diag_full = True
                                 break
-                    if diag_full:
+                    is_diag_full = diag_full and not any_neg[qb]
+                    if is_diag_full:
                         i = fkv_num[qb]; fkv_idx[qb, i] = qb; fkv_num[qb] = i + 1
                     else:
                         i = kv_num[qb]; kv_idx[qb, i] = qb; kv_num[qb] = i + 1
 
                 # above diagonal
                 for kvb in range(qb + 1, lb + 1):
+                    if all_neg[kvb]:
+                        continue
+                    if not blk_nonneg[kvb]:
+                        continue
                     found_partial = False
                     found_full = False
                     for d1 in range(nd):
@@ -137,7 +171,8 @@ if HAS_NUMBA:
                             kv_ov = (kvb * BS < de2) and (ds2 < (kvb + 1) * BS)
                             if kv_ov:
                                 kv_fi = (ds2 <= kvb * BS) and ((kvb + 1) * BS <= de2)
-                                if q_fi and kv_fi:
+                                is_full = q_fi and kv_fi and not any_neg[qb] and not any_neg[kvb]
+                                if is_full:
                                     found_full = True
                                 else:
                                     found_partial = True
@@ -256,6 +291,13 @@ def make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_pe
     if ntoks == 0:
         return _build_blockmask(partial_sets, full_sets, NB, BS, seq_len, ar, di, 1)
 
+    ar_blk = ar.reshape(NB, BS)
+    any_neg = (ar_blk == -1).any(axis=1)
+    all_neg = (ar_blk == -1).all(axis=1)
+    nonneg_prefix = np.zeros(ntoks + 1, dtype=np.int32)
+    nonneg_prefix[1:] = np.cumsum(ar != -1)
+    blk_nonneg = np.zeros(NB, dtype=bool)
+
     seg_starts, seg_ends, mpr = _compute_segments_and_mpr(di, ntoks, BS, NB, max_per_row)
 
     for si in range(len(seg_starts)):
@@ -265,15 +307,30 @@ def make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_pe
 
         fb = s // BS
         lb = (e - 1) // BS
+        if fb == lb:
+            blk_nonneg[fb] = (nonneg_prefix[e] - nonneg_prefix[s]) > 0
+        else:
+            blk_nonneg[fb] = (nonneg_prefix[(fb + 1) * BS] - nonneg_prefix[s]) > 0
+            blk_nonneg[fb + 1:lb] = ~all_neg[fb + 1:lb]
+            blk_nonneg[lb] = (nonneg_prefix[e] - nonneg_prefix[lb * BS]) > 0
         dense = _find_dense_regions_vec(ar, s, e)
 
         for qb in range(fb, lb + 1):
+            if all_neg[qb]:
+                continue
+            if not blk_nonneg[qb]:
+                continue
             qp = (s <= qb * BS) and ((qb + 1) * BS <= e)
 
             # --- Below diagonal ---
             for kvb in range(fb, qb):
+                if all_neg[kvb]:
+                    continue
+                if not blk_nonneg[kvb]:
+                    continue
                 kvp = (s <= kvb * BS) and ((kvb + 1) * BS <= e)
-                if qp and kvp:
+                is_full = qp and kvp and not any_neg[qb] and not any_neg[kvb]
+                if is_full:
                     full_sets[qb].add(kvb)
                 else:
                     partial_sets[qb].add(kvb)
@@ -285,13 +342,18 @@ def make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_pe
                     if ds <= qb * BS and (qb + 1) * BS <= de:
                         diag_full = True
                         break
-            if diag_full:
+            is_diag_full = diag_full and not any_neg[qb]
+            if is_diag_full:
                 full_sets[qb].add(qb)
             else:
                 partial_sets[qb].add(qb)
 
             # --- Above diagonal ---
             for kvb in range(qb + 1, lb + 1):
+                if all_neg[kvb]:
+                    continue
+                if not blk_nonneg[kvb]:
+                    continue
                 is_partial = False
                 is_full = False
                 for ds1, de1, v1 in dense:
@@ -305,7 +367,8 @@ def make_docmask_numpy(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_pe
                         kv_ov = (kvb * BS < de2) and (ds2 < (kvb + 1) * BS)
                         if kv_ov:
                             kv_fi = (ds2 <= kvb * BS) and ((kvb + 1) * BS <= de2)
-                            if q_fi and kv_fi:
+                            is_full_blk = q_fi and kv_fi and not any_neg[qb] and not any_neg[kvb]
+                            if is_full_blk:
                                 is_full = True
                             else:
                                 is_partial = True

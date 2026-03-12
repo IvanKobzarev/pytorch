@@ -75,27 +75,45 @@ def batchmask_scenarios():
 
 def docmask_scenarios():
     scenarios = []
+
+    def pack_docs(ntoks, rng, nmin, nmax, make_ar):
+        di, ar = [], []
+        pos, doc = 0, 0
+        while ntoks - pos > nmin:
+            dlen = rng.randint(nmin, min(nmax, ntoks - pos))
+            if pos + dlen > ntoks:
+                break
+            di.extend([doc] * dlen)
+            ar.extend(make_ar(rng, dlen))
+            pos += dlen
+            doc += 1
+        while len(di) < ntoks:
+            di.append(-1)
+            ar.append(-1)
+        return torch.tensor(ar, dtype=torch.int32), torch.tensor(di, dtype=torch.int64)
+
+    def standard_ar(rng, dlen):
+        nprefix = int(rng.uniform(0.3, 0.7) * dlen)
+        return [1] * nprefix + [0] * (dlen - nprefix)
+
+    def ar2_ar(_, dlen):
+        nq = max(10, int(0.10 * dlen))
+        nimg = max(10, int(0.40 * dlen))
+        nreg = max(5, int(0.05 * dlen))
+        return [1] * nq + [-1] * nimg + [1] * nreg + [0] * (dlen - nq - nimg - nreg)
+
     rng = np.random.RandomState(42)
     for ntoks in [8192, 32768, 131072, 524288]:
         for nmin, nmax, label in [(1024, 4096, "med"), (128, 512, "short"), (8192, 32768, "long")]:
             if nmin >= ntoks:
                 continue
-            di, ar = [], []
-            pos, doc = 0, 0
-            while ntoks - pos > nmin:
-                dlen = rng.randint(nmin, min(nmax, ntoks - pos))
-                if pos + dlen > ntoks:
-                    break
-                di.extend([doc] * dlen)
-                nprefix = int(rng.uniform(0.3, 0.7) * dlen)
-                ar.extend([1] * nprefix + [0] * (dlen - nprefix))
-                pos += dlen
-                doc += 1
-            while len(di) < ntoks:
-                di.append(-1)
-                ar.append(-1)
-            scenarios.append((f"doc-{ntoks//1024}k-{label}",
-                              ntoks, torch.tensor(ar, dtype=torch.int32), torch.tensor(di, dtype=torch.int64)))
+            ar, di = pack_docs(ntoks, rng, nmin, nmax, standard_ar)
+            scenarios.append((f"doc-{ntoks//1024}k-{label}", ntoks, ar, di))
+
+    rng2 = np.random.RandomState(99)
+    for ntoks in [8192, 32768, 131072]:
+        ar, di = pack_docs(ntoks, rng2, 1024, 4096, ar2_ar)
+        scenarios.append((f"ar2-{ntoks//1024}k", ntoks, ar, di))
     return scenarios
 
 

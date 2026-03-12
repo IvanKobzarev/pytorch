@@ -1,12 +1,13 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 Benchmark for numpy-based document mask creation.
 
 Usage:
-    python3 -m flexmaskli.benchmarks.docmask_cpu --ntoks 32768
-    python3 -m flexmaskli.benchmarks.docmask_cpu --ntoks 1048576
-    python3 -m flexmaskli.benchmarks.docmask_cpu --ntoks 32768 --verify
-    python3 -m flexmaskli.benchmarks.docmask_cpu --compare   # compare numpy vs numba
+    python -m flexmaskli.benchmarks.docmask_cpu --ntoks 32768
+    python -m flexmaskli.benchmarks.docmask_cpu --ntoks 1048576
+    python -m flexmaskli.benchmarks.docmask_cpu --ntoks 32768 --verify
+    python -m flexmaskli.benchmarks.docmask_cpu --compare
+    python -m flexmaskli.benchmarks.docmask_cpu --compare --ar2
 """
 
 import argparse
@@ -33,6 +34,32 @@ def create_random_documents(ntoks, nmin=1024, nmax=4096, seed=42):
         nprefix = int(random.uniform(0.3, 0.7) * doc_length)
         attn_regions.extend([1] * nprefix)
         attn_regions.extend([0] * (doc_length - nprefix))
+        current_pos += doc_length
+        doc_id += 1
+
+    while len(document_ids) < ntoks:
+        document_ids.append(-1)
+        attn_regions.append(-1)
+
+    return torch.tensor(document_ids), torch.tensor(attn_regions)
+
+
+def create_random_documents_ar2(ntoks, nmin=1024, nmax=4096, seed=42):
+    """Create attn_regions2 pattern: [Q(1)] [img(-1)] [reg(1)] [AR(0)] per doc."""
+    random.seed(seed)
+    document_ids, attn_regions = [], []
+    current_pos, doc_id = 0, 0
+
+    while ntoks - current_pos > nmin:
+        doc_length = random.randint(nmin, min(nmax, ntoks - current_pos))
+        if current_pos + doc_length > ntoks:
+            break
+        document_ids.extend([doc_id] * doc_length)
+        nq = max(10, int(0.10 * doc_length))
+        nimg = max(10, int(0.40 * doc_length))
+        nreg = max(5, int(0.05 * doc_length))
+        nar = doc_length - nq - nimg - nreg
+        attn_regions.extend([1] * nq + [-1] * nimg + [1] * nreg + [0] * nar)
         current_pos += doc_length
         doc_id += 1
 
@@ -79,8 +106,13 @@ if __name__ == "__main__":
                         help="Verify against torch create_block_mask")
     parser.add_argument("--compare", action="store_true",
                         help="Compare all opt variants across sizes")
+    parser.add_argument("--ar2", action="store_true",
+                        help="Use attn_regions2 pattern (ar=-1 holes inside docs)")
     parser.add_argument("--runs", type=int, default=5)
     args = parser.parse_args()
+
+    create_fn = create_random_documents_ar2 if args.ar2 else create_random_documents
+    pattern_label = "attn_regions2 (ar=-1 holes)" if args.ar2 else "standard (prefix+AR)"
 
     if args.compare:
         from flexmaskli.docmask_cpu import HAS_NUMBA
@@ -96,17 +128,18 @@ if __name__ == "__main__":
         else:
             # Warmup numba JIT on a small input
             print("Warming up numba JIT...", end="", flush=True)
-            d_w, a_w = create_random_documents(8192, args.docmin, args.docmax, args.seed)
+            d_w, a_w = create_fn(8192, args.docmin, args.docmax, args.seed)
             make_docmask_numba(8192, a_w, d_w, BLOCK_SIZE=args.block)
             print(" done.")
 
+        print(f"Pattern: {pattern_label}")
         print(f"{'ntoks':>10s}", end="")
         for l in labels:
             print(f"  {l:>10s}", end="")
         print()
 
         for ntoks in sizes:
-            document_ids, attn_regions = create_random_documents(
+            document_ids, attn_regions = create_fn(
                 ntoks, args.docmin, args.docmax, args.seed)
             print(f"{ntoks:>10d}", end="", flush=True)
             for fn in fns_for_compare:
@@ -116,8 +149,9 @@ if __name__ == "__main__":
                 print(f"  {med:>8.1f}ms", end="", flush=True)
             print()
     else:
-        document_ids, attn_regions = create_random_documents(
+        document_ids, attn_regions = create_fn(
             args.ntoks, args.docmin, args.docmax, args.seed)
+        print(f"Pattern: {pattern_label}")
 
         fn = lambda: make_docmask_cpu(
             args.ntoks, attn_regions, document_ids, BLOCK_SIZE=args.block)

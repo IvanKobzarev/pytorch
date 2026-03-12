@@ -75,13 +75,14 @@ if HAS_NUMBA:
         kv_idx = np.zeros((B, NB, NB), dtype=np.int32)
         fkv_num = np.zeros((B, NB), dtype=np.int32)
         fkv_idx = np.zeros((B, NB, NB), dtype=np.int32)
+        any_neg = np.zeros(NB, dtype=nb.boolean)
+        all_neg = np.zeros(NB, dtype=nb.boolean)
+        dense_s = np.empty(max_dense, dtype=np.int64)
+        dense_e = np.empty(max_dense, dtype=np.int64)
+        dense_v = np.empty(max_dense, dtype=np.int64)
 
         for b in range(B):
             # --- inline dense region finding ---
-            MAX_DENSE = max_dense
-            dense_s = np.empty(MAX_DENSE, dtype=np.int64)
-            dense_e = np.empty(MAX_DENSE, dtype=np.int64)
-            dense_v = np.empty(MAX_DENSE, dtype=np.int64)
             nd = 0
             j = 0
             while j < ntoks:
@@ -90,7 +91,7 @@ if HAS_NUMBA:
                     k = j + 1
                     while k < ntoks and ar[b, k] == v:
                         k += 1
-                    assert nd < MAX_DENSE, "too many dense regions in one batch element"
+                    assert nd < max_dense, "too many dense regions in one batch element"
                     dense_s[nd] = j
                     dense_e[nd] = k
                     dense_v[nd] = v
@@ -100,8 +101,6 @@ if HAS_NUMBA:
                     j += 1
 
             # --- per-block negative flags for -1 handling ---
-            any_neg = np.zeros(NB, dtype=nb.boolean)
-            all_neg = np.zeros(NB, dtype=nb.boolean)
             for blk in range(NB):
                 neg = 0
                 for t in range(BS):
@@ -136,6 +135,8 @@ if HAS_NUMBA:
 
                 # above diagonal: only through dense regions
                 for kvb in range(qb + 1, NB):
+                    if all_neg[kvb]:
+                        continue
                     found_partial = False
                     found_full = False
                     for d1 in range(nd):
@@ -153,7 +154,8 @@ if HAS_NUMBA:
                             kv_ov = (kvb * BS < de2) and (ds2 < (kvb + 1) * BS)
                             if kv_ov:
                                 kv_fi = (ds2 <= kvb * BS) and ((kvb + 1) * BS <= de2)
-                                if q_fi and kv_fi:
+                                is_full = q_fi and kv_fi and not any_neg[qb] and not any_neg[kvb]
+                                if is_full:
                                     found_full = True
                                 else:
                                     found_partial = True
@@ -252,6 +254,8 @@ def make_batchmask_numpy(ntoks, attn_regions_batch, BLOCK_SIZE=128):
 
             # above diagonal: only through dense regions
             for kvb in range(qb + 1, NB):
+                if all_neg[kvb]:
+                    continue
                 is_partial = False
                 is_full = False
                 for ds1, de1, v1 in dense:
@@ -265,7 +269,8 @@ def make_batchmask_numpy(ntoks, attn_regions_batch, BLOCK_SIZE=128):
                         kv_ov = (kvb * BS < de2) and (ds2 < (kvb + 1) * BS)
                         if kv_ov:
                             kv_fi = (ds2 <= kvb * BS) and ((kvb + 1) * BS <= de2)
-                            if q_fi and kv_fi:
+                            is_full_blk = q_fi and kv_fi and not any_neg[qb] and not any_neg[kvb]
+                            if is_full_blk:
                                 is_full = True
                             else:
                                 is_partial = True

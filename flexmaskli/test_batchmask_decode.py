@@ -20,9 +20,10 @@ def ground_truth_mask(B, ntoks, ar):
         causal = q >= kv
         ar_q = ar_t[b, q]
         ar_kv = ar_t[b, kv]
+        is_padding = (ar_q == -1) | (ar_kv == -1)
         dense = (ar_q > 0) & (ar_kv > 0)
         same = ar_q == ar_kv
-        masks.append(causal | (dense & same))
+        masks.append((causal | (dense & same)) & ~is_padding)
     return torch.stack(masks)
 
 
@@ -61,9 +62,10 @@ def blockmask_to_element(bm, B, ntoks, BS, ar):
                 causal = q_idx >= kv_idx
                 ar_q = ar_t[b, q_idx]
                 ar_kv = ar_t[b, kv_idx]
+                is_padding = (ar_q == -1) | (ar_kv == -1)
                 dense = (ar_q > 0) & (ar_kv > 0)
                 same = ar_q == ar_kv
-                mask[b, qs:qe, kvs:kve] = causal | (dense & same)
+                mask[b, qs:qe, kvs:kve] = (causal | (dense & same)) & ~is_padding
 
     return mask
 
@@ -154,12 +156,14 @@ def test_decode_like_patterns():
     ar[0, 512:640] = 1   # same as first — cross-attention expected
     all_pass &= compare_masks("mixed_values_noncontig", ar, ntoks, BS)
 
-    print()
-    if all_pass:
-        print("ALL TESTS PASSED")
-    else:
-        print("SOME TESTS FAILED — non-contiguous same-value bug confirmed")
-    return all_pass
+    # 6: holes larger than block size
+    ar = np.zeros((1, ntoks), dtype=np.int64)
+    ar[0, :700] = 1
+    ar[0, 256:512] = -1
+    ar[0, 640:680] = -1
+    all_pass &= compare_masks("large_holes", ar, ntoks, BS)
+
+    assert all_pass
 
 
 if __name__ == "__main__":

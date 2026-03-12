@@ -168,7 +168,7 @@ def make_docmask_gpu_v2(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, SUPER
     )
 
 
-def make_docmask_gpu_v3(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, SUPERBLOCK_SIZE=8192, compile=True, max_per_row=None):
+def make_docmask_gpu_v3(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, SUPERBLOCK_SIZE=8192, compile=True, max_per_row="dynamic"):
     """
     Memory-efficient version of make_docmask_gpu_v2.
     Uses compact (NB, max_per_row) index arrays instead of (NB, NB).
