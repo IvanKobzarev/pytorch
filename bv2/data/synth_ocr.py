@@ -130,7 +130,7 @@ class Dataset:
             "lowe": np.r_[[0] * (npre-1), [0] * nimg, [0], [1] * (nsuf-1)].astype(np.float32),  # -1 removes bos+sep
             "attn_regions": np.r_[[1] * npre, [1] * nimg, [1], [0] * (nsuf-2)],  # -2 removes sep+eos
             # NOTE: for attn_regions, 0 = AR, >0 = dense region ID.
-            "ndatatoks": len(prefix) + len(suffix) + nimg,
+            "ndatatoks": len(prefix) + len(suffix) + int(nimg),
             "id": exid,
         })
 

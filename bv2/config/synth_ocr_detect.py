@@ -18,10 +18,12 @@ def get_config():
 
     c.nsteps = 150_000
     c.warmup_nsteps = 2000
-    c.lr = 1e-5
-    c.wd = 1e-5
+    c.lr_adam = 1e-3
+    c.lr_muon = 1e-3
+    c.wd = lambda: c.lr_adam * 0.01
 
-    c.muon.param_modes = {"muon": [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*img_emb.proj.weight", r".*txt_unemb.head.weight"],
+    c.muon.param_modes = {"muon_h": [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*img_emb.proj.weight", r".*txt_unemb.head.weight"],
+                          "embedding": [r".*txt_emb.emb.weight"],
                           "adam": [r".*"]}
 
     c.model.dim = 4096
@@ -30,7 +32,7 @@ def get_config():
     c.model.txt.posemb = True
     c.model.img.posemb = True
 
-    # No glope / image separators by deafult
+    # No glope / image separators by default
     c.model.glope = 0
     c.model.sep.nreg = 0
 

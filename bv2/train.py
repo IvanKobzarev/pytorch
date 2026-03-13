@@ -147,17 +147,19 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                 return mode
         raise ValueError(f"Every param should be matched to an optimizer mode. `{name}` was not matched")
 
+
+    decay_patterns = c.get("decay_patterns", [r".*\.gamma", r".*\.gamma_head"])
     if rank == 0:
-        summary_table(model, stats=c.get("param_stats", False), param_mode=get_muon_param_mode)
+        summary_table(model, stats=c.get("param_stats", False), param_mode=get_muon_param_mode, decay_patterns=decay_patterns)
 
     param_groups = defaultdict(list)
     for n, p in model.named_parameters():
         param_groups[get_muon_param_mode(n)].append(p)
-    params = [{"params": params, "mode": mode} for mode, params in param_groups.items()]
+    params = [{"params": ps, "mode": mode} for mode, ps in param_groups.items()]
 
-    optim = Muon(params, lr=torch.tensor(0.0), **muon_args)
+    optim = Muon(params, lr_adam=torch.tensor(0.0), lr_muon=torch.tensor(0.0), **muon_args)
     optim.init_state() # we init state to avoid recompiles
-    decay_params = [p for n, p in model.named_parameters() if is_decay(n)]
+    decay_params = [p for n, p in model.named_parameters() if is_decay(n, decay_patterns)]
 
     @record_function("fwd_and_bwd_step")
     @u.suppress_warnings("`isinstance(treespec, LeafSpec)` is deprecated", FutureWarning)
@@ -192,7 +194,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         plattli=bv2.metrics.PlattliWriter(rank, workdir, first_step),
     )
     if rank == 0:  # Log once more after ckpt resume.
-        summary_table(model, stats=c.get("param_stats", False), param_mode=get_muon_param_mode)
+        summary_table(model, stats=c.get("param_stats", False), param_mode=get_muon_param_mode, decay_patterns=decay_patterns)
     prints0(model)
 
     peak_mems, model_times, step_times = [], [], []
@@ -270,9 +272,9 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             warmup_steps=c.warmup_nsteps,
         )
 
-        lr = sched * c.lr
-        set_lr_(optim, lr)
-        mw.log({"chrono/lr": lr, "chrono/sched": sched})
+        set_lr_(optim, sched * c.lr_adam, "lr_adam")
+        set_lr_(optim, sched * c.lr_muon, "lr_muon")
+        mw.log({"chrono/lr_adam": sched * c.lr_adam, "chrono/lr_muon": sched * c.lr_muon, "chrono/sched": sched})
 
         model.zero_grad(set_to_none=True)
 
@@ -447,10 +449,10 @@ def global_schedule(*, step, total_steps, warmup_steps=1):
     return min(1.0, step / warmup_steps)
 
 
-def set_lr_(optimizer, lr):
+def set_lr_(optimizer, lr, name):
     lr = torch.tensor(lr)  # For torch.compile, else it's a compile-time constant!
     for param_group in optimizer.param_groups:
-        param_group["lr"] = lr
+        param_group[name] = lr
 
 
 def print_stamped(s, rank, **kw):
@@ -487,17 +489,11 @@ def swissnum(x):
     return f"{x:_}".replace("_", "'")
 
 
-def is_decay(name):
-    decays = [
-        r"blocks.*\.att\..*weight",
-        r"blocks.*\.mlp\..*weight",
-        r"txt_unemb\.head\.weight",
-        r"img_emb.proj.weight",
-    ]
-    return any(re.match(d, name) for d in decays)
+def is_decay(name, patterns):
+    return any(re.fullmatch(d, name) for d in patterns)
 
 
-def summary_table(model, stats=True, param_mode=None):
+def summary_table(model, stats=True, param_mode=None, decay_patterns=()):
     from rich.table import Table
     tbl = Table(
         show_header=True,
@@ -534,7 +530,7 @@ def summary_table(model, stats=True, param_mode=None):
             local_bytes += x.to_local().nbytes
         else:
             cols += ["-", "shape"]
-        cols += [str(is_decay(name))]
+        cols += [str(is_decay(name, decay_patterns))]
         cols += [mode]
         if stats:
             cols += [global_reduce(x, "mean"), global_reduce(x, "std")]
@@ -682,10 +678,12 @@ def get_config():
 
     c.nsteps = 16
     c.warmup_nsteps = 3
-    c.lr = 3e-4
-    c.wd = lambda: c.lr * 0.1
+    c.lr_adam = 1e-3
+    c.lr_muon = 1e-3
+    c.wd = lambda: c.lr_adam * 0.01
 
     c.muon.param_modes = {"muon_h": [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*img_emb.proj.weight", r".*txt_unemb.head.weight"],
+                          "embedding": [r".*txt_emb.emb.weight"],
                           "adam": [r".*"]}
 
     c.model.dim = 4096

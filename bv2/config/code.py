@@ -19,10 +19,16 @@ def get_config():
     c.nsteps = int(16_000_000 / (8 * 64.28))
 
     c.warmup_nsteps = 2000
-    c.lr = 1e-3  # NEEDS TO BE TUNED
-    c.wd = lambda: 0.1*c.lr
 
-    c.muon.param_modes = {"muon": [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*img_emb.proj.weight", r".*txt_unemb.head.weight"],
+    # reference sweep: http://localhost:1337/?share=soon-rose-fake
+    # use lr_adam=1e-3 and lr_muon=6e-4 for good training pplx
+    # values below optimize for val pplx
+    c.lr_adam = 1e-3
+    c.lr_muon = 1e-2
+    c.wd = lambda: c.lr_adam * 0.01
+
+    c.muon.param_modes = {"muon_h": [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*img_emb.proj.weight", r".*txt_unemb.head.weight"],
+                          "embedding": [r".*txt_emb.emb.weight"],
                           "adam": [r".*"]}
 
     c.model.dim = 2048
@@ -48,7 +54,3 @@ def get_config():
 
     return c
 
-def nosweep():
-    for seed in (0, 1, 2):
-        for maxtok in (32_768 + 1, 2*32_768 + 1):
-            yield "nsteps=2000",  f"c.{seed=}", f"c.{maxtok=}"

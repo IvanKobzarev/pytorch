@@ -33,11 +33,15 @@ def get_config():
     c.iter.maxtok = lambda: c.maxtok
 
     c.nsteps = 20_000
-    c.warmup_nsteps = 2000
-    c.lr = 3e-4
-    c.wd = 1e-4
+    c.warmup_nsteps = 100
 
-    c.muon.param_modes = {"muon": [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*img_emb.proj.weight", r".*txt_unemb.head.weight"],
+    # reference sweep: http://localhost:1337/?share=rust-dumb-good
+    c.lr_adam = 1e-3
+    c.lr_muon = 1e-3
+    c.wd = lambda: c.lr_adam * 0.01
+
+    c.muon.param_modes = {"muon_h": [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*img_emb.proj.weight", r".*txt_unemb.head.weight"],
+                          "embedding": [r".*txt_emb.emb.weight"],
                           "adam": [r".*"]}
 
     c.model.dim = 2048

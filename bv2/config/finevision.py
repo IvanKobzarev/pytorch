@@ -57,10 +57,12 @@ def get_config():
     # 16384 patches: 13m examples / 100k steps
     c.nsteps = 100_000
     c.warmup_nsteps = 1000
-    c.lr = 6e-4
-    c.wd = lambda: c.lr * 0.1
+    c.lr_adam = 1e-2
+    c.lr_muon = 1e-3
+    c.wd = 1e-5
 
-    c.muon.param_modes = {"muon": [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*img_emb.proj.weight", r".*txt_unemb.head.weight"],
+    c.muon.param_modes = {"muon_h": [r".*mlp.l[12].weight", r".*att.[qkvo].weight", r".*img_emb.proj.weight", r".*txt_unemb.head.weight"],
+                          "embedding": [r".*txt_emb.emb.weight"],
                           "adam": [r".*"]}
 
     c.model.dim = 2048
@@ -144,16 +146,3 @@ def get_config():
 
     return c
 
-def nosweep():
-    for lr in (3e-4, 6e-4,):
-        # Baselines:
-        yield f"{lr=}", "c.data.common.max_patches=196"
-        yield f"{lr=}", "c.data.common.max_patches=784"
-        yield f"{lr=}", "c.data.common.max_patches=3136"
-
-        # Randomized max-patches
-        for exp, mode in [
-            (1.616, None),  # 448px² in expectation
-            (1.12, 196),  # 224px² as mode, 448px² in expectation
-        ]:
-            yield f"{lr=}", f"{exp=}", f"{mode=}", "c.data.common.max_patches=16_384"

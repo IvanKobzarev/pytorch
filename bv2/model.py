@@ -9,6 +9,19 @@ from torch.utils.checkpoint import checkpoint
 
 import bv2.data.dpack as dpack  # usort: skip
 
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.gamma = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        return F.rms_norm(x, (x.shape[-1],), weight=self.gamma.abs())
+
+    def init_weights(self):
+        nn.init.ones_(self.gamma)
+
+
 # 1: Compiled flex_attention is necessary to checkpoint the attention block, see:
 # https://github.com/pytorch/pytorch/issues/147879#issuecomment-3041193259
 # 2: max-autotune-no-cudagraphs takes a long time, but did 1039ms->1028ms on 4k seqlen.
@@ -48,11 +61,10 @@ class Attention(nn.Module):
         return o.reshape(*batch_dims, *o.shape[-2:]), {"max_logit": aux.max_scores.max()}
 
     def init_weights(self, rng):
-        # TODO: more careful: qk such that dot-var is 1, and care about o.
-        nn.init.trunc_normal_(self.q.weight, mean=0.0, std=0.02, generator=rng)
-        nn.init.trunc_normal_(self.k.weight, mean=0.0, std=0.02, generator=rng)
-        nn.init.trunc_normal_(self.v.weight, mean=0.0, std=0.02, generator=rng)
-        nn.init.trunc_normal_(self.o.weight, mean=0.0, std=1 / np.sqrt(self.dim), generator=rng)  # fmt: skip
+        nn.init.trunc_normal_(self.q.weight, mean=0.0, std=1/np.sqrt(self.dim), generator=rng)
+        nn.init.trunc_normal_(self.k.weight, mean=0.0, std=1/np.sqrt(self.dim), generator=rng)
+        nn.init.trunc_normal_(self.v.weight, mean=0.0, std=1/np.sqrt(self.dim), generator=rng)
+        nn.init.trunc_normal_(self.o.weight, mean=0.0, std=1/np.sqrt(self.dim), generator=rng)
 
 
 class MLP(nn.Module):
@@ -60,8 +72,8 @@ class MLP(nn.Module):
         super().__init__()
         self.dim = dim
         self.grow = grow
-        self.l1 = nn.Linear(dim, int(grow * dim))
-        self.l2 = nn.Linear(int(grow * dim), dim)
+        self.l1 = nn.Linear(dim, int(grow * dim), bias=False)
+        self.l2 = nn.Linear(int(grow * dim), dim, bias=False)
 
     def forward(self, x):
         x = self.l1(x)
@@ -70,17 +82,15 @@ class MLP(nn.Module):
         return x, {}
 
     def init_weights(self, rng):
-        nn.init.trunc_normal_(self.l1.weight, mean=0.0, std=1/np.sqrt(self.dim * self.grow / 2), generator=rng)  # fmt: skip
-        nn.init.trunc_normal_(self.l2.weight, mean=0.0, std=1/np.sqrt(self.dim * self.grow / 2), generator=rng)  # fmt: skip
-        nn.init.zeros_(self.l1.bias)
-        nn.init.zeros_(self.l2.bias)
+        nn.init.trunc_normal_(self.l1.weight, mean=0.0, std=1/np.sqrt(self.dim / 2), generator=rng)  # Kaiming fan-in, /2 for GELU
+        nn.init.trunc_normal_(self.l2.weight, mean=0.0, std=1/np.sqrt(self.dim * self.grow), generator=rng)  # Kaiming fan-in
 
 
 class Block(nn.Module):
     def __init__(self, dim, head_dim=128, grow=4, kv_reduce=4, remat=True):
         super().__init__()
-        self.att_ln = nn.LayerNorm(dim)  # TODO: better ln parametrization
-        self.mlp_ln = nn.LayerNorm(dim)
+        self.att_ln = RMSNorm(dim)
+        self.mlp_ln = RMSNorm(dim)
         self.att = Attention(dim, head_dim, kv_reduce)
         self.mlp = MLP(dim, grow)
         self.remat = remat
@@ -101,8 +111,8 @@ class Block(nn.Module):
     def init_weights(self, rng):
         self.att.init_weights(rng)
         self.mlp.init_weights(rng)
-        self.att_ln.reset_parameters()  # scale: 1.0, bias: 0.0
-        self.mlp_ln.reset_parameters()
+        self.att_ln.init_weights()
+        self.mlp_ln.init_weights()
 
 
 class TxtEmbedding(nn.Module):
@@ -110,35 +120,29 @@ class TxtEmbedding(nn.Module):
         super().__init__()
         self.emb = nn.Embedding(vocab, dim)
         self.dim = dim
-        self.pe_scale = (
-            nn.Parameter(torch.empty((), dtype=torch.float32)) if posemb else None
-        )
+        self.ln = RMSNorm(dim)
+        self.ape_ln = RMSNorm(dim) if posemb else None
 
     def forward(self, data):
         tokens, positions, mask = dpack.unpack_as_text(data)
-        x = self.emb(tokens)
+        x = self.ln(self.emb(tokens))
 
-        if self.pe_scale is not None:
-            # Compute and add absolute position embedding.
-            # NOTE: we could probably precompute and keep `freqs` in a buffer!
+        if self.ape_ln is not None:
             ifreqs = torch.arange(0, self.dim, 2, dtype=torch.float32, device=x.device)
-            ifreqs /= self.dim
-            freqs = 10000.0 ** (-ifreqs)
+            freqs = 10000.0 ** (-ifreqs / self.dim)
 
-            # fmt: off
-            # Note: checked that pre-allocating and in-place-ing doesn't make things better.
-            x[..., 0::2] += torch.sin(positions[..., :, None] * freqs[None, :]) * self.pe_scale
-            x[..., 1::2] += torch.cos(positions[..., :, None] * freqs[None, :]) * self.pe_scale
-            # fmt: on
+            posemb = torch.empty_like(x)
+            posemb[..., 0::2] = torch.sin(positions[..., :, None] * freqs[None, :])
+            posemb[..., 1::2] = torch.cos(positions[..., :, None] * freqs[None, :])
+            x = x + self.ape_ln(posemb)
 
         return x * mask[..., None], {}
 
     def init_weights(self, rng):
-        nn.init.trunc_normal_(self.emb.weight, 0, 1 / self.dim, generator=rng)
-        if self.pe_scale is not None:
-            # The /0.7071 gives std=1.0 then /dim to get same as above emb.weight, see https://fburl.com/anp/djuqezov
-            # But then, the / 0.03 is from a sweep, see https://meta.wandb.io/axl/bv2/reports/Random-nouns-posemb-ln-vs-scalar--Vmlldzo0MDI5
-            nn.init.constant_(self.pe_scale, 1 / 0.7071 / 0.03 / self.dim)
+        nn.init.trunc_normal_(self.emb.weight, 0, 1 / np.sqrt(self.dim), generator=rng)  # 1/sqrt(dim) for dim-independent norm
+        self.ln.init_weights()
+        if self.ape_ln is not None:
+            self.ape_ln.init_weights()
 
 
 def to_next_multiple_of(m):
@@ -149,16 +153,20 @@ def to_next_multiple_of(m):
 
 
 class TxtUnembedding(nn.Module):
-    def __init__(self, dim, vocab, chunksz=None, init_std=0.0, pad_to=8):
+    def __init__(self, dim, vocab, chunksz=None, pad_to=8):
         super().__init__()
-        # TODO: Should we move the pre-head LN to the unembeddings, maybe?
-        self.head = nn.Linear(dim, to_next_multiple_of(pad_to)(vocab), bias=True)
+        padded_vocab = to_next_multiple_of(pad_to)(vocab)
+        self.head = nn.Linear(dim, padded_vocab, bias=False)
+        self.head_bias = nn.Parameter(torch.zeros(padded_vocab))
+        self.gamma_head = nn.Parameter(torch.ones(padded_vocab))
+        self.vocab = vocab
         self.chunksz = chunksz
-        self.init_std = init_std
-        self.unpadded_vocab = vocab
+
+    def _norm_logits(self, x):
+        return F.rms_norm(x, (x.shape[-1],), weight=self.gamma_head.abs())
 
     def _process_chunk(self, x, targets, loss_weights, global_total_loss_toks, mode):
-        logits = self.head(x)
+        logits = self._norm_logits(self.head(x)) + self.head_bias
         pred = logits.argmax(dim=-1)
 
         # We need to flatten/unflatten batch_dims because of torch's cross-entropy API.
@@ -184,9 +192,9 @@ class TxtUnembedding(nn.Module):
             if logits_tok_idx is not None:
                 assert x.ndim == 3, "Only works with 1D batch dimension."
                 batch_indices = torch.arange(x.shape[0], device=x.device)
-                return self.head(x[batch_indices, logits_tok_idx, :])[..., :self.unpadded_vocab], {}
+                return (self._norm_logits(self.head(x[batch_indices, logits_tok_idx, :])) + self.head_bias)[..., :self.vocab], {}
             else:
-                return self.head(x)[..., :self.unpadded_vocab], {}
+                return (self._norm_logits(self.head(x)) + self.head_bias)[..., :self.vocab], {}
 
         targets, _, mask = dpack.unpack_as_text(targets)
         x_detached = x.detach().requires_grad_() if mode == "loss and bwd" else x
@@ -240,13 +248,11 @@ class TxtUnembedding(nn.Module):
         return total_loss, extras
 
     def init_weights(self, rng=None):
-        if self.init_std > 0.0:
-            nn.init.trunc_normal_(self.head.weight, 0.0, self.init_std, generator=rng)  # fmt: skip
-        else:
-            nn.init.zeros_(self.head.weight)
-        nn.init.zeros_(self.head.bias)
-        if self.unpadded_vocab != self.head.bias.shape[0]:
-            nn.init.constant_(self.head.bias[self.unpadded_vocab:], -2)  # -2 is trunc_normal_'s limit.
+        nn.init.trunc_normal_(self.head.weight, 0.0, 1/np.sqrt(self.head.in_features), generator=rng)  # fmt: skip
+        nn.init.zeros_(self.head_bias)
+        if self.vocab != self.head_bias.shape[0]:
+            nn.init.constant_(self.head_bias.data[self.vocab:], -10)
+        nn.init.constant_(self.gamma_head, 0.01)
 
 
 class PosEmbSinCos2D(nn.Module):
@@ -283,10 +289,10 @@ class ImgEmbedding(nn.Module):
         self.proj = nn.Linear((ph * pw * c) + tiptoi, dim, bias=False)
         self.ps = (ph, pw, c)
 
-        self.ln = nn.LayerNorm(dim)
+        self.ln = RMSNorm(dim)
 
         self.ape = PosEmbSinCos2D(dim) if posemb else None
-        self.ape_ln = nn.LayerNorm(dim) if posemb else None
+        self.ape_ln = RMSNorm(dim) if posemb else None
 
         self.tiptoi = tiptoi
 
@@ -314,11 +320,11 @@ class ImgEmbedding(nn.Module):
         return x * mask[..., None], {}  # Set non-patch token embeddings back to 0.
 
     def init_weights(self, rng):
-        # This is Kaiming fan-in, preserves var in fwd. Not sure if best, but reasonable
+        # This is Kaiming fan-in, preserves var in fwd.
         nn.init.trunc_normal_(self.proj.weight, mean=0.0, std=1/np.sqrt(np.prod(self.ps)), generator=rng)  # fmt: skip
         if self.ape is not None:
-            self.ape_ln.reset_parameters()
-        self.ln.reset_parameters()
+            self.ape_ln.init_weights()
+        self.ln.init_weights()
 
 
 class RegEmbedding(nn.Module):
@@ -342,7 +348,7 @@ class RegEmbedding(nn.Module):
             if init_zeros:
                 nn.init.zeros_(self.emb.weight)
             else:
-                nn.init.trunc_normal_(self.emb.weight, 0, 1 / self.dim, generator=rng)
+                nn.init.trunc_normal_(self.emb.weight, 0, 1 / np.sqrt(self.dim), generator=rng)  # 1/sqrt(dim) for dim-independent norm
 
 
 class SimpleTransformer(nn.Module):
@@ -357,7 +363,7 @@ class SimpleTransformer(nn.Module):
         self.txt_emb = TxtEmbedding(dim=dim, vocab=vocab, **txt)
         self.txt_unemb = TxtUnembedding(dim=dim, vocab=vocab, **txt_unemb)
         self.blocks = nn.ModuleList([Block(dim, **block_kw) for _ in range(depth)])
-        self.ln = nn.LayerNorm(dim)
+        self.ln = RMSNorm(dim)
 
         self.glope = nn.Embedding(glope, dim) if glope else None
 
@@ -407,7 +413,7 @@ class SimpleTransformer(nn.Module):
         self.sep_emb.init_weights(rng, init_zeros=True)
         self.txt_emb.init_weights(rng)
         self.txt_unemb.init_weights(rng)
-        self.ln.reset_parameters()  # TODO: better parametrization
+        self.ln.init_weights()
 
         if self.glope is not None:
             # Start from unopinionated embeddings
