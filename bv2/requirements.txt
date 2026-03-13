@@ -15,5 +15,4 @@ ruff
 sackli
 sws-config
 tiktoken
-wandb
 zstandard

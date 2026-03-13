@@ -45,58 +45,6 @@ class BytesWriter:
         return None
 
 
-class WandbWriter:
-    def __init__(self, config, rank, name, dir, first_step=0, entity="rigi", project="bv2", resume=None):
-        self.step = first_step
-        self.rank = rank
-        if self.rank != 0:
-            return
-
-        # Ignore a warning-spam from pydantic via wandb
-        import warnings  # noqa: E402
-        warnings.filterwarnings("ignore", message=r".*The '(repr|frozen)'.*`Field\(\)`.*")
-        import wandb  # noqa: E402
-
-        wandb.login()
-
-        config["env"] = {k: v for k, v in os.environ.items() if "key" not in k.lower()}
-        config["PID"] = os.getpid()
-
-        self.wandb_run = wandb.init(
-            entity=entity,
-            project=project,
-            dir=dir,
-            name=name,
-            config={**config, "workdir": dir},
-            settings=wandb.Settings(quiet=True),
-            tags=[config.get("data_name", "N/A")],
-            id=resume,
-            resume="allow",
-        )
-
-        self._my_types = (wandb.sdk.data_types.utils.Media,)
-
-    @only_on_rank0
-    def log(self, data, flush=False):
-        self.wandb_run.log(data, step=self.step, commit=False)
-        # Remove wandb-specific types so downstream writers don't see them.
-        for k in [k for k, v in data.items() if isinstance(v, self._my_types)]:
-            data.pop(k)
-
-    def end_step(self):
-        if self.rank == 0:
-            self.wandb_run.log({}, step=self.step, commit=True)
-        self.step += 1
-
-    @only_on_rank0
-    def finish(self, training_done):
-        self.wandb_run.finish()  # Wandb doesn't know "preempted state", so always finish.
-
-    @only_on_rank0
-    def save_ckpt(self):
-        return self.wandb_run.id
-
-
 class JsonlWriter:
     def __init__(self, rank, dir, first_step=0):
         self.step = first_step
