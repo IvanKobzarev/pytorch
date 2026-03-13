@@ -339,15 +339,16 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             all_srcs = sorted({s for ss in u.all_gather_object(local_srcs) for s in ss})
             s2i = {s: i for i, s in enumerate(all_srcs)}
 
-            # Map each token to its source index via iseq
+            # Map each real token to its source index via iseq.
             src_per_ex = torch.tensor([s2i[s] for s in data["src"]], device=device)
-            src_per_tok = src_per_ex[data["iseq"]]
+            valid_toks = data["iseq"] >= 0
+            src_per_tok = src_per_ex[data["iseq"][valid_toks]]
 
             # Vectorized per-source stats on GPU, then one all_reduce
             stats = torch.zeros(3, len(all_srcs), device=device)
             stats[0].scatter_add_(0, src_per_ex, torch.ones(len(data["src"]), device=device))
             stats[1].scatter_add_(0, src_per_tok, torch.ones_like(src_per_tok, dtype=stats.dtype))
-            stats[2].scatter_add_(0, src_per_tok[:-1], extras["tok_losses"].float())
+            stats[2].scatter_add_(0, src_per_tok, extras["tok_losses"][valid_toks].float())
             distr.all_reduce(stats)
 
             for i, src in enumerate(all_srcs):
