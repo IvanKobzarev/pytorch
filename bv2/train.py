@@ -1,5 +1,5 @@
 """
-pip install -U -r bv2/requirements-gpu.txt (or -nightly)
+pip install -U -r bv2/requirements-gpu-stable.txt (or -nightly)
 bv2/tools/local_run -m bv2.train
 """
 

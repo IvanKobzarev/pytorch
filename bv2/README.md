@@ -4,7 +4,7 @@ Quickstart
 Hopefully not outdated. Create your venv however you like, then:
 
 ```
-pip install -U -r bv2/requirements-gpu.txt
+pip install -U -r bv2/requirements-gpu-stable.txt
 ```
 
 Alternatives are: `requirements-gpu-nightly.txt` and `-cpu` versions.
