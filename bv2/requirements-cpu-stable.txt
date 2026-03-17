@@ -1,0 +1,2 @@
+-r requirements-common.txt
+-r requirements-torch-cpu-stable.txt

@@ -1,2 +1,2 @@
--r requirements.txt
+-r requirements-common.txt
 -r requirements-torch-cpu-nightly.txt

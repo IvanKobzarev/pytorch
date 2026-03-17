@@ -1,3 +1,0 @@
--r requirements.txt
--r requirements-torch-gpu.txt
-nvidia-ml-py
