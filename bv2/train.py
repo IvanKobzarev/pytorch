@@ -674,6 +674,7 @@ def get_config():
     c.data.min_nouns = 128
     c.data.max_nouns = 256
     c.data.tokenizer.first_N = 10_000
+    c.data.tokenizer.path = None  # Default, but easy to override.
     c.iter.maxtok = lambda: c.maxtok
 
     c.nsteps = 16
@@ -696,6 +697,7 @@ def get_config():
     c.evals.pplx_val.data.seed = 31337  # "val split" content
     c.evals.pplx_val.data.n = 150  # "val split" size
     c.evals.pplx_val.data.tokenizer.first_N = lambda: c.data.tokenizer.first_N
+    c.evals.pplx_val.data.tokenizer.path = lambda: c.data.tokenizer.path
     c.evals.pplx_val.iter.maxtok = lambda: c.maxtok
 
     return c

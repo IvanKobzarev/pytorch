@@ -5,7 +5,9 @@ from tiktoken.load import load_tiktoken_bpe
 
 
 class Tiktoken:
-    def __init__(self, first_N=None, path="/checkpoint/rigi/bv2/l4_200k_base.model"):
+    def __init__(self, first_N=None, path=None):
+        path = path or "/checkpoint/rigi/bv2/l4_200k_base.model"
+
         # "pretokenization" step done via regexp
         # borrowed from: https://www.internalfb.com/code/fbsource/[cd5f9614da86]/genai/xlformers/core/tokenizers/finetune.py?lines=281
         # bento notebook: https://fburl.com/anp/u3rlrljj.
