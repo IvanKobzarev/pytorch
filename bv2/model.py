@@ -161,13 +161,24 @@ class TxtUnembedding(nn.Module):
         logits = self._norm_logits(self.head(x)) + self.head_bias
         pred = logits.argmax(dim=-1)
 
-        # We need to flatten/unflatten batch_dims because of torch's cross-entropy API.
-        toklosses = F.cross_entropy(
-            logits.to(torch.float32).reshape(-1, logits.shape[-1]),
-            targets.reshape(-1),
-            reduction="none",
-        )
-        toklosses = toklosses.reshape(*targets.shape)
+        if mode == "loss and bwd":
+            # We need to flatten/unflatten batch_dims because of torch's cross-entropy API.
+            toklosses = F.cross_entropy(
+                logits.to(torch.float32).reshape(-1, logits.shape[-1]),
+                targets.reshape(-1),
+                reduction="none",
+            )
+            toklosses = toklosses.reshape(*targets.shape)
+        else:
+            # Temporary(?) workaround to bad fusion after introduction of _norm_logits.
+            # May become unnecessary on nightly later on how my report goes:
+            # https://fb.workplace.com/groups/1075192433118967/permalink/1904863126818556/
+            m = logits.amax(dim=-1, keepdim=True)
+            toklosses = (
+                torch.log(torch.sum(torch.exp(logits - m), dim=-1, dtype=torch.float32))
+                + m.squeeze(-1).to(torch.float32)
+                - torch.gather(logits, -1, targets[..., None]).squeeze(-1).to(torch.float32)
+            )
 
         toklosses = toklosses * (loss_weights > 0)
         lsum = (toklosses * loss_weights).sum()
