@@ -6,7 +6,6 @@ import json
 from io import BytesIO
 from zipfile import ZipFile
 
-import cv2
 import numpy as np
 
 import bv2.data.dpack as d
@@ -41,8 +40,7 @@ class Dataset:
     def make_example(self, exid, epoch=0):
         with ZipFile(BytesIO(self.reader[exid])) as zf:
             data = json.load(zf.open("data.json"))
-            img = cv2.imdecode(np.frombuffer(zf.open("image").read(), np.uint8), cv2.IMREAD_COLOR)
-            img = img[:, :, ::-1]  # BGR -> RGB
+            img = pp.imread(zf.open("image"))
             # NOTE: Not using "ocr.json" here yet.
 
         qid, question, answer = cycle_qas(data["qas"], epoch, seed=(self.data_seed, exid, "cycle_qas"))

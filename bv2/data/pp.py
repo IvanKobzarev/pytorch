@@ -1,6 +1,6 @@
 from functools import cache
+from io import BytesIO
 
-import cv2
 import numpy as np
 from einops import rearrange
 
@@ -102,10 +102,58 @@ def rand_max_patches(hw, nmax, exp=None, key=None, nmin=64, mode=None, *, ph=16,
 def reasonable_resize(img, hw, warning_exid=None):
     if hw[0] < img.shape[0] or hw[1] < img.shape[1]:
         # AREA is the only reasonable downscale: https://lucasb.eyer.be/a/vit_cnn_speed.html
-        return cv2.resize(img, hw[::-1], interpolation=cv2.INTER_AREA)  # Takes (w, h) for (h, w) imgs!
+        return resize(img, hw, interpolation="area")
         # TODO: For big downscales (>2x) this can be sped-up by doing halvings first.
     elif hw == img.shape[:2]:
         return img
     else:
         print(f"Warning: upscaling image from {img.shape=} to {hw=}. Exid: {warning_exid}")
-        return cv2.resize(img, hw[::-1], interpolation=cv2.INTER_LINEAR)
+        return resize(img, hw, interpolation="linear")
+
+
+##################################
+# OPENCV vs PILLOW COMPATIBILITY #
+##################################
+# Generally, cv2 is much faster. However, it is not free-threading compatible yet.
+# So in the meantime, we define some functions as cv2 if available, else pillow.
+
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+
+
+def imread(inp):  # Input can be either an fp, or a bytes-like.
+    assert cv2 is not None or Image is not None, "Need either cv2 or pillow for imdecode."
+
+    if cv2 is not None:
+        if hasattr(inp, "read"):
+            inp = inp.read()
+        return cv2.imdecode(np.frombuffer(inp, np.uint8), cv2.IMREAD_COLOR)[:, :, ::-1]
+    elif Image is not None:
+        if not hasattr(inp, "read"):
+            inp = BytesIO(inp)
+        return np.array(Image.open(inp).convert("RGB"))
+    raise RuntimeError("Need either cv2 or pillow for imread.")
+
+
+def resize(img, hw, interpolation="linear"):
+    if cv2 is not None:
+        if interpolation == "area":
+            return cv2.resize(img, hw[::-1], interpolation=cv2.INTER_AREA)
+        if interpolation == "linear":
+            return cv2.resize(img, hw[::-1], interpolation=cv2.INTER_LINEAR)
+        raise ValueError(f"Unknown interpolation {interpolation}")
+    elif Image is not None:
+        if interpolation == "area":
+            return np.array(Image.fromarray(img).resize(hw[::-1], resample=Image.Resampling.BOX))
+        elif interpolation == "linear":
+            return np.array(Image.fromarray(img).resize(hw[::-1], resample=Image.Resampling.BILINEAR))
+        raise ValueError(f"Unknown interpolation {interpolation}")
+    raise RuntimeError("Need either cv2 or pillow for resize.")

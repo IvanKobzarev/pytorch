@@ -12,7 +12,6 @@ import asyncio
 import copy
 import time
 
-import cv2
 import numpy as np
 from airstore.client.airstore_tabular import AIRStorePathHandler
 from fairstore.data.airstore_random_access_by_sample_id_dataset import AIRStoreRandomAccessBySampleIdDataset
@@ -82,7 +81,7 @@ class Dataset:
         row = self._fetch(self.reader[exid].decode())
 
         alt_text = row["alt_text"]
-        img = cv2.imdecode(np.frombuffer(row["storage_handle"], np.uint8), cv2.IMREAD_COLOR)[:, :, ::-1]
+        img = pp.imread(row["storage_handle"])
         suffix = self.tt.encode(alt_text)
 
         key = (self.data_seed, exid)

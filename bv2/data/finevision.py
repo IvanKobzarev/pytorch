@@ -4,7 +4,6 @@ import re
 from io import BytesIO
 from zipfile import ZipFile
 
-import cv2
 import numpy as np
 
 import bv2.data.dpack as d
@@ -42,18 +41,12 @@ class Dataset:
         with ZipFile(BytesIO(self.reader[exid])) as zf:
             data = json.load(zf.open("data.json"))
 
-            def _read_img(f):
-                img = cv2.imdecode(np.frombuffer(zf.open(f).read(), np.uint8), cv2.IMREAD_COLOR)
-                return img[:, :, ::-1]  # BGR -> RGB
-
-            images = []
             if "image" in zf.namelist():
-                images.append(_read_img("image"))
+                images = [pp.imread(zf.open("image"))]
             else:
                 image_files = [n for n in zf.namelist() if n.startswith("images/")]
                 image_files.sort(key=lambda x: int(x.split("/")[1]))
-                for image_file in image_files:
-                    images.append(_read_img(image_file))
+                images = [pp.imread(zf.open(f)) for f in image_files]
 
         # TODO: some datasets contain a sequence of QAs that are follow-ups:
         # question - answer; follow q - answer; follow q - answer. In this case, we should
