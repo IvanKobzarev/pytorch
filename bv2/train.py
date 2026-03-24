@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import sys
 from collections import Counter, defaultdict
 from datetime import datetime
 from functools import cache, partial
@@ -256,6 +257,15 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         if ran_eval:
             mw.log({"chrono/evaltime": perf_counter() - teval0})
             gc.collect(2)  # Let's also use eval as opportunity to run a full GC collection.
+
+    # Print status of GIL late, because any lazy import can flip it back on.
+    if hasattr(sys, "_is_gil_enabled"):
+        if sys._is_gil_enabled():
+            prints0(f"{u.BLUE}GIL{u.RESET} is {u.RED}ENABLED{u.RESET} (possibly re-enabled by an extension module)")
+        else:
+            prints0(f"{u.BLUE}GIL{u.RESET} is {u.GREEN}DISABLED{u.RESET} (free-threading is active)")
+    else:
+        prints0(f"{u.BLUE}Not a free-threaded build{u.RESET}")
 
     per_src_examples_seen, per_src_tokens_seen = Counter(), Counter()
     for step, data in zip(
@@ -748,6 +758,9 @@ if __name__ == "__main__":
     prints = partial(print_stamped, rank=rank)
     print0 = print if rank == 0 else lambda *args, **kwargs: None
     prints0 = prints if rank == 0 else lambda *args, **kwargs: None
+
+    prints0(f"{u.BLUE}Python{u.RESET} {sys.version.split()[0]}")
+    prints0(f"{u.BLUE}PyTorch{u.RESET} {torch.__version__}")
 
     u.install_preemption_handler()
     sws.run(partial(main, rank=rank, local_rank=local_rank, world_size=world_size))
