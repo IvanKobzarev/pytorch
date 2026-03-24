@@ -2,6 +2,18 @@
 
 set -euo pipefail
 
+conda_env=
+for arg in "$@"; do
+  if [[ "$arg" == conda:=* ]]; then
+    conda_env="${arg#conda:=}"
+  fi
+done
+
+if [[ -n "$conda_env" ]]; then
+  source /opt/conda/etc/profile.d/conda.sh
+  conda activate "$conda_env"
+fi
+
 pids=()
 
 forward_sig() {

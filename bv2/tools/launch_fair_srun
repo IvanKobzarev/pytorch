@@ -16,6 +16,18 @@
 #SBATCH --open-mode=append
 set -x
 
+conda_env=
+for arg in "$@"; do
+  if [[ "$arg" == conda:=* ]]; then
+    conda_env="${arg#conda:=}"
+  fi
+done
+
+if [[ -n "$conda_env" ]]; then
+  source /opt/conda/etc/profile.d/conda.sh
+  conda activate "$conda_env"
+fi
+
 # We pick who's master and what port to use.
 export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_PORT=$((10000 + SLURM_JOB_ID % 50000))
