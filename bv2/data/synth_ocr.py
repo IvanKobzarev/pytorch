@@ -5,8 +5,6 @@ Renders random words on white background.
 Bento: https://fburl.com/anp/9dej90z4
 """
 
-from functools import cache
-
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
@@ -18,7 +16,7 @@ from bv2.data.pp import patchify, sanity_check
 from bv2.data.tokenizer import get_tiktoken
 
 
-@cache
+@u.thread_local_cache
 def font(size=18):
     font = ImageFont.truetype("DejaVuSans.ttf", size=size)
     ascent, descent = font.getmetrics()

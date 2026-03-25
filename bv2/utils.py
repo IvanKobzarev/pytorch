@@ -7,9 +7,9 @@ import sys
 import warnings
 from contextlib import ContextDecorator
 from datetime import datetime
-from functools import cache
+from functools import cache, wraps
 from itertools import count as icount
-from threading import Thread
+from threading import Thread, local
 from time import perf_counter
 from types import FunctionType
 
@@ -106,6 +106,30 @@ def count(start, *, end=None, step=1):
         yield from icount(start, step)
     else:
         yield from range(start, end, step)
+
+
+def thread_local_cache(f):
+    """Like @functools.cache, but has a separate cache per thread."""
+    tls = local()
+    kwd_mark = object()
+
+    @wraps(f)
+    def g(*args, **kwargs):
+        cache = getattr(tls, "cache", None)
+        if cache is None:
+            tls.cache = cache = {}
+        # The `kwd_mark` separator avoid cache key collision corner-case.
+        k = args if not kwargs else args + (kwd_mark, *kwargs.items())
+        if k not in cache:
+            cache[k] = f(*args, **kwargs)
+        return cache[k]
+
+    def cache_clear():
+        if hasattr(tls, "cache"):
+            tls.cache.clear()
+
+    g.cache_clear = cache_clear
+    return g
 
 
 #    ____
