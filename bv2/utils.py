@@ -6,6 +6,7 @@ import signal
 import sys
 import warnings
 from contextlib import ContextDecorator
+from datetime import datetime
 from functools import cache
 from itertools import count as icount
 from threading import Thread
@@ -154,6 +155,16 @@ def gather_object_to(rank, obj, world_size=None, my_rank=None):
     all_objs = [None] * world_size if my_rank == rank else None
     distr.gather_object(obj, all_objs, dst=rank, group=gloo_group())
     return all_objs if my_rank == rank else None
+
+
+def printR(s, *, stamp=True, my_rank=None, world_size=None, **kw):
+    """Collective print: every rank contributes one line, rank0 prints them."""
+    my_rank = distr.get_rank() if my_rank is None else my_rank
+    if stamp:
+        t = datetime.now().time().isoformat(timespec="milliseconds")
+        s = f"[{my_rank} {t}] {s}"
+    if ss := gather_object_to(0, s, world_size=world_size, my_rank=my_rank):
+        print(*ss, sep='\n', **kw)
 
 
 def sum_to(rank, *, world_size=None, my_rank=None, **objs):

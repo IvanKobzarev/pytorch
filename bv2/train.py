@@ -422,13 +422,13 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         t_prev_step_end = perf_counter()
 
     if c.nsteps < 50:
-        prints(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
-        prints(f"Model times (med: {np.median(model_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in model_times)}")  # fmt: skip
-        prints(f"Step times (med: {np.median(step_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in step_times)}")  # fmt: skip
+        u.printR(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
+        u.printR(f"Model times (med: {np.median(model_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in model_times)}")  # fmt: skip
+        u.printR(f"Step times (med: {np.median(step_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in step_times)}")  # fmt: skip
 
     if u.about_to_get_killed():
         mw.finish(training_done=False)
-        prints(f"Finished {perf_counter() - u.about_to_get_killed()}s after getting the pre-emption call!")
+        u.printR(f"Finished {perf_counter() - u.about_to_get_killed()}s after getting the pre-emption call!")
     else:
         mw.finish(training_done=True)
         if rank == 0:
