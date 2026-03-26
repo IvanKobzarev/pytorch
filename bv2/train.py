@@ -719,6 +719,10 @@ if __name__ == "__main__":
         rank = local_rank = 0
         world_size = 1
 
+    # Get a stacktrace on crash (abort/segfault/...)
+    import faulthandler
+    faulthandler.enable()
+
     # Add rank to cache dir to avoid race-condition on the lock.
     # It means ranks don't share the compile cache, but it also
     # means we don't get the following startup crash randomly anymore:
