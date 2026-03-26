@@ -1776,7 +1776,8 @@
 
             for (const wu of wus) {
                 const statusInfo = STATE_ICONS[wu.status] || { icon: wu.status, cls: '' };
-                const effectiveStatus = (wu.status === 'CANCELLED' && wu.exit_code !== 0) ? 'CANCELLED_FAIL' : wu.status;
+                const hasExitCode = wu.exit_code !== null && wu.exit_code !== undefined;
+                const effectiveStatus = (wu.status === 'CANCELLED' && hasExitCode && wu.exit_code !== 0) ? 'CANCELLED_FAIL' : wu.status;
                 const statusEmoji = STATE_EMOJIS[effectiveStatus] || '❓';
                 const configArgs = (wu.config_args || []).map(a => {
                     const [lhs, rhs] = a.split('=', 2);
@@ -1810,7 +1811,7 @@
                 const isPending = ['PENDING', 'REQUEUE_HOLD'].includes(wu.status);
                 const statusTooltip = isPending && wu.reason
                     ? `${wu.status} (${esc(wu.reason)})`
-                    : `${wu.status} (exit: ${wu.exit_code})`;
+                    : `${wu.status} (exit: ${hasExitCode ? wu.exit_code : '?'})`;
 
                 html += `
                     <tr data-jid="${wu.jid}" data-wid="${wu.wid}" data-nsteps="${wu.nsteps || 0}">

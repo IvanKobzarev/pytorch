@@ -613,12 +613,40 @@ def last_metric(wd_path, metric_name="train/loss"):
 
 def load_sacct(jid):
     try:
-        result = run_cmd(f"sacct --long --jobs={jid} --json")
-        data = json.loads('\n'.join(result))
+        result = subprocess.run(["sacct", "--long", f"--jobs={jid}", "--json"], capture_output=True, text=True)
+        if result.returncode != 0:
+            log.debug("load_sacct nonzero for %s: rc=%s stderr=%s", jid, result.returncode, result.stderr.strip())
+            return {}
+        if not result.stdout.strip():
+            log.debug("load_sacct empty stdout for %s: stderr=%s", jid, result.stderr.strip())
+            return {}
+        data = json.loads(result.stdout)
         if data.get('jobs'):
             return data['jobs'][0]
     except Exception as e:
         log.debug("load_sacct failed for %s: %s", jid, e)
+    return {}
+
+
+def load_sacct_many(jids):
+    jids = sorted({normalize_jid(jid) for jid in jids if normalize_jid(jid)})
+    if not jids:
+        return {}
+    try:
+        result = subprocess.run(["sacct", "--long", f"--jobs={','.join(map(str, jids))}", "--json"], capture_output=True, text=True)
+        if result.returncode != 0:
+            log.debug("load_sacct_many nonzero for %s jobs: rc=%s stderr=%s", len(jids), result.returncode, result.stderr.strip())
+            return {}
+        if not result.stdout.strip():
+            log.debug("load_sacct_many empty stdout for %s jobs: stderr=%s", len(jids), result.stderr.strip())
+            return {}
+        res = {}
+        for job in json.loads(result.stdout).get('jobs', []):
+            if jid := normalize_jid(job.get("job_id")):
+                res[jid] = job
+        return res
+    except Exception as e:
+        log.debug("load_sacct_many failed for %s jobs: %s", len(jids), e)
     return {}
 
 
@@ -648,6 +676,63 @@ def _load_config_only(args):
 def _load_metric_only(args):
     wd_path, wuwd_name, metric_name = args
     return wuwd_name, last_metric(wd_path / wuwd_name, metric_name)
+
+
+def load_launchids(wd_path):
+    path = wd_path / "launchids.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def extract_wid(submit_line):
+    if not submit_line:
+        return None
+    if m := re.search(r'wid:=(\d+)', submit_line):
+        return int(m.group(1))
+    if m := re.search(r'launch_(\d+)\.sh', submit_line):
+        return int(m.group(1))
+    return None
+
+
+def normalize_jid(jid):
+    if jid is None:
+        return None
+    if isinstance(jid, int):
+        return jid
+    jid = str(jid).split('.', 1)[0]
+    return int(jid) if jid.isdigit() else None
+
+
+def extract_launch_info(launch_file):
+    launch_line = ""
+    name = ""
+    for line in launch_file.read_text().splitlines():
+        line = line.strip()
+        if not line.startswith("sbatch"):
+            continue
+        launch_line = line
+        for a in shlex.split(line):
+            if m := re.match(r'name:=(.+)', a):
+                name = m.group(1)
+        break
+    return {"name": name, "launch_line": launch_line}
+
+
+def extract_sws_args(submit_line):
+    if not submit_line:
+        return []
+    sws_args = []
+    ignore = ["xid:=", "wid:=", "jid:=", "name:="]
+    for a in shlex.split(submit_line):
+        if "=" in a and not a.startswith("--") and not any(x in a for x in ignore):
+            sws_args.append(a)
+    return sws_args
+
+
+def extract_exit_code(sacct):
+    ret = sacct.get("exit_code", {}).get("return_code", {})
+    if not ret.get("set"):
+        return None
+    return ret.get("number")
 
 
 def _find_xid_path(xid):
@@ -700,6 +785,13 @@ def get_xid_info(xid: str):
     config_results = list(executor.map(_load_config_only, [(wd_path, wd) for wd in workdirs]))
     log.info("  - loaded configs in %.2fs", time.time() - t1)
 
+    launchids = load_launchids(wd_path)
+    launches = {}
+    for launch_file in sorted(wd_path.glob("launch_*.sh")):
+        if not (lm := re.match(r'launch_(\d+)\.sh', launch_file.name)):
+            continue
+        launches[int(lm.group(1))] = extract_launch_info(launch_file)
+
     configs = {}
     warnings = {}  # wid -> list of warning strings
     for wuwd_name, config in config_results:
@@ -727,6 +819,12 @@ def get_xid_info(xid: str):
                 continue  # Keep old (higher or equal jid)
             # Otherwise fall through to replace
 
+        if str(wid) in launchids and launchids[str(wid)].get("jid") and not new_jid:
+            config["jid"] = launchids[str(wid)]["jid"]
+        if wid in launches:
+            config["_launch_line"] = launches[wid]["launch_line"]
+            if not config.get("name"):
+                config["name"] = launches[wid]["name"]
         configs[wid] = config
 
     # Get sacct info for all jids
@@ -734,14 +832,14 @@ def get_xid_info(xid: str):
     for wid, config in configs.items():
         if "jid" in config:
             jids.add(config["jid"])
+    for info in launchids.values():
+        if info.get("jid"):
+            jids.add(info["jid"])
     jids.update(int(jid) for jid in jobs_by_jid.keys() if jid.isdigit())
 
     t2 = time.time()
-    saccts = {}
     jids_list = list(jids)
-    sacct_results = list(executor.map(load_sacct, jids_list))
-    for jid, sacct in zip(jids_list, sacct_results):
-        saccts[jid] = sacct
+    saccts = load_sacct_many(jids_list)
     log.info("  - loaded sacct in %.2fs", time.time() - t2)
 
     # Determine status for each wid
@@ -772,15 +870,7 @@ def get_xid_info(xid: str):
             continue  # Already have this job from workdirs
         jid = int(jid_str) if jid_str.isdigit() else None
         # Try to extract wid from sacct submit_line
-        wid = None
-        if jid and jid in saccts:
-            submit_line = saccts[jid].get("submit_line", "")
-            # Try wid:=N pattern first (direct arg), then launch_N.sh
-            m = re.search(r'wid:=(\d+)', submit_line)
-            if not m:
-                m = re.search(r'launch_(\d+)\.sh', submit_line)
-            if m:
-                wid = int(m.group(1))  # Convert to int to match configs keys
+        wid = extract_wid(saccts[jid].get("submit_line", "")) if jid and jid in saccts else None
         # If we couldn't extract wid, use "??" placeholder
         if wid is None:
             wid = f"??{pending_unknown_idx}"
@@ -798,43 +888,31 @@ def get_xid_info(xid: str):
             configs[wid] = {"jid": jid, "name": "", "pending_only": True}
             status[wid] = job_info.get("STATE", "PENDING")
 
-    # Add WUs from launch files that aren't represented yet (e.g. cancelled before starting)
-    for launch_file in sorted(wd_path.glob("launch_*.sh")):
-        lm = re.match(r'launch_(\d+)\.sh', launch_file.name)
-        if not lm:
-            continue
-        wid = int(lm.group(1))
+    # Add WUs from launch files that aren't represented yet
+    for wid, launch in sorted(launches.items()):
         if wid in configs:
             continue
-        content = launch_file.read_text()
-        launch_line = ""
-        name = ""
-        for line in content.splitlines():
-            if line.strip().startswith("sbatch"):
-                launch_line = line.strip()
-                for a in shlex.split(launch_line):
-                    nm = re.match(r'name:=(.+)', a)
-                    if nm:
-                        name = nm.group(1)
-                break
-        configs[wid] = {"name": name, "_launch_line": launch_line}
-        status[wid] = "CANCELLED"
+        info = launchids.get(str(wid), {})
+        jid = info.get("jid")
+        sacct = saccts.get(jid, {})
+        configs[wid] = {"jid": jid, "name": launch["name"], "_launch_line": launch["launch_line"]}
+        if sacct.get('state', {}).get('current'):
+            status[wid] = sacct['state']['current'][-1]
+        else:
+            status[wid] = "UNKNOWN"
 
     # Format for response
     wus = []
-    for wid in sorted(configs.keys(), key=lambda x: int(x) if str(x).isdigit() else x):
+    for wid in sorted(configs.keys(), key=lambda x: (0, int(x)) if str(x).isdigit() else (1, str(x))):
         config = configs[wid]
         jid = config.get("jid") or None
         sacct = saccts.get(jid, {})
 
         # Extract submit line args
         submit_line = sacct.get("submit_line", "") or config.get("_launch_line", "")
-        sws_args = []
-        if submit_line:
-            ignore = ["xid:=", "wid:=", "jid:=", "name:="]
-            for a in shlex.split(submit_line):
-                if "=" in a and not a.startswith("--") and not any(x in a for x in ignore):
-                    sws_args.append(a)
+        sws_args = extract_sws_args(submit_line)
+        if not sws_args and str(wid) in launchids:
+            sws_args = [*launchids[str(wid)].get("overrides", []), *launchids[str(wid)].get("args", [])]
 
         # Time formatting
         def hms(s):
@@ -869,7 +947,7 @@ def get_xid_info(xid: str):
             "wid": wid,
             "jid": jid,
             "restarts": sacct.get("restart_cnt", 0),
-            "exit_code": sacct.get("exit_code", {}).get("return_code", {}).get("number", 0),
+            "exit_code": extract_exit_code(sacct),
             "status": status.get(wid, "UNKNOWN"),
             "reason": jobs_by_jid.get(str(jid), {}).get("REASON", ""),
             "nsteps": config.get("nsteps"),

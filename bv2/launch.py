@@ -28,6 +28,7 @@ sweep = lambda: [
 If there is no sweep function in the config, it just launches the single job.
 """
 
+import json
 import os
 import re
 import shlex
@@ -125,6 +126,8 @@ def main(slurm=True):
     wd = Path(f"/checkpoint/rigi/bv2/workdirs/{xid}")
     wd.mkdir(parents=True, exist_ok=True)
     (wd / "launchinfo.txt").write_text(shlex.join(sys.argv), encoding="utf-8")
+    launchids_file = wd / "launchids.json"
+    launchids = json.loads(launchids_file.read_text()) if launchids_file.exists() else {}
 
     try:
         for wid, work_unit_args in enumerate(all_jobs):
@@ -147,9 +150,11 @@ def main(slurm=True):
             # Write the exact launch command into a shell file that can be used to re-launch:
             (wd / f"launch_{wid}.sh").write_text(f"#!/bin/bash\ncd {code_dst}\n" + shlex.join(command_words) + "\n", encoding="utf-8")
             (wd / f"launch_{wid}.sh").chmod(0o755)
+            launchids[str(wid)] = {"jid": None, "args": work_unit_args, "overrides": sws_args}
 
             if ret.returncode == 0:
                 if match := re.search(r"Submitted batch job (\d+)", ret.stdout):
+                    launchids[str(wid)]["jid"] = int(match.group(1))
                     print(f"\r{log_xwid} | job {RESET}{match.group(1)}{LIGHT} | {log_args}", flush=True)
                 else:
                     print("No JobID found in STDOUT??:", flush=True)
@@ -162,6 +167,9 @@ def main(slurm=True):
                 print(ret.stdout)
     except KeyboardInterrupt:
         print(f"\n{RED}{BOLD}Launch interrupted. See command below to kill launched jobs.{RESET}")
+
+    if slurm:
+        launchids_file.write_text(json.dumps(launchids, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     if slurm:
         print(f"{RESET}To kill all these jobs: {BLUE}scancel -n {xid}{RESET}")
