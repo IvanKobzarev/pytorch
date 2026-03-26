@@ -65,7 +65,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     # start from the beginning to track every gpu memory allocation
     # otherwise we lost cpp tracestack for model initialization
-    torch.cuda.memory._record_memory_history(max_entries=10000000)
+    if c.nsteps >= 50:
+        torch.cuda.memory._record_memory_history(max_entries=10000000)
 
     # In theory we only need `init_device_mesh`, but in practice, we need this
     # whole verbose `init_process_group` or else the `barrier` will throw a warning.
@@ -403,6 +404,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             # Otherwise the .pkl becomes too big and freezes chrome.
             # Drag .pkl file to https://docs.pytorch.org/memory_viz
             torch.cuda.memory._dump_snapshot(pjoin(workdir, f"prof_memsnap_s{step}_r{rank}.pkl"))  # fmt: skip
+            torch.cuda.memory._record_memory_history(enabled=None)
         if prof and (step - first_step) == 54:  # Open in about://tracing or ui.perfetto.dev
             torch.cuda.cudart().cudaProfilerStop()
             prof.stop()  # TODO: speedup gz
