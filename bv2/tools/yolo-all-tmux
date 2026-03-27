@@ -1,8 +1,11 @@
 #!/usr/bin/env fish
 
-set PROMPT 'Yes, proceed (y)'
+set PROMPT_Y 'Yes, proceed (y)'
+set PROMPT_ENTER_A 'Do you want to proceed?'
+set PROMPT_ENTER_B '❯ 1. Yes'
 set POLL 2.0    # seconds between checks
-set DELAY 0.5   # seconds before sending 'y'
+set DELAY 0.5   # seconds before sending response
+set CAPTURE_BACK 30
 set STATE_DIR (mktemp -d)
 
 function cleanup --on-event fish_exit
@@ -12,18 +15,33 @@ end
 while true
     for pane_id in (tmux list-panes -a -F '#{pane_id}')
         set -l state_file "$STATE_DIR/"(string replace -a '%' '_' -- "$pane_id")
-        set -l lines (tmux capture-pane -t "$pane_id" -p -S -10 2>/dev/null | string collect)
-        if string match -q -- "*$PROMPT*" -- $lines
+        set -l cursor_y (tmux display-message -p -t "$pane_id" '#{cursor_y}' 2>/dev/null)
+        set -l start_y (math "$cursor_y - $CAPTURE_BACK")
+        set -l lines (tmux capture-pane -t "$pane_id" -p -S "$start_y" -E "$cursor_y" 2>/dev/null | string match -rv '^[[:space:]]*$' | tail -n 10 | string collect)
+        set -l action ''
+        if string match -q -- "*$PROMPT_Y*" -- $lines
+            set action y
+        else if string match -q -- "*$PROMPT_ENTER_A*" -- $lines; and string match -q -- "*$PROMPT_ENTER_B*" -- $lines
+            set action enter
+        end
+        if test -n "$action"
             set -l prev ''
             test -f "$state_file"; and set prev (cat "$state_file")
             if test "$lines" != "$prev"
                 printf %s "$lines" > "$state_file"
                 begin
                     sleep $DELAY
-                    set -l now (tmux capture-pane -t "$pane_id" -p -S -10 2>/dev/null | string collect)
+                    set -l cursor_y (tmux display-message -p -t "$pane_id" '#{cursor_y}' 2>/dev/null)
+                    set -l start_y (math "$cursor_y - $CAPTURE_BACK")
+                    set -l now (tmux capture-pane -t "$pane_id" -p -S "$start_y" -E "$cursor_y" 2>/dev/null | string match -rv '^[[:space:]]*$' | tail -n 10 | string collect)
                     if test "$now" = "$lines"
-                        tmux send-keys -t "$pane_id" y
-                        echo "Said y in pane $pane_id at $(date)"
+                        if test "$action" = y
+                            tmux send-keys -t "$pane_id" y
+                            echo "Said y in pane $pane_id at $(date)"
+                        else
+                            tmux send-keys -t "$pane_id" Enter
+                            echo "Hit Enter in pane $pane_id at $(date)"
+                        end
                     end
                 end &
             end
