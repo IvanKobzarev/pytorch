@@ -165,7 +165,10 @@ def log_system_metrics(logger, gpu_index=0, prefix="sys/rank0", _base={}):
         f"{prefix}/ram_percent": mem.percent,
         f"{prefix}/proc_rss_gb": psutil.Process().memory_info().rss / 1e9,
     })
-    logger.log({f"{prefix}/gc_count{i}": n for i, n in enumerate(gc.get_count())})
+    stats = gc.get_stats()  # Takes only microseconds.
+    totals = {k: sum(d[k] for d in stats) for k in ("collections", "collected", "uncollectable")}
+    logger.log({f"{prefix}/gc_{k}": totals[k] - _base.setdefault(f"gc_{k}", totals[k]) for k in totals})
+    _base.update({f"gc_{k}": v for k, v in totals.items()})
 
     # Disk I/O (cumulative since first call, not since boot)
     if disk := psutil.disk_io_counters():
