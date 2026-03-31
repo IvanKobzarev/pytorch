@@ -277,7 +277,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         sched = global_schedule(
             step=step,
             total_steps=c.nsteps,
-            warmup_steps=c.warmup_nsteps,
+            warmup_steps=c.get("warmup_nsteps") or 1,
+            cooldown_steps=c.get("cooldown_nsteps") or 0,
         )
 
         set_lr_(optim, sched * c.lr_adam, "lr_adam")
@@ -453,9 +454,9 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 ###############
 
 
-def global_schedule(*, step, total_steps, warmup_steps=1):
-    """Implements constant schedule with warmup."""
-    return min(1.0, step / warmup_steps)
+def global_schedule(*, step, total_steps, warmup_steps=1, cooldown_steps=0):
+    """Implements constant schedule with warmup and cooldown. Tested."""
+    return min(1.0, step / warmup_steps, (total_steps - step) / (cooldown_steps + 1))
 
 
 def set_lr_(optimizer, lr, name):

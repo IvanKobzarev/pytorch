@@ -32,6 +32,7 @@ def get_config():
 
     c.nsteps = 20_000
     c.warmup_nsteps = 100
+    c.cooldown_nsteps = 500
 
     # reference sweep: http://localhost:1337/?share=rust-dumb-good
     c.lr_adam = 1e-3
