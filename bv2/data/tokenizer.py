@@ -5,17 +5,21 @@ from tiktoken.load import load_tiktoken_bpe
 
 
 class Tiktoken:
-    def __init__(self, first_N=None, path=None):
+    def __init__(self, first_N=None, path=None, regex="o200k"):
         path = path or "/checkpoint/rigi/bv2/l4_200k_base.model"
 
         # "pretokenization" step done via regexp
-        # borrowed from: https://www.internalfb.com/code/fbsource/[cd5f9614da86]/genai/xlformers/core/tokenizers/finetune.py?lines=281
-        # bento notebook: https://fburl.com/anp/u3rlrljj.
-        O200K_PATTERN = (
-            r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|"
-            r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|"
-            r"\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+"
-        )
+        pattern = {
+            # borrowed from: https://www.internalfb.com/code/fbsource/[cd5f9614da86]/genai/xlformers/core/tokenizers/finetune.py?lines=281
+            # bento notebook: https://fburl.com/anp/u3rlrljj.
+            "o200k": (
+                r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|"
+                r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|"
+                r"\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+"
+            ),
+            # The GPT-4 regex, but split digits individually, and ignore english-specific 'nt etc.
+            "gpt4-onedigit": r"[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
+        }[regex]
 
         # load actual tokens
         tokens = load_tiktoken_bpe(path)
@@ -35,7 +39,7 @@ class Tiktoken:
 
         self.tokenizer = tiktoken.Encoding(
             name="l4_200k_base",
-            pat_str=O200K_PATTERN,
+            pat_str=pattern,
             mergeable_ranks=tokens,
             special_tokens=self.special_tokens,
         )
@@ -54,5 +58,5 @@ class Tiktoken:
 
 
 @cache
-def get_tiktoken(first_N=None, path="/checkpoint/rigi/bv2/l4_200k_base.model"):
-    return Tiktoken(first_N=first_N, path=path)
+def get_tiktoken(first_N=None, path="/checkpoint/rigi/bv2/l4_200k_base.model", regex="o200k"):
+    return Tiktoken(first_N=first_N, path=path, regex=regex)

@@ -13,8 +13,6 @@ def get_config():
         dc.seed = seed
         dc.n = n
 
-        dc.tokenizer.first_N = 10_000
-
         dc.tiptoi = 0
         dc.add_hw = False
         dc.add_row_sep = False

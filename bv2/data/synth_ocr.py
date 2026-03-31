@@ -25,6 +25,7 @@ def font(size=18):
         "line_h": ascent + descent,  # `multiline_text` adds 4, but +0 looks neater.
         "word_widths": {w: font.getlength(w) for w in VOCAB},
     }
+    info["min_word_width"] = min(info["word_widths"].values())
     return font, info
 
 
@@ -36,29 +37,29 @@ def render(seed, *, min_h=256, min_w=256, max_h=768, max_w=768, ps=16,
         fs += u.rng(seed, "fs_jitter").integers(-fs_jitter, fs_jitter+1, ()).item()
     ft, info = font(fs)
 
-    line_h, space_w, word_widths = info["line_h"], info["space_w"], info["word_widths"]
-
     # Note we add ps to make sure size_max is inclusive
-    img_w = (u.rng(seed, "w").integers(min_w, max_w + ps) // ps) * ps
-    img_h = (u.rng(seed, "h").integers(min_h, max_h + ps) // ps) * ps
+    img_w = u.rng(seed, "w").integers(min_w, max_w + ps) // ps * ps
+    img_h = u.rng(seed, "h").integers(min_h, max_h + ps) // ps * ps
 
-    max_words = int((img_w / space_w) * (img_h / line_h) * 2)  # generous upper bound on words that can fit
+    max_words = int(img_w / info["min_word_width"]) * (img_h // info["line_h"])  # generous upper bound on words that can fit
     word_indices = u.rng(seed, "words").choice(len(VOCAB), max_words, replace=not unique)
 
     lines, cur_line_words, cur_width, y = [], [], 0.0, 0.0
     all_words = []
     for idx in word_indices:
         word = VOCAB[idx]
-        w_len = word_widths[word]
-        add_w = w_len if not cur_line_words else space_w + w_len
+        w_len = info["word_widths"][word]
+        add_w = w_len if not cur_line_words else info["space_w"] + w_len
         if cur_width + add_w <= img_w:
             cur_line_words.append(word)
             cur_width += add_w
             all_words.append(word)
             continue
+        if not cur_line_words:
+            continue  # skip words that are wider than img_w instead of appending ""
         lines.append(" ".join(cur_line_words))
-        y += line_h
-        if y + line_h > img_h:
+        y += info["line_h"]
+        if y + info["line_h"] > img_h:
             break
         cur_line_words, cur_width = [], 0.0
     all_text = "\n".join(lines)
@@ -90,7 +91,7 @@ class Dataset:
         self.add_hw = add_hw
         self.tiptoi = tiptoi
         self.render_kw = kw
-        self.tt = get_tiktoken(**tokenizer or {})
+        self.tt = get_tiktoken(**tokenizer or {'path': 'bv2/data/random_nouns_2k.tt', 'regex': 'gpt4-onedigit'})
         self.data_seed = seed
         self.n = n
 
@@ -99,8 +100,7 @@ class Dataset:
 
     def ground_truth(self, exid):
         img, txt, _ = render((self.data_seed, exid, "render"), ps=self.ps, **self.render_kw)
-        # VQA format
-        return {"qas": {"0": ("ocr?", [txt])}, "img": img}
+        return {"qas": {"0": ("ocr", [txt])}, "img": img}  # VQA format
 
     def make_example(self, exid):
         img, txt, _ = render((self.data_seed, exid, "render"), ps=self.ps, **self.render_kw)

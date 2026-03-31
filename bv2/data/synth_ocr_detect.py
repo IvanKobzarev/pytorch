@@ -23,7 +23,7 @@ class Dataset:
         self.add_row_sep = add_row_sep
         self.add_hw = add_hw
         self.tiptoi = tiptoi
-        self.tt = get_tiktoken(**tokenizer or {})
+        self.tt = get_tiktoken(**tokenizer or {'path': 'bv2/data/random_nouns_2k.tt', 'regex': 'gpt4-onedigit'})
         self.data_seed = seed
         self.n = n
 
@@ -91,7 +91,7 @@ class Dataset:
             "lowe": np.r_[[0] * (npre-1), [0] * (nimg+1), [1] * (nsuf-1)].astype(np.float32),  # -1 removes bos+sep
             "attn_regions": np.r_[[1] * npre, [1] * (nimg+1), [0] * (nsuf-2)],  # -2 removes sep+eos
             # NOTE: for attn_regions, 0 = AR, >0 = dense region ID.
-            "ndatatoks": len(prefix) + len(suffix) + nimg,
+            "ndatatoks": len(prefix) + len(suffix) + int(nimg),
             "id": exid,
         })  # fmt: skip
 

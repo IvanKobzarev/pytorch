@@ -20,7 +20,7 @@ def render(seed, tiktoken, *, min_nouns=128, max_nouns=256):
 
 class Dataset:
     def __init__(self, tokenizer=None, seed=0, n=None, **kw):
-        self.tt = get_tiktoken(**tokenizer or {})
+        self.tt = get_tiktoken(**tokenizer or {'path': 'bv2/data/random_nouns_2k.tt', 'regex': 'gpt4-onedigit'})
         self.render_kw = kw
         self.data_seed = seed
         self.n = n
