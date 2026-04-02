@@ -250,6 +250,13 @@ inplace_buffers = True
 # reuse a buffer for an unrelated purpose
 allow_buffer_reuse = True
 
+# In backward graphs, explicitly release storage of tangent (grad_output)
+# inputs after their last use via untyped_storage().resize_(0). This frees
+# CUDA memory immediately even if Python refcount > 0 (e.g. the autograd
+# engine holds references for the duration of the backward call).
+# Guarded at runtime: skipped when retain_graph=True.
+bw_tangent_storage_release = True
+
 # Enable pooled allocations for non-output tensors
 memory_planning = os.environ.get("TORCHINDUCTOR_MEMORY_PLANNING", "0") == "1"
 

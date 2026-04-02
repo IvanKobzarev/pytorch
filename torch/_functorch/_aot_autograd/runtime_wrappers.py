@@ -2837,13 +2837,19 @@ class _AOTDispatchAutogradFunctionFactory:
 
             @staticmethod
             def backward(ctx: Any, *flat_args: Any) -> tuple[Any, ...]:
+                # Wrap flat_args in a list and pop it during the call so that
+                # the tuple is only alive as a temporary during unpacking.
+                # This lets compiled backward actually free tangent inputs
+                # via del (otherwise flat_args on the stack frame keeps them alive).
+                _flat_args_ref = [flat_args]
+                del flat_args
                 all_args = _backward_prologue_functional(
                     saved_state.load_tensors(ctx),
                     ctx.symints,
                     ctx.opaque_objects,
                     CompiledFunction.metadata,
                     CompiledFunction.maybe_subclass_metadata,
-                    *flat_args,
+                    *_flat_args_ref.pop(),
                 )
                 rng_state.add_backward_args(ctx, all_args)
 
