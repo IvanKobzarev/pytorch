@@ -447,6 +447,7 @@ class MemoryPlanningState:
             CommBufferReuseKey, list[FreeIfNotReusedLine]
         ] = collections.defaultdict(list)
         self.total_allocated_buffer_size: int = 0
+        self.total_pg_alloc_bytes: int = 0
 
     def __contains__(self, key: ReuseKey) -> bool:
         return bool(self.reuse_pool.get(key, None))
@@ -912,7 +913,35 @@ class AllocateLine(MemoryPlanningLine):
                 return ReuseLine(
                     self.wrapper, free_line.node, self.node, comm_buffer=True
                 )
-            return self
+
+            # Only PG_ALLOC buffers have a budget limit
+            layout = self.node.get_output_spec()
+            if not isinstance(layout, ir.CommBufferLayout):
+                return self
+            if layout.comm_buffer_type != ir.CommBufferType.PG_ALLOC:
+                return self
+
+            exceeds, alloc_bytes = self._pg_alloc_exceeds_budget(state)
+            if not exceeds:
+                state.total_pg_alloc_bytes += alloc_bytes
+                log.debug(
+                    "pg_alloc new buffer: %s, size=%.2f MB, total_pg_alloc=%.2f MB",
+                    self.node.get_name(),
+                    alloc_bytes / (1024 * 1024),
+                    state.total_pg_alloc_bytes / (1024 * 1024),
+                )
+                return self
+
+            # Budget exceeded — fallback to regular alloc and fall through
+            log.debug(
+                "pg_alloc budget exceeded, fallback: %s, size=%.2f MB, "
+                "total_pg_alloc=%.2f MB, max=%.2f GB",
+                self.node.get_name(),
+                alloc_bytes / (1024 * 1024),
+                state.total_pg_alloc_bytes / (1024 * 1024),
+                config.comms_pg_alloc_max_gb,
+            )
+            self.comm_buffer = False
 
         # Regular buffer reuse
         key = buffer_reuse_key(self.node)
@@ -937,6 +966,18 @@ class AllocateLine(MemoryPlanningLine):
                 )
 
         return self
+
+    def _pg_alloc_exceeds_budget(self, state: MemoryPlanningState) -> tuple[bool, int]:
+        # Check if pg_alloc allocation would exceed budget.
+
+        alloc_bytes = V.graph.sizevars.optimization_hint(
+            V.graph.get_allocation_storage_size(self.node), fallback=0
+        ) * get_dtype_size(self.node.get_dtype())
+        max_gb = config.comms_pg_alloc_max_gb
+        exceeds = max_gb is not None and (
+            state.total_pg_alloc_bytes + alloc_bytes > int(max_gb * (1024**3))
+        )
+        return exceeds, alloc_bytes
 
     def codegen(self, code: IndentedBuffer) -> None:
         assert self.node.get_name() not in V.graph.removed_buffers
@@ -2198,6 +2239,7 @@ class PythonWrapperCodegen(CodeGen):
         _total_allocated_buffer_size = sum(
             s.total_allocated_buffer_size for s in past_planning_states
         )
+
     def run_wrapper_ir_passes(self, is_inference: bool):
         # We disable planning during training because it presently increases peak memory consumption.
         if is_inference and config.memory_planning:

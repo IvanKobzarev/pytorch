@@ -721,8 +721,6 @@ def _pre_bucket_all_gather(
     ]
     ag_input_numel = sum(ins_split_sizes)
     device = ag_ins[0].device
-    total_size_bytes = sum(ins_split_sizes_bytes) * group_size
-
     if torch._inductor.config.comms_use_pg_alloc:
         pg = _resolve_process_group(group_name)  # type: ignore[arg-type]
         backend = pg._get_backend(device)
@@ -1131,6 +1129,7 @@ def merge_reduce_scatter_bucket(
     rs0 = rs_nodes[0]
     rs0_val = rs0.meta["val"]
     _, reduce_op, group_size, group_name = rs0.args
+    assert isinstance(group_name, str)
     reduce_dtype = rs0_val.dtype
     device = rs0_val.device
 
@@ -1184,6 +1183,7 @@ def merge_all_reduce_bucket(
     ar0 = ar_nodes[0]
     ar0_val = ar0.meta["val"]
     _, reduce_op, group_name = ar0.args
+    assert isinstance(group_name, str)
     reduce_dtype = ar0_val.dtype
     device = ar0_val.device
 
