@@ -1,12 +1,13 @@
 import functools
 import heapq
 import itertools
+import json
 import logging
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, TYPE_CHECKING
 
 import torch
 import torch.fx as fx
@@ -27,6 +28,12 @@ from torch._logging import trace_structured
 from torch.fx.operator_schemas import normalize_function
 from torch.utils._ordered_set import OrderedSet
 from torch.utils._python_dispatch import _disable_current_modes
+
+
+if TYPE_CHECKING:
+    from torch._inductor.fx_passes.profile_guided_estimation import (
+        ProfileGuidedEstimator,
+    )
 
 
 log = logging.getLogger(__name__)
@@ -1866,6 +1873,18 @@ def schedule_overlap_bucketing(
         },
         payload_fn=lambda: ret.print_readable(False),
     )
+
+    # Log PGE estimations to trace_structured for tlparse
+    if custom_runtime_estimation is not None:
+        from torch._inductor.fx_passes.profile_guided_estimation import (
+            log_pge_estimations,
+            ProfileGuidedEstimator,
+        )
+
+        if isinstance(custom_runtime_estimation, ProfileGuidedEstimator):
+            analytical = _collect_analytical_estimates(ret, custom_runtime_estimation)
+            log_pge_estimations(custom_runtime_estimation, analytical)
+
     return ret
 
 
@@ -1908,5 +1927,47 @@ def schedule_overlap_bucketing_from_inductor_configs(
     for key in config_keys:
         if (val := getattr(dist_opts, key, None)) is not None:
             kwargs[key] = val
+
+    # Profile-guided latency estimation: load profile and set as custom estimator
+    pge_path = dist_opts.profile_guided_estimations_profile_path
+    if pge_path and "custom_runtime_estimation" not in kwargs:
+        from torch._inductor.fx_passes.node_runtime_estimation import (
+            make_profile_guided_estimator,
+        )
+        from torch._inductor.fx_passes.profile_guided_estimation import _rank_stride
+
+        pge_estimator = make_profile_guided_estimator(pge_path)
+        kwargs["custom_runtime_estimation"] = pge_estimator
+        log.info("PGE: using profile-guided estimation from %s", pge_path)
+
+        # Log profile stats for tlparse
+        profile = pge_estimator.profile
+        coll_keys = list(profile._collective_index.keys())
+        mm_count = len(profile._matmul_index)
+        sdpa_count = len(profile._sdpa_index)
+        trace_structured(
+            "artifact",
+            metadata_fn=lambda: {
+                "name": "pge_profile_loaded",
+                "encoding": "json",
+            },
+            payload_fn=lambda: json.dumps(
+                {
+                    "path": pge_path,
+                    "collective_keys": [
+                        {
+                            "name": k[0],
+                            "ranks": list(k[1]),
+                            "group_size": len(k[1]),
+                            "stride": _rank_stride(k[1]),
+                            "dtype": k[2],
+                        }
+                        for k in coll_keys
+                    ],
+                    "matmul_count": mm_count,
+                    "sdpa_count": sdpa_count,
+                }
+            ),
+        )
 
     return schedule_overlap_bucketing(gm, **kwargs)  # type: ignore[arg-type]

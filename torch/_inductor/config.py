@@ -1144,6 +1144,12 @@ class aten_distributed_optimizations:
     # In deterministic mode, this setting is ignored and "analytical" is used.
     compute_estimator: Literal["analytical", "benchmark"] = "benchmark"
 
+    # Path to Chrome Trace JSON for profile-guided estimation (PGE).
+    # When set, kernel runtimes (collectives, matmuls, attention) are looked up
+    # from the profile trace, falling back to analytical if no match found.
+    # Same profile on all ranks => deterministic estimates, no cross-rank sync.
+    profile_guided_estimations_profile_path: str | None = None
+
     # Maximum memory increase above baseline for prefetch operations
     # Uses minimum of absolute cap and ratio of baseline
     max_memory_increase_gb: float | None = None  # Absolute cap in GB

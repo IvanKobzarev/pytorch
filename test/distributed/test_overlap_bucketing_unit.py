@@ -1,4 +1,7 @@
 # Owner(s): ["module: inductor"]
+import json
+import os
+import tempfile
 import unittest
 
 import torch
@@ -11,6 +14,12 @@ import torch.fx as fx
 # for some reason importing functional collectives after dynamo breaks collectives handling!
 from torch._C import FileCheck
 from torch._dynamo.utils import counters
+from torch._inductor.fx_passes.profile_guided_estimation import (
+    _normalize_profile_dtype,
+    _normalize_profile_indices,
+    _rank_stride,
+    ProfileData,
+)
 from torch._inductor.test_case import TestCase as InductorTestCase
 from torch._subclasses.fake_tensor import FakeTensorMode
 from torch.fx.experimental.proxy_tensor import make_fx
@@ -19,6 +28,7 @@ from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
     run_tests,
+    TestCase,
 )
 from torch.testing._internal.inductor_utils import HAS_GPU
 from torch.utils._ordered_set import OrderedSet

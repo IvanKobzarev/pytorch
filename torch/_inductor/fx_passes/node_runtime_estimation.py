@@ -1,5 +1,5 @@
 """
-Collective runtime estimation using CUDA events and power-of-2 rounding.
+Node runtime estimation: CUDA events benchmarking and profile-guided estimation.
 """
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ import functools
 import itertools
 import operator
 from functools import lru_cache
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import torch
 import torch.fx as fx
@@ -16,6 +16,12 @@ from torch._inductor.fx_passes.bucketing import _schedulable_wait_node
 from torch._inductor.utils import clear_on_fresh_cache
 from torch._logging import getArtifactLogger, trace_structured
 from torch.fx.operator_schemas import normalize_function
+
+
+if TYPE_CHECKING:
+    from torch._inductor.fx_passes.profile_guided_estimation import (
+        ProfileGuidedEstimator,
+    )
 
 
 def _format_csv(headers: list[str], rows: list[list[str]]) -> str:
@@ -426,3 +432,29 @@ def _log_collective_benchmarks(
         },
         payload_fn=lambda: log_str,
     )
+
+
+def make_profile_guided_estimator(
+    trace_path: str,
+) -> ProfileGuidedEstimator:
+    """Create a ProfileGuidedEstimator from a Chrome Trace profile.
+
+    Thin wrapper — the implementation lives in profile_guided_estimation.py.
+    """
+    from torch._inductor.fx_passes.profile_guided_estimation import (
+        ProfileGuidedEstimator,
+    )
+
+    return ProfileGuidedEstimator(trace_path)
+
+
+def log_pge_estimations(
+    estimator: ProfileGuidedEstimator,
+    analytical_estimates: dict[str, float] | None = None,
+) -> None:
+    """Dump PGE estimation results via trace_structured for tlparse."""
+    from torch._inductor.fx_passes.profile_guided_estimation import (
+        log_pge_estimations as _log_pge_estimations,
+    )
+
+    _log_pge_estimations(estimator, analytical_estimates)
