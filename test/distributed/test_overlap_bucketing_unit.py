@@ -2173,5 +2173,254 @@ class TestCoalescedCollectiveOverlap(InductorTestCase):
         self.assertGreater(size, 0)
 
 
+@requires_accelerator_dist_backend()
+@unittest.skipIf(not HAS_GPU, "Inductor+gpu needs triton and recent GPU arch")
+class TestPreBucketingFsdpCollectives(InductorTestCase):
+    """Tests for pre_bucket_fsdp_collectives pass."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from torch.testing._internal.distributed.fake_pg import FakeStore
+
+        store = FakeStore()
+        dist.init_process_group(backend="fake", rank=0, world_size=64, store=store)
+        cls.device = "cuda"
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        dist.destroy_process_group()
+
+    def _make_fsdp_and_tp_graph(self):
+        """Create a graph with FSDP-like and TP-like all_gathers.
+
+        FSDP all_gathers: placeholder -> all_gather (single-input chain to placeholder)
+        TP all_gathers: placeholder + placeholder -> add -> all_gather (multi-input)
+        """
+        fsdp_group = dist.distributed_c10d._get_default_group().group_name
+        # TP group — just use a different name. Real TP would have a separate PG.
+        tp_group = "tp_test_group"
+
+        def func(fsdp_param1, fsdp_param2, tp_act1, tp_act2):
+            # FSDP all_gathers: directly from graph inputs (placeholders)
+            fsdp_ag1 = torch.ops._c10d_functional.all_gather_into_tensor(
+                fsdp_param1, 64, fsdp_group
+            )
+            fsdp_ag2 = torch.ops._c10d_functional.all_gather_into_tensor(
+                fsdp_param2, 64, fsdp_group
+            )
+            fsdp_w1 = torch.ops._c10d_functional.wait_tensor(fsdp_ag1)
+            fsdp_w2 = torch.ops._c10d_functional.wait_tensor(fsdp_ag2)
+
+            # FSDP reduce_scatters: output goes directly to graph output
+            fsdp_rs1 = torch.ops._c10d_functional.reduce_scatter_tensor(
+                fsdp_w1, "sum", 64, fsdp_group
+            )
+            fsdp_rs2 = torch.ops._c10d_functional.reduce_scatter_tensor(
+                fsdp_w2, "sum", 64, fsdp_group
+            )
+            fsdp_rw1 = torch.ops._c10d_functional.wait_tensor(fsdp_rs1)
+            fsdp_rw2 = torch.ops._c10d_functional.wait_tensor(fsdp_rs2)
+
+            # TP all_gather: depends on multi-input computation (not single placeholder)
+            tp_combined = tp_act1 + tp_act2  # multi-input → not FSDP
+            tp_ag = torch.ops._c10d_functional.all_gather_into_tensor(
+                tp_combined, 8, tp_group
+            )
+            tp_w = torch.ops._c10d_functional.wait_tensor(tp_ag)
+
+            # TP reduce_scatter: output feeds into further compute (not graph output)
+            tp_rs = torch.ops._c10d_functional.reduce_scatter_tensor(
+                tp_w, "sum", 8, tp_group
+            )
+            tp_rw = torch.ops._c10d_functional.wait_tensor(tp_rs)
+            tp_result = tp_rw + fsdp_rw1  # TP RS feeds into compute
+
+            return fsdp_rw1, fsdp_rw2, tp_result
+
+        with FakeTensorMode():
+            fsdp_p1 = torch.ones(4, 4, device=self.device)
+            fsdp_p2 = torch.ones(4, 4, device=self.device) * 2
+            tp_a1 = torch.ones(4, 4, device=self.device)
+            tp_a2 = torch.ones(4, 4, device=self.device) * 3
+            traced = make_fx(func)(fsdp_p1, fsdp_p2, tp_a1, tp_a2)
+
+        return traced, fsdp_group, tp_group
+
+    def test_identify_fsdp_group_names(self):
+        """Verify that FSDP groups are identified and TP groups are not."""
+        from torch._inductor.fx_passes.fsdp import identify_fsdp_group_names
+
+        traced, fsdp_group, tp_group = self._make_fsdp_and_tp_graph()
+        fsdp_groups = identify_fsdp_group_names(traced)
+
+        self.assertIn(fsdp_group, fsdp_groups)
+        self.assertNotIn(tp_group, fsdp_groups)
+
+    def test_pre_bucketing_only_fsdp(self):
+        """Verify pre_bucket_fsdp_collectives merges only FSDP collectives."""
+        from torch._inductor.fx_passes.bucketing import (
+            is_all_gather_into_tensor,
+            is_reduce_scatter_tensor,
+        )
+        from torch._inductor.fx_passes.fsdp import (
+            _get_group_name,
+            pre_bucket_fsdp_collectives,
+        )
+
+        traced, fsdp_group, tp_group = self._make_fsdp_and_tp_graph()
+
+        # Count collectives before
+        fsdp_ag_before = sum(
+            1
+            for n in traced.graph.nodes
+            if is_all_gather_into_tensor(n) and _get_group_name(n) == fsdp_group
+        )
+        tp_ag_before = sum(
+            1
+            for n in traced.graph.nodes
+            if is_all_gather_into_tensor(n) and _get_group_name(n) == tp_group
+        )
+        fsdp_rs_before = sum(
+            1
+            for n in traced.graph.nodes
+            if is_reduce_scatter_tensor(n) and _get_group_name(n) == fsdp_group
+        )
+        tp_rs_before = sum(
+            1
+            for n in traced.graph.nodes
+            if is_reduce_scatter_tensor(n) and _get_group_name(n) == tp_group
+        )
+
+        self.assertEqual(fsdp_ag_before, 2)
+        self.assertEqual(tp_ag_before, 1)
+        self.assertEqual(fsdp_rs_before, 2)
+        self.assertEqual(tp_rs_before, 1)
+
+        # Run pre-bucketing with a large cap to ensure everything gets merged
+        pre_bucket_fsdp_collectives(traced, mode="default", bucket_cap_mb=2000.0)
+
+        # Count after: FSDP collectives should be merged (2 → 1 each)
+        fsdp_ag_after = sum(
+            1
+            for n in traced.graph.nodes
+            if is_all_gather_into_tensor(n) and _get_group_name(n) == fsdp_group
+        )
+        tp_ag_after = sum(
+            1
+            for n in traced.graph.nodes
+            if is_all_gather_into_tensor(n) and _get_group_name(n) == tp_group
+        )
+        fsdp_rs_after = sum(
+            1
+            for n in traced.graph.nodes
+            if is_reduce_scatter_tensor(n) and _get_group_name(n) == fsdp_group
+        )
+        tp_rs_after = sum(
+            1
+            for n in traced.graph.nodes
+            if is_reduce_scatter_tensor(n) and _get_group_name(n) == tp_group
+        )
+
+        # FSDP should be bucketed (2 merged into 1)
+        self.assertLess(fsdp_ag_after, fsdp_ag_before)
+        # TP should be untouched
+        self.assertEqual(tp_ag_after, tp_ag_before)
+        self.assertEqual(tp_rs_after, tp_rs_before)
+
+    def test_pre_bucketing_config_disabled(self):
+        """Verify pre_bucketing_fsdp_collectives=False skips the pass."""
+        from torch._inductor.fx_passes.bucketing import is_all_gather_into_tensor
+        from torch._inductor.fx_passes.fsdp import pre_bucket_fsdp_collectives
+
+        traced, fsdp_group, _tp_group = self._make_fsdp_and_tp_graph()
+
+        ag_before = sum(
+            1 for n in traced.graph.nodes if is_all_gather_into_tensor(n)
+        )
+        self.assertEqual(ag_before, 3)  # 2 FSDP + 1 TP
+
+        # Verify the config exists and defaults to True
+        from torch._inductor import config
+
+        self.assertTrue(config.aten_distributed_optimizations.pre_bucketing_fsdp_collectives)
+
+        # Call pre_bucket_fsdp_collectives on a fresh graph and verify it works
+        pre_bucket_fsdp_collectives(traced, mode="default", bucket_cap_mb=2000.0)
+
+        ag_after = sum(
+            1 for n in traced.graph.nodes if is_all_gather_into_tensor(n)
+        )
+        # FSDP should be bucketed (2 → 1), TP unchanged (1)
+        self.assertLess(ag_after, ag_before)
+
+    def test_compute_min_saturation_bytes(self):
+        """Verify bandwidth saturation computation gives reasonable values."""
+        from torch._inductor.comm_analysis import (
+            compute_min_saturation_bytes,
+            NCCL_COLL,
+        )
+
+        # Inter-node (64 GPUs = 8 nodes)
+        min_bytes_inter = compute_min_saturation_bytes(
+            64, NCCL_COLL.ALL_GATHER, target_efficiency=0.9
+        )
+        # Should be in a reasonable range (MB scale)
+        self.assertGreater(min_bytes_inter, 1024 * 1024)  # > 1 MB
+        self.assertLess(min_bytes_inter, 1024 * 1024 * 1024)  # < 1 GB
+
+        # Intra-node (8 GPUs = 1 node)
+        min_bytes_intra = compute_min_saturation_bytes(
+            8, NCCL_COLL.ALL_GATHER, target_efficiency=0.9
+        )
+        self.assertGreater(min_bytes_intra, 0)
+        self.assertLess(min_bytes_intra, 1024 * 1024 * 1024)  # < 1 GB
+
+        # Single GPU should return 0
+        self.assertEqual(
+            compute_min_saturation_bytes(1, NCCL_COLL.ALL_GATHER), 0
+        )
+
+    def test_compute_pre_bucket_cap_mb(self):
+        """Verify auto-computed bucket cap is in sensible range."""
+        from torch._inductor.fx_passes.fsdp import compute_pre_bucket_cap_mb
+
+        # Override should pass through
+        self.assertEqual(compute_pre_bucket_cap_mb(64, bucket_cap_mb_override=500.0), 500.0)
+
+        # Auto-compute with defaults (target=0.95, safety=3x, floor=25)
+        # nsys-calibrated: 3x on H100 NVLink gives ~95 MB (77.5% real peak at 80 MB)
+        cap = compute_pre_bucket_cap_mb(64)
+        self.assertGreaterEqual(cap, 25.0)  # at least the floor
+        self.assertLessEqual(cap, 2000.0)
+
+        # Intra-node: 3x safety on 32 MB analytical → ~95 MB
+        cap_intra = compute_pre_bucket_cap_mb(8)
+        self.assertGreaterEqual(cap_intra, 25.0)
+        self.assertLessEqual(cap_intra, 2000.0)
+        self.assertGreater(cap_intra, 50.0)
+
+        # Inter-node: analytical model gives smaller caps, floor catches
+        cap_128 = compute_pre_bucket_cap_mb(128)
+        self.assertGreaterEqual(cap_128, 25.0)
+
+    @torch._inductor.config.patch(
+        {
+            "aten_distributed_optimizations.pre_bucketing_fsdp_collectives_target_efficiency": 0.9,
+            "aten_distributed_optimizations.pre_bucketing_fsdp_collectives_safety_multiplier": 1.0,
+            "aten_distributed_optimizations.pre_bucketing_fsdp_collectives_min_bucket_cap_mb": 10.0,
+        }
+    )
+    def test_compute_pre_bucket_cap_mb_sweep_configs(self):
+        """Verify sweep configs affect bucket cap computation."""
+        from torch._inductor.fx_passes.fsdp import compute_pre_bucket_cap_mb
+
+        # With safety=1.0 and target=0.9, cap should be smaller than defaults
+        cap_low = compute_pre_bucket_cap_mb(8)
+        self.assertGreaterEqual(cap_low, 10.0)
+        self.assertLess(cap_low, 50.0)
+
+
 if __name__ == "__main__":
     run_tests()

@@ -1202,6 +1202,34 @@ class aten_distributed_optimizations:
     # fails with a cycle error, and file a bug so the root cause can be fixed.
     overlap_scheduling_autofix_cycles: bool = False
 
+    # Pre-bucket FSDP collectives before overlap scheduling.
+    # Merges per-parameter FSDP collectives into buckets sized to
+    # saturate the process group's network bandwidth.
+    pre_bucketing_fsdp_collectives: bool = True
+
+    # Override bucket cap in MB for pre-bucketing. When None, auto-computes
+    # from the NCCL analytical model using the configs below.
+    pre_bucketing_fsdp_collectives_bucket_cap_mb: float | None = None
+
+    # Target bandwidth efficiency for auto bucket cap computation.
+    # Higher = larger buckets = more conservative. Range (0, 1).
+    pre_bucketing_fsdp_collectives_target_efficiency: float = 0.95
+
+    # Safety multiplier on the analytically computed min saturation size.
+    # nsys on H100 8-GPU NVLink: 2.5x gives 80 MB achieving 77.5% of real
+    # peak (152/197 GB/s). 3x is slightly above the highest measured point.
+    pre_bucketing_fsdp_collectives_safety_multiplier: float = 3.0
+
+    # Floor for auto-computed bucket cap in MB.
+    pre_bucketing_fsdp_collectives_min_bucket_cap_mb: float = 25.0
+
+    # Ceiling for auto-computed bucket cap in MB.
+    pre_bucketing_fsdp_collectives_max_bucket_cap_mb: float = 2000.0
+
+    # Verbose logging: per-collective sizes and bucket composition
+    # via logger and trace_structured.
+    pre_bucketing_fsdp_collectives_verbose: bool = False
+
 
 def parallel_compile_enabled_internally() -> bool:
     """
