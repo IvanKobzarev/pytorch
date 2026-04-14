@@ -1,3 +1,4 @@
+import itertools
 from functools import partial
 from importlib import import_module
 
@@ -30,7 +31,7 @@ from bv2.simple_input import iter_packed_examples, pmap, prefetch, to_len
 
 @u.suppress_warnings("`isinstance(treespec, LeafSpec)` is deprecated", FutureWarning)
 @u.suppress_warnings("`isinstance(treespec, TreeSpec)` is deprecated", FutureWarning)
-def data_iter(ds, *, maxtok, device, seed=0, rank=0, world_size=1, resume={}, pad_after=True,
+def data_iter(ds, *, maxtok, device, seed=0, rank=0, world_size=1, resume={}, pad_after=True, repeat_first=False,
               # The following defaults were tuned for steptime on a FineVision d8w2k@3136 run:
               pmap_chunksz=24, pmap_threads=16, eagerness=1, mask_block_size=128):
     make_exids = partial(ds.make_exids, seed=seed, rank=rank, world_size=world_size, **resume)
@@ -79,7 +80,13 @@ def data_iter(ds, *, maxtok, device, seed=0, rank=0, world_size=1, resume={}, pa
         }
         return seq
 
-    yield from prefetch((to_gpu(add_flexmasks_cpu(s)) for s in cpu_data_gen()), n=eagerness)
+    it = (to_gpu(add_flexmasks_cpu(s)) for s in cpu_data_gen())
+    if repeat_first:
+        first = next(it)
+        it.close()  # Removes all background prefetch threads from `pmap`.
+        yield from itertools.repeat(first)
+    else:
+        yield from prefetch(it, n=eagerness)
 
 
 def from_config(data_config):
