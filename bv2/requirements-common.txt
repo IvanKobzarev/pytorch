@@ -13,6 +13,6 @@ pytest-json-report
 rich
 ruff
 sackli
-sws-config
+sws-config>=0.9.0
 tiktoken
 zstandard

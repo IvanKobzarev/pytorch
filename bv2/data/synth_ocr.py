@@ -91,7 +91,7 @@ class Dataset:
         self.add_hw = add_hw
         self.tiptoi = tiptoi
         self.render_kw = kw
-        self.tt = get_tiktoken(**tokenizer or {'path': 'bv2/data/random_nouns_2k.tt', 'regex': 'gpt4-onedigit'})
+        self.tt = get_tiktoken(**{'path': 'bv2/data/random_nouns_2k.tt', 'regex': 'gpt4-onedigit', **(tokenizer or {})})
         self.data_seed = seed
         self.n = n
 
