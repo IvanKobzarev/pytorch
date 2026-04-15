@@ -524,6 +524,8 @@ def get_bucket_patches(compute_multiplier=1.0):
         "aten_distributed_optimizations.insert_overlap_deps": False,
         # interferes with testing, / custom estimation
         "test_configs.assume_bucketing_reduces_latency": False,
+        # these tests verify overlap scheduling bucketing, not pre-bucketing
+        "aten_distributed_optimizations.pre_bucketing_fsdp_collectives": False,
     }
 
 

@@ -2194,5 +2194,72 @@ class TestProfileGuidedEstimatorIntegration(InductorTestCase):
             os.unlink(trace_path)
 
 
+@requires_accelerator_dist_backend()
+@unittest.skipIf(not HAS_GPU, "Inductor+gpu needs triton and recent GPU arch")
+class TestPreBucketingFsdpCollectives(InductorTestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from torch.testing._internal.distributed.fake_pg import FakeStore
+
+        store = FakeStore()
+        dist.init_process_group(backend="fake", rank=0, world_size=64, store=store)
+        cls.device = "cuda"
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        dist.destroy_process_group()
+
+    def test_pre_bucketing_only_merges_fsdp_collectives(self):
+        """Pre-bucketing merges FSDP all-gathers but leaves TP all-gathers alone."""
+        from torch._inductor.fx_passes.bucketing import is_all_gather_into_tensor
+        from torch._inductor.fx_passes.fsdp import (
+            _get_group_name,
+            pre_bucket_fsdp_collectives,
+        )
+
+        fsdp_group = dist.distributed_c10d._get_default_group().group_name
+        tp_group = "tp_test_group"
+
+        def func(fsdp_p1, fsdp_p2, tp_a1, tp_a2):
+            # FSDP: each AG from a single placeholder (identified as FSDP)
+            ag1 = torch.ops._c10d_functional.all_gather_into_tensor(
+                fsdp_p1, 64, fsdp_group
+            )
+            ag2 = torch.ops._c10d_functional.all_gather_into_tensor(
+                fsdp_p2, 64, fsdp_group
+            )
+            w1 = torch.ops._c10d_functional.wait_tensor(ag1)
+            w2 = torch.ops._c10d_functional.wait_tensor(ag2)
+            # TP: AG from multi-input computation (not identified as FSDP)
+            tp_ag = torch.ops._c10d_functional.all_gather_into_tensor(
+                tp_a1 + tp_a2, 8, tp_group
+            )
+            tp_w = torch.ops._c10d_functional.wait_tensor(tp_ag)
+            return w1, w2, tp_w
+
+        with FakeTensorMode():
+            traced = make_fx(func)(
+                *(torch.ones(4, 4, device=self.device) for _ in range(4))
+            )
+
+        def count_ag(group):
+            return sum(
+                1
+                for n in traced.graph.nodes
+                if is_all_gather_into_tensor(n) and _get_group_name(n) == group
+            )
+
+        self.assertEqual(count_ag(fsdp_group), 2)
+        self.assertEqual(count_ag(tp_group), 1)
+
+        pre_bucket_fsdp_collectives(traced, bucket_cap_mb=2000.0)
+
+        self.assertLess(count_ag(fsdp_group), 2)  # FSDP merged
+        self.assertEqual(count_ag(tp_group), 1)  # TP untouched
+
+
 if __name__ == "__main__":
     run_tests()
