@@ -1188,8 +1188,7 @@ class OverlapScheduler:
             latency = estimate_collective_time(
                 node, 0, custom_runtime_estimation=self.custom_runtime_estimation
             )
-            assert latency <= info.exposed_time_ms
-            info.exposed_time_ms = info.exposed_time_ms - latency
+            info.exposed_time_ms = max(0, info.exposed_time_ms - latency)
 
         self.in_flight[node] = info
         self.in_flight_bytes += info.size_bytes

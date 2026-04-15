@@ -226,9 +226,9 @@ def compute_pre_bucket_cap_mb(
 ) -> float:
     """Compute the bucket cap for pre-bucketing based on bandwidth saturation.
 
-    Returns a conservative bucket size in MB that guarantees saturation of
-    the process group's network bandwidth. Uses the NCCL analytical model
-    with a calibration multiplier to account for model inaccuracy.
+    Returns a bucket size in MB that targets saturation of the process group's
+    network bandwidth. Uses empirical per-interconnect profiles with auto-detection
+    of GPU generation and intra/inter-node topology.
 
     If bucket_cap_mb_override is set, returns that directly.
     """
@@ -246,10 +246,29 @@ def compute_pre_bucket_cap_mb(
     ceil_mb = dist_opts.pre_bucketing_fsdp_collectives_max_bucket_cap_mb
 
     min_bytes = compute_min_saturation_bytes(
-        group_size, NCCL_COLL.ALL_GATHER, target_efficiency=0.95
+        group_size, NCCL_COLL.ALL_GATHER, target_efficiency=0.9
     )
     cap_mb = cal_mult * min_bytes / (1024 * 1024)
     cap_mb = max(floor_mb, min(ceil_mb, cap_mb))
+
+    if dist_opts.pre_bucketing_fsdp_collectives_verbose:
+        from torch._inductor.comm_analysis import (
+            detect_interconnect,
+            get_inter_node_bw,
+            get_intra_node_bw,
+        )
+
+        logger.info(
+            "pre_bucket_cap: interconnect=%s intra_bw=%.0f inter_bw=%.0f "
+            "saturation_bytes=%d (%.1f MB) cal_mult=%.2f cap_mb=%.1f",
+            detect_interconnect(group_size).name,
+            get_intra_node_bw(),
+            get_inter_node_bw(),
+            min_bytes,
+            min_bytes / (1024 * 1024),
+            cal_mult,
+            cap_mb,
+        )
 
     return cap_mb
 
@@ -359,7 +378,8 @@ def pre_bucket_fsdp_collectives(
         1 for n in gm.graph.nodes if _is_fsdp_coll(n, is_all_reduce_tensor)
     )
 
-    nNodes = math.ceil(group_size / 8) if group_size is not None else 1
+    gpus_per_node = torch.cuda.device_count() if torch.cuda.is_available() else 8
+    nNodes = math.ceil(group_size / gpus_per_node) if group_size is not None else 1
 
     # Verbose: log per-collective sizes after bucketing
     if verbose:

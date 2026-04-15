@@ -468,13 +468,13 @@ estimate_op_runtime = "default"
 
 runtime_estimations_mms_benchmark: bool = False
 
-# unit: GB/s, uni-directional P2P bandwidth per card
-# default value is NVLink
-intra_node_bw = 300
+# unit: GB/s, uni-directional P2P bandwidth per card (NVLink).
+# None = auto-detect from GPU generation; set to override.
+intra_node_bw: int | None = None
 
-# unit: GB/s, uni-directional P2P bandwidth per node
-# default value is InfiniBand
-inter_node_bw = 25
+# unit: GB/s, uni-directional P2P bandwidth per node (IB/RoCE).
+# None = auto-detect from GPU generation; set to override.
+inter_node_bw: int | None = None
 
 # unit: GB/s, uni-directional CPU<>GPU bandwidth
 # default value is PCIe; modify for your hardware or measured bandwidth
@@ -1247,7 +1247,7 @@ class aten_distributed_optimizations:
     pre_bucketing_fsdp_collectives_bucket_cap_mb: float | None = None
 
     # Floor for auto-computed bucket cap in MB.
-    pre_bucketing_fsdp_collectives_min_bucket_cap_mb: float = 50.0
+    pre_bucketing_fsdp_collectives_min_bucket_cap_mb: float = 10.0
 
     # Ceiling for auto-computed bucket cap in MB.
     pre_bucketing_fsdp_collectives_max_bucket_cap_mb: float = 500.0
@@ -1256,9 +1256,9 @@ class aten_distributed_optimizations:
     # via logger and trace_structured.
     pre_bucketing_fsdp_collectives_verbose: bool = False
 
-    # Multiplier on the analytical model's min saturation size.
-    # The model underpredicts by ~3x vs measured H100 NVLink/IB NDR.
-    pre_bucketing_fsdp_collectives_saturation_calibration_multiplier: float = 3.0
+    # Multiplier on the empirical saturation model's output.
+    # With the empirical profiles this should be 1.0; kept for manual tuning.
+    pre_bucketing_fsdp_collectives_saturation_calibration_multiplier: float = 1.0
 
 
 def parallel_compile_enabled_internally() -> bool:
