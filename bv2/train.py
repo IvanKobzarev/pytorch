@@ -54,6 +54,13 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 torch.set_deterministic_debug_mode("error")  # raises error on non-determinism
 
+# Use AutoHeuristics for pad_mm to automatically pad matmuls for better perf.
+# Requires pytorch/pytorch@bd80d3b6c9f04e8d80626ee13a9e5ddb72f125f9.
+try:
+    torch._inductor.config.autoheuristic_use.pad_mm = True
+except Exception:
+    pass
+
 
 def main(c, rank, local_rank, world_size):  # noqa: C901
     prints0(f"Running with arguments:\n{c}")

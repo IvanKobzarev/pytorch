@@ -145,20 +145,12 @@ class TxtEmbedding(nn.Module):
             self.ape_ln.init_weights()
 
 
-def to_next_multiple_of(m):
-    if m:
-        return lambda n: ((n + m - 1) // m) * m
-    else:
-        return lambda n: n
-
-
 class TxtUnembedding(nn.Module):
-    def __init__(self, dim, vocab, chunksz=None, pad_to=8):
+    def __init__(self, dim, vocab, chunksz=None):
         super().__init__()
-        padded_vocab = to_next_multiple_of(pad_to)(vocab)
-        self.head = nn.Linear(dim, padded_vocab, bias=False)
-        self.head_bias = nn.Parameter(torch.zeros(padded_vocab))
-        self.gamma_head = nn.Parameter(torch.ones(padded_vocab))
+        self.head = nn.Linear(dim, vocab, bias=False)
+        self.head_bias = nn.Parameter(torch.zeros(vocab))
+        self.gamma_head = nn.Parameter(torch.ones(vocab))
         self.vocab = vocab
         self.chunksz = chunksz
 
@@ -192,9 +184,9 @@ class TxtUnembedding(nn.Module):
             if logits_tok_idx is not None:
                 assert x.ndim == 3, "Only works with 1D batch dimension."
                 batch_indices = torch.arange(x.shape[0], device=x.device)
-                return (self._norm_logits(self.head(x[batch_indices, logits_tok_idx, :])) + self.head_bias)[..., :self.vocab], {}
+                return self._norm_logits(self.head(x[batch_indices, logits_tok_idx, :])) + self.head_bias, {}
             else:
-                return (self._norm_logits(self.head(x)) + self.head_bias)[..., :self.vocab], {}
+                return self._norm_logits(self.head(x)) + self.head_bias, {}
 
         targets, _, mask = dpack.unpack_as_text(targets)
         x_detached = x.detach().requires_grad_() if mode == "loss and bwd" else x
@@ -250,8 +242,6 @@ class TxtUnembedding(nn.Module):
     def init_weights(self, rng=None):
         nn.init.trunc_normal_(self.head.weight, 0.0, 1/np.sqrt(self.head.in_features), generator=rng)  # fmt: skip
         nn.init.zeros_(self.head_bias)
-        if self.vocab != self.head_bias.shape[0]:
-            nn.init.constant_(self.head_bias.data[self.vocab:], -10)
         nn.init.constant_(self.gamma_head, 0.01)
 
 
