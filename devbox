@@ -3,9 +3,14 @@
 
 set -euo pipefail
 
-PORT_NB=${PORT_NB:-$([ "$SLURM_CLUSTER_NAME" = "fair-sc" ] && echo 8889 || echo 8888)}
-PORT_FB=${PORT_FB:-$([ "$SLURM_CLUSTER_NAME" = "fair-sc" ] && echo 1338 || echo 1337)}
-PORT_SM=${PORT_SM:-$([ "$SLURM_CLUSTER_NAME" = "fair-sc" ] && echo 2338 || echo 2337)}
+PORT_NB=${PORT_NB:-8888}  # only for fair-sc-3
+if [ "$SLURM_CLUSTER_NAME" = "fair-sc-3" ]; then
+  PORT_FB=${PORT_FB:-1337}; PORT_SM=${PORT_SM:-2337}
+elif [ "$SLURM_CLUSTER_NAME" = "fair-sc" ]; then
+  PORT_FB=${PORT_FB:-1338}; PORT_SM=${PORT_SM:-2338}
+elif [ "$SLURM_CLUSTER_NAME" = "dm1" ]; then
+  PORT_FB=${PORT_FB:-1339}; PORT_SM=${PORT_SM:-2339}
+fi
 
 SESS="devbox"
 
@@ -40,7 +45,7 @@ tmux split-window -h -t "$SESS:0.0"
 ENTER=${ENTER:-C-m}
 tmux send-keys -t "$SESS:0.0" "smanager --port $PORT_SM" $ENTER
 tmux send-keys -t "$SESS:0.1" "fbi-serve --port $PORT_FB --prefs-dir /checkpoint/rigi/$USER --share-dir /checkpoint/rigi/shares --maxdepth 2 --dataset /checkpoint/rigi/bv2/workdirs" $ENTER
-tmux send-keys -t "$SESS:0.2" "jupyter lab --no-browser --port=$PORT_NB --NotebookApp.token='' --NotebookApp.password=''" $ENTER
+[ "$SLURM_CLUSTER_NAME" = "fair-sc-3" ] && tmux send-keys -t "$SESS:0.2" "jupyter lab --no-browser --port=$PORT_NB --NotebookApp.token='' --NotebookApp.password=''" $ENTER
 
 tmux new-window -t $SESS
 tmux send-keys -t "$SESS:1" "claude --gpu=0,1,2,3,4,5,6,7"
@@ -48,7 +53,8 @@ tmux send-keys -t "$SESS:1" "claude --gpu=0,1,2,3,4,5,6,7"
 tmux new-window -t $SESS
 tmux send-keys -t "$SESS:2" "bv2/tools/local_run -m bv2.train --config bv2/config/finevision.py nsteps:=18"
 
+NB_FWD=$([ "$SLURM_CLUSTER_NAME" = "fair-sc-3" ] && echo " -L localhost:$PORT_NB:localhost:$PORT_NB" || echo "")
 echo -e "To forward to your laptop, run:"
-echo -e "\033[34mssh -N -f -L localhost:$PORT_NB:localhost:$PORT_NB -L localhost:$PORT_FB:localhost:$PORT_FB -L localhost:$PORT_SM:localhost:$PORT_SM $SLURM_CLUSTER_NAME\033[0m"
+echo -e "\033[34mssh -N -f -L localhost:$PORT_FB:localhost:$PORT_FB -L localhost:$PORT_SM:localhost:$PORT_SM$NB_FWD $SLURM_CLUSTER_NAME\033[0m"
 echo "Tmux session '$SESS' created, to attach, just re-launch this script or tmux a -t $SESS"
 tmux a -t $SESS:0

@@ -95,7 +95,10 @@ def main(slurm=True):
 
     # Construct the common part of the launch command:
     if slurm:
-        launcher = ["sbatch", *slurm_args, "--job-name", xid, "bv2/tools/launch_fair_srun"]
+        _dm1 = "dm1" in os.environ.get("SLURM_CLUSTER_NAME", "")
+        defaults = {"cpus-per-gpu": 16 if _dm1 else 24, "mem-per-gpu": 225000 if _dm1 else 255000}
+        memcpu = [f"--{k}={v}" for k, v in defaults.items() if not any(k in a for a in slurm_args)]
+        launcher = ["sbatch", *slurm_args, *memcpu, "--job-name", xid, "bv2/tools/launch_fair_srun"]
     else:
         launcher = ["bv2/tools/local_run"]
     torch = ["-m", "bv2.train", "--config", conf_file]
