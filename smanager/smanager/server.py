@@ -140,7 +140,10 @@ app.add_middleware(
 )
 
 # Configuration
-GROUP = "rigi"
+_CLUSTER_GROUP = {"fair-sc": "rigi", "fair-sc-3": "rigi", "dm1": "fair_amaia_cw_explore"}
+_CLUSTER_USERS = {"dm1": "pplx,qkv,zhai"}
+_cluster = os.environ.get("SLURM_CLUSTER_NAME", "")
+GROUP, USERS = _CLUSTER_GROUP.get(_cluster, "rigi"), _CLUSTER_USERS.get(_cluster, "")
 BASEDIR = Path("/checkpoint/rigi/bv2/workdirs")
 SRCDIR = Path("/checkpoint/rigi/bv2/srcdirs")
 FBIDIR = Path("/checkpoint/rigi/fbi")
@@ -164,10 +167,10 @@ def extract_xid(name):
     return None
 
 
-def get_jobs(group=GROUP):
+def get_jobs(group=GROUP, users=USERS):
     widths = [20, 20, 20, 20, 20, 20, 40, 20, 20, 20, 20, 20, 20]
     fmt = "JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:40,NumNodes:20,tres-per-node:20,RestartCnt:20,Reason:20,Priority:20,PriorityLong:20"
-    lines = run_cmd(f"squeue -A {group} -O {fmt}")
+    lines = run_cmd(f"squeue -A {group}" + (f" -u {users}" if users else "") + f" -O {fmt}")
     offsets = [sum(widths[:i]) for i in range(len(widths))]
     jobs = [[j[offsets[i]:offsets[i]+widths[i]].strip() for i in range(len(widths))] for j in lines if j.strip()]
     if len(jobs) < 2:
