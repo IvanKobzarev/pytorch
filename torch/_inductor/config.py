@@ -462,6 +462,36 @@ bucket_all_reduces_fx: Literal["none", "all"] = "none"
 # By default torch._inductor.fx_passes.bucketing.bucket_size_determinator is used
 bucket_all_reduces_fx_bucket_size_determinator: Callable[[int], int] | None = None
 
+# Use process group allocator for bucketed collective operations.
+# When enabled, allocates memory from the process group's registered allocator
+# (e.g., NCCL's multicast-compatible allocator) which can improve communication
+# performance. Set via config or USE_PG_ALLOC env var.
+comms_use_pg_alloc: bool = os.environ.get("USE_PG_ALLOC", "0") == "1"
+
+# Max pg_alloc memory (GB). Allocations exceeding this fall back to torch.empty().
+# None means no limit.
+comms_pg_alloc_max_gb: float | None = (
+    float(v) if (v := os.environ.get("USE_PG_ALLOC_MAX_GB")) else None
+)
+
+# Strategy for pg_alloc. None = inductor decides where to apply pg_alloc (all buffers for now).
+# Tokens: "only_all_gather", "only_reduce", "only_inputs", "only_outputs"
+# Combine with comma: "only_all_gather,only_outputs"
+comms_use_pg_alloc_strategy: str | None = os.environ.get("USE_PG_ALLOC_STRATEGY", None)
+
+# Allow non-comm ops to borrow idle pg_alloc buffers. Reduces CUDA caching
+# allocator fragmentation by reusing NCCL-registered memory for compute when
+# the buffer won't be needed for comms. Requires comms_use_pg_alloc=True.
+comms_pg_alloc_allow_borrow: bool = os.environ.get("USE_PG_ALLOC_BORROW", "0") == "1"
+
+# Strategy for cross-pool borrowing. Requires comms_pg_alloc_allow_borrow=True.
+# "greedy": single-pass, borrow first safe match (with reuse chain guard).
+# "peak_aware": two-pass — simulate to find peak, only borrow buffers live at peak.
+# "greedy_matching": greedy bipartite matching for borrow assignment minimizing peak.
+comms_pg_alloc_borrow_strategy: str = os.environ.get(
+    "USE_PG_ALLOC_BORROW_STRATEGY", "greedy"
+)
+
 # runtime estimation function for ops
 # for built-in estimation function, pass in "default"; for user-defined estimation function, pass in the function handle
 estimate_op_runtime = "default"
