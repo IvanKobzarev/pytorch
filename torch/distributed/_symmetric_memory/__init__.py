@@ -1755,6 +1755,191 @@ def _low_contention_all_gather_v2_meta(
 # Monotonic counter for v2 signal pad synchronization (no reset needed).
 _v2_counter: dict[str, int] = {}
 
+# cuStreamBatchMemOp ctypes binding for batched write/wait signaling.
+import ctypes as _ctypes
+
+_CU_STREAM_MEM_OP_WAIT_VALUE_32 = 1
+_CU_STREAM_MEM_OP_WRITE_VALUE_32 = 2
+
+
+class _CUstreamBatchMemOpParams(_ctypes.Union):
+    class _Write(_ctypes.Structure):
+        _fields_ = [
+            ("operation", _ctypes.c_uint),
+            ("address", _ctypes.c_uint64),
+            ("value", _ctypes.c_uint32),
+            ("flags", _ctypes.c_uint),
+            ("alias", _ctypes.c_uint64),
+        ]
+
+    class _Wait(_ctypes.Structure):
+        _fields_ = [
+            ("operation", _ctypes.c_uint),
+            ("address", _ctypes.c_uint64),
+            ("value", _ctypes.c_uint32),
+            ("flags", _ctypes.c_uint),
+            ("alias", _ctypes.c_uint64),
+        ]
+
+    _fields_ = [
+        ("writeValue", _Write),
+        ("waitValue", _Wait),
+        ("pad", _ctypes.c_uint64 * 6),
+    ]
+
+
+_libcuda: _ctypes.CDLL | None = None
+_cuStreamBatchMemOp: Any = None
+
+
+def _get_cuStreamBatchMemOp() -> Any:
+    global _libcuda, _cuStreamBatchMemOp
+    if _cuStreamBatchMemOp is not None:
+        return _cuStreamBatchMemOp
+    _libcuda = _ctypes.CDLL("libcuda.so.1")
+    # Try v2 symbol first (CUDA 12+), then fall back
+    for name in ("cuStreamBatchMemOp_v2", "cuStreamBatchMemOp"):
+        fn = getattr(_libcuda, name, None)
+        if fn is not None:
+            fn.restype = _ctypes.c_int
+            fn.argtypes = [
+                _ctypes.c_void_p,  # CUstream
+                _ctypes.c_uint,  # count
+                _ctypes.POINTER(_CUstreamBatchMemOpParams),  # paramArray
+                _ctypes.c_uint,  # flags
+            ]
+            _cuStreamBatchMemOp = fn
+            return fn
+    raise RuntimeError("cuStreamBatchMemOp not found in libcuda.so.1")
+
+
+# Per-peer streams for parallelized copy — one stream per peer rank.
+# Each stream independently waits for its peer's signal then copies.
+_v2_peer_streams: dict[str, list[torch.cuda.Stream]] = {}
+
+
+def _get_v2_peer_streams(
+    group_name: str, world_size: int
+) -> list[torch.cuda.Stream]:
+    if group_name in _v2_peer_streams:
+        return _v2_peer_streams[group_name]
+    streams = [torch.cuda.Stream() for _ in range(world_size)]
+    _v2_peer_streams[group_name] = streams
+    return streams
+
+
+# Cached barrier params: (group_name, rank, world_size) ->
+# (b1_writes_params, b1_writes_count, b1_per_peer_wait_params, b2_params, b2_count)
+_v2_barrier_params: dict[str, tuple] = {}
+
+
+def _build_batch_params(
+    write_addrs: list[int],
+    wait_addrs: list[int],
+) -> tuple[Any, int]:
+    """Build a ctypes CUstreamBatchMemOpParams array for writes then waits."""
+    n_writes = len(write_addrs)
+    n_waits = len(wait_addrs)
+    total = n_writes + n_waits
+    ArrayType = _CUstreamBatchMemOpParams * total
+    params = ArrayType()
+    for i, addr in enumerate(write_addrs):
+        params[i].writeValue.operation = _CU_STREAM_MEM_OP_WRITE_VALUE_32
+        params[i].writeValue.address = addr
+        params[i].writeValue.flags = 0
+    for i, addr in enumerate(wait_addrs):
+        idx = n_writes + i
+        params[idx].waitValue.operation = _CU_STREAM_MEM_OP_WAIT_VALUE_32
+        params[idx].waitValue.address = addr
+        params[idx].waitValue.flags = 0  # GEQ
+    return params, total
+
+
+def _build_single_wait_param(addr: int) -> tuple[Any, int]:
+    """Build a 1-element batch param for a single wait_value32."""
+    ArrayType = _CUstreamBatchMemOpParams * 1
+    params = ArrayType()
+    params[0].waitValue.operation = _CU_STREAM_MEM_OP_WAIT_VALUE_32
+    params[0].waitValue.address = addr
+    params[0].waitValue.flags = 0  # GEQ
+    return params, 1
+
+
+def _get_v2_barrier_params(
+    symm_mem: _SymmetricMemory,
+    group_name: str,
+) -> tuple:
+    """Build cached barrier params for v2 AG with per-peer streams.
+
+    Returns:
+        (b1_writes_params, b1_writes_count,   # writes-only for barrier 1
+         b1_per_peer_waits,                    # list of (params, 1) per peer rank
+         b2_params, b2_count)                  # full writes+waits for barrier 2
+    """
+    key = group_name
+    if key in _v2_barrier_params:
+        return _v2_barrier_params[key]
+
+    rank = symm_mem.rank
+    world_size = symm_mem.world_size
+    channel = 1
+    b1_base = world_size * channel
+    b2_base = world_size * channel + world_size
+    uint32_sz = 4
+
+    local_pad_base = symm_mem.get_signal_pad(rank).data_ptr()
+
+    # Barrier 1 writes: tell each peer "my data is ready"
+    peers = [p for p in range(world_size) if p != rank]
+    b1_write_addrs = [
+        symm_mem.get_signal_pad(p).data_ptr() + (b1_base + rank) * uint32_sz
+        for p in peers
+    ]
+    b1_writes_params, b1_writes_count = _build_batch_params(b1_write_addrs, [])
+
+    # Barrier 1 per-peer waits: one wait param per rank (for per-peer streams)
+    # Index by rank (not peer index) so stream[rank] gets the right wait
+    b1_per_peer_waits: list[tuple[Any, int] | None] = [None] * world_size
+    for p in range(world_size):
+        if p != rank:
+            addr = local_pad_base + (b1_base + p) * uint32_sz
+            b1_per_peer_waits[p] = _build_single_wait_param(addr)
+
+    # Barrier 2: writes + waits (full barrier on backend stream)
+    b2_write_addrs = [
+        symm_mem.get_signal_pad(p).data_ptr() + (b2_base + rank) * uint32_sz
+        for p in peers
+    ]
+    b2_wait_addrs = [local_pad_base + (b2_base + p) * uint32_sz for p in peers]
+    b2_params, b2_count = _build_batch_params(b2_write_addrs, b2_wait_addrs)
+
+    result = (
+        b1_writes_params, b1_writes_count,
+        b1_per_peer_waits,
+        b2_params, b2_count,
+    )
+    _v2_barrier_params[key] = result
+    return result
+
+
+def _stream_batch_memop(
+    params: Any, count: int, counter: int,
+    stream: int | None = None,
+) -> None:
+    """Submit batched write/wait ops via cuStreamBatchMemOp.
+
+    Updates all value fields to `counter` before submission.
+    Uses current CUDA stream if `stream` is None.
+    """
+    fn = _get_cuStreamBatchMemOp()
+    for i in range(count):
+        # Both writeValue.value and waitValue.value are at the same offset
+        params[i].writeValue.value = counter
+    cuda_stream = stream if stream is not None else torch.cuda.current_stream().cuda_stream
+    ret = fn(cuda_stream, count, params, 0)
+    if ret != 0:
+        raise RuntimeError(f"cuStreamBatchMemOp failed with error {ret}")
+
 
 @torch.library.impl(lib, "_low_contention_all_gather_v2", "CUDA")
 def _low_contention_all_gather_v2(
@@ -1762,11 +1947,20 @@ def _low_contention_all_gather_v2(
     group_name: c10d.GroupName,
 ) -> torch.Tensor:
     """
-    All-gather using stream_write/wait_value32 instead of barrier kernels.
+    All-gather using cuStreamBatchMemOp with per-peer copy streams.
 
-    Uses monotonically increasing counters with GEQ wait mode to avoid
-    the reset-vs-write race that occurs with 0/1 signaling.
+    Barrier 1 writes (data-ready signals) go on the backend stream.
+    Each peer's wait+copy runs on a dedicated stream so copies from
+    fast peers start immediately without waiting for slow peers.
+    Barrier 2 (reads-complete) runs on the backend stream after all
+    peer streams finish.
+
+    Under CUDA graph capture, falls back to v1 barrier-based path
+    because stream_write/wait_value32 captures static counter values.
     """
+    if torch.cuda.is_current_stream_capturing():
+        return _low_contention_all_gather(tensor, group_name)
+
     symm_mem = rendezvous(tensor, group_name)
     if symm_mem is not None:
         input_is_symm_mem = True
@@ -1779,60 +1973,60 @@ def _low_contention_all_gather_v2(
     rank = symm_mem.rank
     world_size = symm_mem.world_size
 
-    # Increment counter for this call
     counter = _v2_counter.get(group_name, 0) + 1
     _v2_counter[group_name] = counter
 
     output = tensor.new_empty(tensor.shape[0] * world_size, *tensor.shape[1:])
     chunks = output.chunk(world_size)
 
-    # Signal pad layout (channel 1, 2 * world_size slots):
-    #   [ws..2ws-1]  = barrier 1 slots (data ready)
-    #   [2ws..3ws-1] = barrier 2 slots (reads complete)
-    channel = 1
-    b1_base = world_size * channel
-    b2_base = world_size * channel + world_size
+    (
+        b1_writes_params, b1_writes_count,
+        b1_per_peer_waits,
+        b2_params, b2_count,
+    ) = _get_v2_barrier_params(symm_mem, group_name)
 
-    _get_backend_stream().wait_stream(torch.cuda.current_stream())
-    with _get_backend_stream():
+    peer_streams = _get_v2_peer_streams(group_name, world_size)
+    backend_stream = _get_backend_stream()
+
+    backend_stream.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(backend_stream):
         if not input_is_symm_mem:
             local_buf = symm_mem.get_buffer(rank, tensor.shape, tensor.dtype)
             local_buf.copy_(tensor)
 
-        # Barrier 1: signal data ready, wait for all peers
-        for peer in range(world_size):
-            if peer != rank:
-                remote_signal_pad = symm_mem.get_signal_pad(peer)
-                _SymmetricMemory.stream_write_value32(
-                    remote_signal_pad, b1_base + rank, counter
-                )
+        # Barrier 1 writes: signal "my data is ready" to all peers
+        _stream_batch_memop(
+            b1_writes_params, b1_writes_count, counter,
+            backend_stream.cuda_stream,
+        )
 
-        local_signal_pad = symm_mem.get_signal_pad(rank)
-        for peer in range(world_size):
-            if peer != rank:
-                torch.ops.symm_mem.stream_wait_value32(
-                    local_signal_pad, b1_base + peer, counter
+        # Per-peer: wait for peer's signal, then copy — each on its own stream
+        for remote_rank in range(world_size):
+            if remote_rank == rank:
+                # Local chunk: copy on backend stream (already available)
+                src_buf = symm_mem.get_buffer(rank, tensor.shape, tensor.dtype)
+                chunks[rank].copy_(src_buf)
+                continue
+            ps = peer_streams[remote_rank]
+            ps.wait_stream(backend_stream)
+            wait_params, wait_count = b1_per_peer_waits[remote_rank]
+            _stream_batch_memop(wait_params, wait_count, counter, ps.cuda_stream)
+            with torch.cuda.stream(ps):
+                src_buf = symm_mem.get_buffer(
+                    remote_rank, tensor.shape, tensor.dtype
                 )
+                chunks[remote_rank].copy_(src_buf)
 
-        # CE copies: pull from all ranks
-        for step in range(world_size):
-            remote_rank = (rank - step) % world_size
-            src_buf = symm_mem.get_buffer(remote_rank, tensor.shape, tensor.dtype)
-            chunks[remote_rank].copy_(src_buf)
+        # Sync backend stream with all peer streams before barrier 2
+        for remote_rank in range(world_size):
+            if remote_rank != rank:
+                backend_stream.wait_stream(peer_streams[remote_rank])
 
-        # Barrier 2: signal reads complete, wait for all peers
-        for peer in range(world_size):
-            if peer != rank:
-                remote_signal_pad = symm_mem.get_signal_pad(peer)
-                _SymmetricMemory.stream_write_value32(
-                    remote_signal_pad, b2_base + rank, counter
-                )
-
-        for peer in range(world_size):
-            if peer != rank:
-                torch.ops.symm_mem.stream_wait_value32(
-                    local_signal_pad, b2_base + peer, counter
-                )
+        # Barrier 2: signal reads complete + wait for all peers
+        _stream_batch_memop(
+            b2_params, b2_count, counter,
+            backend_stream.cuda_stream,
+        )
 
         torch._C._distributed_c10d._register_work(output, Work())
         return output

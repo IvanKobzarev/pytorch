@@ -549,6 +549,8 @@ TORCH_LIBRARY_FRAGMENT(symm_mem, m) {
       "stream_wait_value32(Tensor input, int offset, int val, int flags=0) -> ()");
   m.def(
       "memset32_(Tensor(a!) input, int offset, int val, int count) -> Tensor(a!)");
+  m.def(
+      "stream_batch_write_and_wait_value32(Tensor write_addrs, int write_value, Tensor wait_addrs, int wait_value, int wait_flags=0) -> ()");
 
   m.def("nvshmem_put(Tensor(a!) tensor, int peer) -> ()");
   m.def("nvshmem_get(Tensor(a!) tensor, int peer) -> ()");

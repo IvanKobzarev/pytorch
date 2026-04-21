@@ -1358,6 +1358,69 @@ void stream_wait_value32(
 #endif
 }
 
+void stream_batch_write_and_wait_value32(
+    const at::Tensor& write_addrs,
+    int64_t write_value,
+    const at::Tensor& wait_addrs,
+    int64_t wait_value,
+    int64_t wait_flags) {
+  TORCH_CHECK(
+      write_addrs.dim() == 1 && write_addrs.is_contiguous() &&
+          write_addrs.scalar_type() == c10::ScalarType::Long &&
+          write_addrs.device().is_cpu(),
+      "stream_batch_write_and_wait_value32: write_addrs must be a flat, "
+      "contiguous int64 CPU tensor.");
+  TORCH_CHECK(
+      wait_addrs.dim() == 1 && wait_addrs.is_contiguous() &&
+          wait_addrs.scalar_type() == c10::ScalarType::Long &&
+          wait_addrs.device().is_cpu(),
+      "stream_batch_write_and_wait_value32: wait_addrs must be a flat, "
+      "contiguous int64 CPU tensor.");
+
+  const int64_t num_writes = write_addrs.numel();
+  const int64_t num_waits = wait_addrs.numel();
+  const int64_t total_ops = num_writes + num_waits;
+  if (total_ops == 0) {
+    return;
+  }
+
+#if !defined(USE_ROCM) && defined(PYTORCH_C10_DRIVER_API_SUPPORTED)
+  auto driver_api = c10::cuda::DriverAPI::get();
+
+  std::vector<CUstreamBatchMemOpParams> params(total_ops);
+  memset(params.data(), 0, sizeof(CUstreamBatchMemOpParams) * total_ops);
+
+  const int64_t* write_addrs_ptr = write_addrs.data_ptr<int64_t>();
+  for (int64_t i = 0; i < num_writes; ++i) {
+    params[i].writeValue.operation = CU_STREAM_MEM_OP_WRITE_VALUE_32;
+    params[i].writeValue.address =
+        static_cast<CUdeviceptr>(write_addrs_ptr[i]);
+    params[i].writeValue.value = static_cast<cuuint32_t>(write_value);
+    params[i].writeValue.flags = 0;
+  }
+
+  const int64_t* wait_addrs_ptr = wait_addrs.data_ptr<int64_t>();
+  for (int64_t i = 0; i < num_waits; ++i) {
+    auto& p = params[num_writes + i];
+    p.waitValue.operation = CU_STREAM_MEM_OP_WAIT_VALUE_32;
+    p.waitValue.address = static_cast<CUdeviceptr>(wait_addrs_ptr[i]);
+    p.waitValue.value = static_cast<cuuint32_t>(wait_value);
+    p.waitValue.flags = static_cast<unsigned int>(wait_flags);
+  }
+
+  C10_CUDA_DRIVER_CHECK(driver_api->cuStreamBatchMemOp_(
+      at::cuda::getCurrentCUDAStream(),
+      static_cast<unsigned int>(total_ops),
+      params.data(),
+      0));
+#else
+  TORCH_CHECK(
+      false,
+      "stream_batch_write_and_wait_value32 requires "
+      "PYTORCH_C10_DRIVER_API_SUPPORTED and non-ROCm build");
+#endif
+}
+
 } // namespace
 
 TORCH_LIBRARY_IMPL(symm_mem, CUDA, m) {
@@ -1392,4 +1455,8 @@ TORCH_LIBRARY_IMPL(symm_mem, CUDA, m) {
   m.impl("stream_write_value32_", ::stream_write_value32_);
   m.impl("stream_wait_value32", ::stream_wait_value32);
   m.impl("memset32_", ::memset32_);
+}
+
+TORCH_LIBRARY_IMPL(symm_mem, CPU, m) {
+  m.impl("stream_batch_write_and_wait_value32", ::stream_batch_write_and_wait_value32);
 }
