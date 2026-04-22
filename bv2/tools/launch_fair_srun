@@ -42,6 +42,13 @@ fi
 
 export NCCL_DEBUG=WARN  # quiet NCCL a bit
 
+if [[ "$*" == *"bv2.jax."* ]]; then
+  export XLA_FLAGS="${XLA_FLAGS:+$XLA_FLAGS }--xla_gpu_enable_latency_hiding_scheduler=false"
+  export XLA_PYTHON_CLIENT_PREALLOCATE=true
+  export XLA_PYTHON_CLIENT_MEM_FRACTION=0.9
+  export TF_GPU_ALLOCATOR=cuda_malloc_async
+fi
+
 echo $CONDA_PREFIX
 pwd
 

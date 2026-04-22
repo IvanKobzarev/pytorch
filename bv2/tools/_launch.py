@@ -181,8 +181,6 @@ def main(slurm=True):
 
     if slurm:
         launchids_file.write_text(json.dumps(launchids, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-    if slurm:
         print(f"{RESET}To kill all these jobs: {BLUE}scancel -n {xid}{RESET}")
         print(f"To see status of all these jobs (triple-click to select line):\n"
             f"{BLUE}squeue -n {xid}{RESET} -O JobId:9,Name:20,UserName:5,State:10,TimeUsed:11,NumCPUs:5,NumNodes:6,GRES:14,RestartCnt:4,QOS:9,Reason")
