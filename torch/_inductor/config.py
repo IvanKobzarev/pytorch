@@ -1234,6 +1234,12 @@ class aten_distributed_optimizations:
     # overhead exceeds the benefit. Set to 0 to disable.
     low_contention_min_bytes_per_rank: int = 1024 * 1024
 
+    # Allow LC replacement even when the collective overlaps with
+    # collectives from another process group (e.g. TP). Normally skipped
+    # to avoid CE/NCCL NVLink bandwidth contention. Enable this to
+    # measure the SM-freeing benefit vs NVLink contention cost.
+    low_contention_allow_nvlink_contention: bool = False
+
     # Use v2 all-gather (stream_write/wait_value32 instead of barrier kernels).
     low_contention_all_gather_v2: bool = False
 

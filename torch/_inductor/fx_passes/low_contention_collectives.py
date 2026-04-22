@@ -63,6 +63,7 @@ def replace_collectives_with_low_contention(
     min_bytes = config.aten_distributed_optimizations.low_contention_min_bytes_per_rank
     use_ag_v2 = config.aten_distributed_optimizations.low_contention_all_gather_v2
     use_nccl_ce = config.aten_distributed_optimizations.low_contention_use_nccl_ce
+    allow_nvlink_contention = config.aten_distributed_optimizations.low_contention_allow_nvlink_contention
     max_coalesce = config.aten_distributed_optimizations.low_contention_ce_max_coalesce_size
 
     node_positions = {n: i for i, n in enumerate(graph.nodes)}
@@ -93,7 +94,7 @@ def replace_collectives_with_low_contention(
             log.debug("LC skip %s %s: no compute-bound overlap", coll_type, node.name)
             continue
 
-        if not use_nccl_ce and _has_other_group_collectives(
+        if not use_nccl_ce and not allow_nvlink_contention and _has_other_group_collectives(
             node, group_name, graph, node_positions
         ):
             skipped_nvlink_contention += 1
