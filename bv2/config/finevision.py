@@ -1,4 +1,4 @@
-# bv2/tools/local_run -m bv2.train --config bv2/config/finevision.py nsteps:=250 c.evals=None
+# bv2/tools/launch_local bv2.train bv2/config/finevision.py nsteps:=250 c.evals=None
 
 import sws
 

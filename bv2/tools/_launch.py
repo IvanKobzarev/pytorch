@@ -2,7 +2,7 @@
 """
 Example call flexing all features (while being realistic):
 
-python bv2/launch.py bv2/config/code.py --qos h200_lowest --gpus-per-node 2 nsteps=100 'name:=f"code-test-{c.xid}-{c.wid}"'
+bv2/tools/launch_slurm bv2.train bv2/config/code.py --qos h200_lowest --gpus-per-node 2 nsteps=100 'name:=f"code-test-{c.xid}-{c.wid}"'
 
 Here's an example of defining a sweep in a config file.
 The important part is to return a collection of argument sequences.
@@ -56,25 +56,28 @@ def main(slurm=True):
     else:
         assert "gpu-login" in os.uname().nodename, "Serial launch is only supported from the GPU devbox."
 
-    # First, get the sweep function out of the config file.
-    conf_file = sys.argv[1]
-    assert conf_file.endswith(".py"), "First argument of sweep needs to be config file."
+    module = sys.argv[1]
+    conf_file = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2].endswith(".py") else None
 
     # The default sweep function returns a single run, with empty arg overrides:
-    sweep_fn = run_path(conf_file).get("sweep", lambda: [[]])
+    sweep_fn = run_path(conf_file).get("sweep", lambda: [[]]) if conf_file else lambda: [[]]
 
-    # Second, separate the slurm arguments from the (optional) sws override args.
+    rest = sys.argv[3 if conf_file else 2:]
+
+    # Separate slurm arguments from sws override args.
     # If a lone "--" is provided, slurm args are to its left, and sws to its right.
     # Otherwise, we try to distinguish them on a best effort: slurm args are
     # --foo=bar or --foo bar, whereas sws ones are foo=bar or foo:=bar, so we can
     # distinguish them by the combination of "--" and "=".
-    if "--" in sys.argv:
-        slurm_args = sys.argv[2:sys.argv.index("--")]
-        sws_args = sys.argv[sys.argv.index("--") + 1:]
+    # For local runs, slurm args are simply ignored.
+    if "--" in rest:
+        sep = rest.index("--")
+        slurm_args = rest[:sep]
+        sws_args = rest[sep + 1:]
     else:
         _is_sws = lambda a: "=" in a and not a.startswith("--")
-        slurm_args = [a for a in sys.argv[2:] if not _is_sws(a)]
-        sws_args = [a for a in sys.argv[2:] if _is_sws(a)]
+        slurm_args = [a for a in rest if not _is_sws(a)]
+        sws_args = [a for a in rest if _is_sws(a)]
 
     xid = datetime.now().strftime('%y%m%d_%H%M%S')
 
@@ -99,9 +102,10 @@ def main(slurm=True):
         defaults = {"cpus-per-gpu": 16 if _dm1 else 24, "mem-per-gpu": 225000 if _dm1 else 255000}
         memcpu = [f"--{k}={v}" for k, v in defaults.items() if not any(k in a for a in slurm_args)]
         launcher = ["sbatch", *slurm_args, *memcpu, "--job-name", xid, "bv2/tools/launch_fair_srun"]
+        train_args = ["-m", module] + (["--config", conf_file] if conf_file else [])
     else:
-        launcher = ["bv2/tools/local_run"]
-    torch = ["-m", "bv2.train", "--config", conf_file]
+        launcher = ["bv2/tools/_local_run"]
+        train_args = [module] + ([conf_file] if conf_file else [])
 
     all_jobs = list(sweep_fn())
     njobs = len(all_jobs)
@@ -114,15 +118,16 @@ def main(slurm=True):
     # later gets pre-empted and resumed, it will run whatever is in the code folder at that point,
     # which might already be very different as we continue working on the code while sweeps run!
     # TODO: If `code_dst` exists, add a `.1` next, then `.2` etc.
-    code_dst = next_free(f"/checkpoint/rigi/bv2/srcdirs/{xid}")
-    excludes = [f"--exclude={p}" for p in (".git/", "__pycache__/", "notebooks/")]  # notebooks can be big, usually unrelated.
-    print(f"Copying the code from pwd to {BLUE}{code_dst}{RESET} ...", flush=True)
-    subprocess.run(["rsync", "-rltz", "--mkpath", "--info=progress2", *excludes, "./", code_dst], check=True)  # Use dst perms.
-    os.chdir(code_dst)  # This does change dir for all subsequent calls, such as slurm ones.
-    for i in range(5):
-        print(f"\rDone! Giving you {5-i} more seconds of grace period...", flush=True, end="")
-        time.sleep(1)
-    print("Let's gooooo!")
+    if slurm:
+        code_dst = next_free(f"/checkpoint/rigi/bv2/srcdirs/{xid}")
+        excludes = [f"--exclude={p}" for p in (".git/", "__pycache__/", "notebooks/")]  # notebooks can be big, usually unrelated.
+        print(f"Copying the code from pwd to {BLUE}{code_dst}{RESET} ...", flush=True)
+        subprocess.run(["rsync", "-rltz", "--mkpath", "--info=progress2", *excludes, "./", code_dst], check=True)  # Use dst perms.
+        os.chdir(code_dst)  # This does change dir for all subsequent calls, such as slurm ones.
+        for i in range(5):
+            print(f"\rDone! Giving you {5-i} more seconds of grace period...", flush=True, end="")
+            time.sleep(1)
+        print("Let's gooooo!")
 
     # Storing the exact launch command into the XID folder, this is useful for resuming
     # individual jobs that failed in the future, for example.
@@ -144,10 +149,13 @@ def main(slurm=True):
 
             print(f"{log_xwid} | {log_args}", end="" if slurm else "\n\n", flush=True)
 
-            command_words = [*launcher, *torch, *work_unit_args, f"xid:=\"{xid}\"", f"wid:={wid}", *sws_args]
+            command_words = [*launcher, *train_args, *work_unit_args, f"xid:=\"{xid}\"", f"wid:={wid}", *sws_args]
             ret = subprocess.run(command_words, capture_output=slurm, text=True, shell=False)
 
             if not slurm:
+                if ret.returncode != 0:
+                    print(f"\n{RED}{BOLD}Job {wid} failed with return code {ret.returncode}. Stopping sweep.{RESET}")
+                    break
                 continue  # The rest is slurm-specific restart-script and launcher parsing.
 
             # Write the exact launch command into a shell file that can be used to re-launch:
@@ -189,6 +197,3 @@ def next_free(path):
         i += 1
         curr_path = path.with_suffix(f".{i}")
     return curr_path
-
-if __name__ == "__main__":
-    main()

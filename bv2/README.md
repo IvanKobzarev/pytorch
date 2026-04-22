@@ -12,7 +12,7 @@ Alternatives are: `requirements-gpu-nightly.txt` and `-cpu` versions.
 To run training on the current machine using all visible GPUs:
 
 ```
-bv2/tools/local_run -m bv2.train
+bv2/tools/launch_local bv2.train
 ```
 
 This should be feasible to run for anyone and uses synthetic data.
@@ -25,7 +25,7 @@ If you're not part of `rigi`, things may be a little more compicated.
 First, you need to set a workdir:
 
 ```
-bv2/tools/local_run -m bv2.train workdir_base:=/tmp/bv2
+bv2/tools/launch_local bv2.train workdir_base:=/tmp/bv2
 ```
 
 Slurm/sweeps
@@ -35,11 +35,11 @@ To launch a config (possibly a sweep) on slurm, that is even more hard-coded to 
 If you're in rigi:
 
 ```
-python -m bv2.launch bv2/config/finevision.py --qos h100_rigi_high --gpus-per-node 8 name:=fv-speedtest-baseline
+bv2/tools/launch_slurm bv2.train bv2/config/finevision.py --qos h100_rigi_high --gpus-per-node 8 name:=fv-speedtest-baseline
 ```
 
-Generally the syntax is `python -m bv2.launch [config] [slurm-flags] [sws-flags]`.
-There's also a command to "run a sweep locally" useful to bypass slurm or quicktest sweeps: `python -m bv2.launch_serial [config] [sws-flags]`
+Generally the syntax is `bv2/tools/launch_slurm MODULE CONFIG [slurm-flags] [sws-flags]`.
+There's also a command to "run a sweep locally" useful to bypass slurm or quicktest sweeps: `bv2/tools/launch_local MODULE CONFIG [sws-flags]`
 
 TO DOcument
 -----------

@@ -1,6 +1,6 @@
 """
 pip install -U -r bv2/requirements-gpu-stable.txt (or -nightly)
-bv2/tools/local_run -m bv2.train
+bv2/tools/launch_local bv2.train
 """
 
 import gc
@@ -711,7 +711,7 @@ def get_config():
 
 
 if __name__ == "__main__":
-    if "RANK" in os.environ:  # Launched via bv2/tools/local_run or torchrun
+    if "RANK" in os.environ:  # Launched via bv2/tools/launch_local or torchrun
         rank = int(os.environ["RANK"])
         local_rank = int(os.environ.get("LOCAL_RANK", os.environ["RANK"]))
         world_size = int(os.environ["WORLD_SIZE"])

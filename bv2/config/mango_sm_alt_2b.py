@@ -1,5 +1,5 @@
-# bv2/tools/local_run -m bv2.train --config bv2/config/mango_sm_alt_2b.py nsteps:=250
-# python -m bv2.launch bv2/config/mango_sm_alt_2b.py --qos h200_lowest --gpus-per-node 8 --nodes 1 'name:=f"mango_sm_alt_2b-{c.xid}-{c.wid}"'
+# bv2/tools/launch_local bv2.train bv2/config/mango_sm_alt_2b.py nsteps:=250
+# bv2/tools/launch_slurm bv2.train bv2/config/mango_sm_alt_2b.py --qos h200_lowest --gpus-per-node 8 --nodes 1 'name:=f"mango_sm_alt_2b-{c.xid}-{c.wid}"'
 
 import sws
 
