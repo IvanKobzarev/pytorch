@@ -1,4 +1,4 @@
-"""Dump sample IDs from rigi_mango_2b04 into bagz sharded files.
+"""Dump sample IDs from rigi_mango_2b05 into bagz sharded files.
 
 Multiprocessing version — no GPU needed, configurable number of workers.
 Every worker exhausts its airstore shard, then all IDs are globally
@@ -8,18 +8,18 @@ A split with n=0 takes all remaining IDs.
 Usage:
     python -m bv2.data.mango_sm_alt_2b_dump_sids --workers 128
 
-Output: /checkpoint/rigi/data/mango_2b04_sids/{split}-{shard}-of-{total}.bag
-
-Collected 2,209,156,586 IDs out of 2,209,186,816 total. skip_empty=0 (0.00%), skip_cv2=30,230 (0.00%). 66869s.
-  val_mini: 5,120 entries -> /checkpoint/rigi/data/mango_2b04_sids/val_mini@1.bag
-    [0]: 1!122853/s001228976316_e001228976331_c00016_b569344!6
-    [-1]: 1!122853/s000242857914_e000242857929_c00016_b1745408!14
-  val: 51,200 entries -> /checkpoint/rigi/data/mango_2b04_sids/val@4.bag
-    [0]: 1!122853/s001800242534_e001800242549_c00016_b1796096!7
-    [-1]: 1!122853/s001315498761_e001315498776_c00016_b1761280!12
-  train: 2,209,100,266 entries -> /checkpoint/rigi/data/mango_2b04_sids/train@64.bag
-    [0]: 1!122853/s002151227563_e002151227578_c00016_b793088!4
-    [-1]: 1!122853/s001459091035_e001459091050_c00016_b674304!3
+Output: /checkpoint/rigi/data/mango_2b05_sids/{split}-{shard}-of-{total}.bag
+Collected 2,194,614,720 IDs out of 2,209,306,752 total. skip_empty=0 (0.00%), skip_cv2=14,692,032 (0.67%). 63450s. Shuffling and splitting...
+  val_mini: 5,120 entries -> /checkpoint/rigi/data/mango_2b05_sids/val_mini@1.bag
+    [0]: 1!123454/s002089020363_e002089020426_c00064_b5365760!44
+    [-1]: 1!123454/s001735677546_e001735677609_c00064_b4298752!34
+  val: 51,200 entries -> /checkpoint/rigi/data/mango_2b05_sids/val@4.bag
+    [0]: 1!123454/s002005910765_e002005910828_c00064_b3635712!6
+    [-1]: 1!123454/s000973606357_e000973606420_c00064_b16120320!25
+  train: 2,194,558,400 entries -> /checkpoint/rigi/data/mango_2b05_sids/train@64.bag
+    [0]: 1!123454/s001339359922_e001339359985_c00064_b10226176!46
+    [-1]: 1!123454/s001822767731_e001822767794_c00064_b5980672!4
+Done!
 
 """
 
@@ -33,8 +33,8 @@ import sackli
 
 import bv2.utils as u
 
-DATASET = "rigi_mango_2b04"
-OUT_DIR = "/checkpoint/rigi/data/mango_2b04_sids"
+DATASET = "rigi_mango_2b05"
+OUT_DIR = "/checkpoint/rigi/data/mango_2b05_sids"
 
 # After shuffle, split sequentially. n=0 means "take all remaining".
 # At most one split should have n=0.

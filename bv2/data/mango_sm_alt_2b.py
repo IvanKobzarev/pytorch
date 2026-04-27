@@ -26,16 +26,16 @@ from bv2.data.common import get_sackli_reader, shuffled_iota_exids
 from bv2.data.tokenizer import get_tiktoken
 
 SID_BAGZ_SPLITS = {
-    "train": "/checkpoint/rigi/data/mango_2b04_sids/train@64.bag",
-    "val": "/checkpoint/rigi/data/mango_2b04_sids/val@4.bag",
-    "val_mini": "/checkpoint/rigi/data/mango_2b04_sids/val_mini@1.bag",
+    "train": "/checkpoint/rigi/data/mango_2b05_sids/train@64.bag",
+    "val": "/checkpoint/rigi/data/mango_2b05_sids/val@4.bag",
+    "val_mini": "/checkpoint/rigi/data/mango_2b05_sids/val_mini@1.bag",
 }
 
 
 def _open_sample_id_loader():
     pm = PathManager()
     pm.register_handler(AIRStorePathHandler())
-    ds = pm.opent("airstore://rigi_mango_2b04", access_mode=AccessMode.kRandomBySampleID)
+    ds = pm.opent("airstore://rigi_mango_2b05", access_mode=AccessMode.kRandomBySampleID)
     loader = ds.__enter__()
     settings = copy.copy(loader._data_set._settings)
     # not tuned, vibe coded numbers that work well.
