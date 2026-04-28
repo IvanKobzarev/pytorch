@@ -3,7 +3,6 @@ pip install -U -r bv2/requirements-gpu-stable.txt (or -nightly)
 bv2/tools/launch_local bv2.train
 """
 
-import gc
 import json
 import os
 import re
@@ -65,11 +64,6 @@ except Exception:
 
 def main(c, rank, local_rank, world_size):  # noqa: C901
     prints0(f"Running with arguments:\n{c}")
-
-    # We want to control GC collection, exactly once per step.
-    # Otherwise, different processes pause the world for collection at different times,
-    # which introduces a "spike" in timing each time one process does a big (300+ms) collection.
-    gc.disable()
 
     # start from the beginning to track every gpu memory allocation
     # otherwise we lost cpp tracestack for model initialization
@@ -256,7 +250,6 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             mw.log({f"chrono/evals/{ev_name}": perf_counter() - tev0})
         if ran_eval:
             mw.log({"chrono/evaltime": perf_counter() - teval0})
-            gc.collect(2)  # Let's also use eval as opportunity to run a full GC collection.
 
     # Print status of GIL late, because any lazy import can flip it back on.
     if hasattr(sys, "_is_gil_enabled"):
@@ -381,16 +374,6 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             for i, src in enumerate(all_srcs):
                 if stats[0, i] > 0:
                     mw.log({f"mix_pplx/{src}": (stats[2, i] / stats[0, i] / np.log(2)).item()})
-
-        # Do controlled garbage collection to control for lag spikes.
-        # gen0 cost about 3-6ms per step, gen2 about 300-500. gen0 every 10 steps 10x its cost => not useful.
-        gc_t0 = perf_counter()
-        gc_n  = gc.collect(0)
-        mw.log({  # Adding a timing barrier would add a few ms, so we time rank0 only.
-            "chrono/gctime": perf_counter() - gc_t0,
-            "sys/rank0/gc_ncollected": gc_n,
-            # **{f"sys/gc_nobj_{i}": len(gc.get_objects(i)) for i in (0, 1, 2)},  # Expensive
-        })
 
         # And grad-norms are for this step, but we only get them after the update ran, i.e. here.
         if step < 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
@@ -599,8 +582,6 @@ def maybe_save_ckpt(step, save_steps, keep_steps, model, optim, workdir, extras=
     should_save = (step % save_steps == 0) if isinstance(save_steps, int) else step in save_steps
     if not (u.about_to_get_killed() or should_save):
         return
-
-    gc.collect(2)  # A good opportunity to run a full GC collection.
 
     path = pjoin(workdir, f"ckpt-{step:06d}")
     prints0(f"Checkpointing to {path}")
