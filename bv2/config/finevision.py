@@ -26,6 +26,7 @@ def get_config():
     c.data.common.rand_max_patches.mode = None
     c.data.common.nreg = lambda: c.model.reg.nreg
     c.data.common.greyout_frac = 0.03
+    c.data.common.tokenizer.first_N = None
 
     fv.add_to_config_(c.data, allow_caching=lambda: c.cache,
                       exclude=("docvqa", "infographic_vqa", "st_vqa", "textvqa", *fv.RIGI_EXCLUDES))
@@ -84,6 +85,7 @@ def get_config():
             k.qfmt = qfmt
         k.lower_q = lower_q
         k.lower_a = lower_a
+        k.tokenizer = lambda: getattr(c.data.common, "tokenizer", None)
         return k
 
     def pplx_eval(name, max_p=None, blind=False, qfmt=None):

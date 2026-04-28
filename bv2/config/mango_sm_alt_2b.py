@@ -42,7 +42,7 @@ def get_config():
         k.split = split
         k.epochs = 1
         k.max_patches = max_p or (lambda: c.data.max_patches)
-        k.tokenizer.first_N = lambda: c.data.tokenizer.first_N
+        k.tokenizer = lambda: getattr(c.data, "tokenizer", None)
         k.nreg = lambda: c.model.reg.nreg
         return k
 
