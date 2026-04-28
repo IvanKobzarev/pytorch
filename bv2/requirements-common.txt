@@ -4,7 +4,8 @@ einops
 ipdb
 numba
 numpy
-opencv-python-headless
+# Disabled until it supports 314t:
+# opencv-python-headless
 pillow
 plattli>=0.4.1
 psutil
