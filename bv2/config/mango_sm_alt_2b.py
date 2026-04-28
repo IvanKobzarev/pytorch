@@ -35,6 +35,7 @@ def get_config():
     c.model.depth = 12
     c.model.reg.nreg = 0
     c.model.stages = lambda: "half" if c.model.reg.nreg > 0 else "single"
+    c.model.txt_unemb.chunksz = 4096
 
     def eval_data(split="val", max_p=None):
         k = sws.Config()
