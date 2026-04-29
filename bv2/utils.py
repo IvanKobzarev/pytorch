@@ -26,80 +26,6 @@ BOLD = '\033[1m' if sys.stdout.isatty() else ''
 RESET = '\033[0m' if sys.stdout.isatty() else ''
 LIGHT = '\033[90m' if sys.stdout.isatty() else ''
 
-_FILTER_STDERR_INSTALLED = False
-
-
-# Can be used both as function annotator, and as with-context.
-class suppress_warnings(ContextDecorator):
-    def __init__(self, message, category=Warning, regex=False):
-        self.category = category
-        self.pattern = message if regex else f".*{re.escape(message)}.*"
-        self._ctx = None  # will hold the catch_warnings context manager
-    def __enter__(self):
-        # Isolate warning filter changes to this scope
-        self._ctx = warnings.catch_warnings()
-        self._ctx.__enter__()
-        warnings.filterwarnings("ignore", message=self.pattern, category=self.category)
-        return self
-    def __exit__(self, exc_type, exc, tb):
-        # Restore previous warnings state
-        return self._ctx.__exit__(exc_type, exc, tb)
-
-
-def filter_stderr(*prefixes):
-    """Redirect stderr through a background thread that drops lines matching any prefix."""
-    global _FILTER_STDERR_INSTALLED
-    if _FILTER_STDERR_INSTALLED:
-        return
-    _FILTER_STDERR_INSTALLED = True
-
-    r_fd, pipe_w_fd = os.pipe()
-    restore_fd = os.dup(2)
-    os.dup2(pipe_w_fd, 2)
-    os.close(pipe_w_fd)
-    sys.stderr = os.fdopen(2, "w", buffering=1, closefd=False)  # Line-buffered!
-    r = os.fdopen(r_fd, "r", errors="replace")
-    w = os.fdopen(os.dup(restore_fd), "w", errors="replace")
-
-    def _run():
-        for line in r:
-            if any(line.startswith(p) for p in prefixes):
-                continue
-            w.write(line)
-            w.flush()
-        r.close()
-        w.close()
-
-    t = Thread(target=_run, daemon=True)
-    t.start()
-
-    def _flush():
-        sys.stderr.flush()
-        os.dup2(restore_fd, 2)
-        sys.stderr = os.fdopen(2, "w", buffering=1, closefd=False)
-        t.join(timeout=2)
-        os.close(restore_fd)
-
-    atexit.register(_flush)
-
-
-def clone_function(f, name_suffix=""):
-    """Return a copy of `f` so that it has a separate torch.compile cache."""
-    g = FunctionType(
-        f.__code__.replace(),
-        f.__globals__,
-        f.__name__ + name_suffix,
-        argdefs=f.__defaults__,
-        closure=f.__closure__
-    )
-    g.__kwdefaults__ = f.__kwdefaults__
-    # g.__dict__.update(f.__dict__)  # Ignore attributes; torch dynamo adds some.
-    g.__annotations__ = getattr(f, "__annotations__", {}).copy()
-    g.__doc__ = f.__doc__
-    g.__module__ = f.__module__
-    g.__qualname__ = f.__qualname__
-    return g
-
 
 def count(start, *, end=None, step=1):
     if end is None:
@@ -293,3 +219,108 @@ def to_gpu(seq, device):
         return x
 
     return {k: maybe_to_gpu(v) for k, v in seq.items()}
+
+
+#              _             _          __  __
+#  _   _  __ _| |_   _   ___| |_ _   _ / _|/ _|
+# | | | |/ _` | | | | | / __| __| | | | |_| |_
+# | |_| | (_| | | |_| | \__ \ |_| |_| |  _|  _|
+#  \__,_|\__, |_|\__, | |___/\__|\__,_|_| |_|
+#        |___/   |___/
+
+
+def install_torch_trace(rank, workdir):
+    # Hacky way of always-enabling TORCH_TRACE from now on. No run overhead, only compile.
+    if rank == 0:  # Big jobs have >700MB per rank, so do rank0 only.
+        h = torch._logging._internal.LOG_TRACE_HANDLER
+        h.root_dir = os.path.join(workdir, "torch_trace")
+
+        # Now we also monkey-patch the handler to change file permission after it's created,
+        # because by default it's o600 which doesn't even inherit parent folder's g+rw.
+        if not hasattr(h, "_group_perm_patch"):
+            old_emit = h.emit
+
+            def emit(record):
+                old_emit(record)
+                if h.stream is not None and h.stream.name != getattr(h, "_group_perm_last", None):
+                    os.chmod(h.stream.name, 0o660)
+                    h._group_perm_last = h.stream.name
+
+            h.emit = emit
+            h._group_perm_patch = True
+            h._group_perm_last = None
+
+
+# Can be used both as function annotator, and as with-context.
+class suppress_warnings(ContextDecorator):
+    def __init__(self, message, category=Warning, regex=False):
+        self.category = category
+        self.pattern = message if regex else f".*{re.escape(message)}.*"
+        self._ctx = None  # will hold the catch_warnings context manager
+    def __enter__(self):
+        # Isolate warning filter changes to this scope
+        self._ctx = warnings.catch_warnings()
+        self._ctx.__enter__()
+        warnings.filterwarnings("ignore", message=self.pattern, category=self.category)
+        return self
+    def __exit__(self, exc_type, exc, tb):
+        # Restore previous warnings state
+        return self._ctx.__exit__(exc_type, exc, tb)
+
+
+_FILTER_STDERR_INSTALLED = False
+
+
+def filter_stderr(*prefixes):
+    """Redirect stderr through a background thread that drops lines matching any prefix."""
+    global _FILTER_STDERR_INSTALLED
+    if _FILTER_STDERR_INSTALLED:
+        return
+    _FILTER_STDERR_INSTALLED = True
+
+    r_fd, pipe_w_fd = os.pipe()
+    restore_fd = os.dup(2)
+    os.dup2(pipe_w_fd, 2)
+    os.close(pipe_w_fd)
+    sys.stderr = os.fdopen(2, "w", buffering=1, closefd=False)  # Line-buffered!
+    r = os.fdopen(r_fd, "r", errors="replace")
+    w = os.fdopen(os.dup(restore_fd), "w", errors="replace")
+
+    def _run():
+        for line in r:
+            if any(line.startswith(p) for p in prefixes):
+                continue
+            w.write(line)
+            w.flush()
+        r.close()
+        w.close()
+
+    t = Thread(target=_run, daemon=True)
+    t.start()
+
+    def _flush():
+        sys.stderr.flush()
+        os.dup2(restore_fd, 2)
+        sys.stderr = os.fdopen(2, "w", buffering=1, closefd=False)
+        t.join(timeout=2)
+        os.close(restore_fd)
+
+    atexit.register(_flush)
+
+
+def clone_function(f, name_suffix=""):
+    """Return a copy of `f` so that it has a separate torch.compile cache."""
+    g = FunctionType(
+        f.__code__.replace(),
+        f.__globals__,
+        f.__name__ + name_suffix,
+        argdefs=f.__defaults__,
+        closure=f.__closure__
+    )
+    g.__kwdefaults__ = f.__kwdefaults__
+    # g.__dict__.update(f.__dict__)  # Ignore attributes; torch dynamo adds some.
+    g.__annotations__ = getattr(f, "__annotations__", {}).copy()
+    g.__doc__ = f.__doc__
+    g.__module__ = f.__module__
+    g.__qualname__ = f.__qualname__
+    return g
