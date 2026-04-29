@@ -73,13 +73,13 @@ export WORLD_SIZE=$NGPUS
 
 # Run all processes in the background, except rank 0...
 for (( local_rank=1; local_rank<NGPUS; local_rank++ )); do
-  setsid env RANK=$local_rank LOCAL_RANK=$local_rank CUDA_VISIBLE_DEVICES=$local_rank python -u "${pyargs[@]}" &
+  setsid env RANK=$local_rank LOCAL_RANK=$local_rank CUDA_VISIBLE_DEVICES=$local_rank bv2/tools/_python -u "${pyargs[@]}" &
   pids+=($!)
 done
 
 # Run rank 0 in background too, but preserve stdin for pdb.
 # This lets us use `wait` which allows traps to fire immediately.
-env RANK=0 LOCAL_RANK=0 CUDA_VISIBLE_DEVICES=0 python -u "${pyargs[@]}" <&0 &
+env RANK=0 LOCAL_RANK=0 CUDA_VISIBLE_DEVICES=0 bv2/tools/_python -u "${pyargs[@]}" <&0 &
 rank0_pid=$!
 pids+=($rank0_pid)
 

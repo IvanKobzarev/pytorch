@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# We need -X gil=0 because triton currently re-enables GIL, even though it works.
+# See https://github.com/triton-lang/triton/pull/8437
+# And we cannot unconditionally set this flag because regular py bails. We also
+# cannot use a conda env var for this because conda itself is py and then bails.
+
+if python - <<'PY' >/dev/null 2>&1
+import sysconfig
+raise SystemExit(0 if sysconfig.get_config_var("Py_GIL_DISABLED") else 1)
+PY
+then
+  exec python -X gil=0 "$@"
+else
+  exec python "$@"
+fi

@@ -24,7 +24,7 @@ git reset --hard  # Drop any changes on tracked files
 git checkout -B main origin/main  # Go to main, whether it exists or not yet.
 
 echo "Running GPU-based unit tests..."
-python -m pytest -s bv2 -m gpu --json-report "--json-report-file=/checkpoint/rigi/bv2/nightlies/${WHICH_ONE}_tests_gpu.json"
+bv2/tools/_python -m pytest -s bv2 -m gpu --json-report "--json-report-file=/checkpoint/rigi/bv2/nightlies/${WHICH_ONE}_tests_gpu.json"
 
 echo "Running job..."
 ~/rigi/bv2/tools/launch_fair_srun -m bv2.train "name:=nightly_random_nouns_${WHICH_ONE}"
