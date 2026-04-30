@@ -11,6 +11,8 @@ def get_config():
 
     c.data.name = "deduped_code"
     c.data.split = "codewall_train_0.25M"
+    c.data.tokenizer.regex = "code"
+    c.data.tokenizer.path = "/checkpoint/rigi/bv2/code_4k.tt"
     c.iter.maxtok = lambda: c.maxtok
 
     # Empirically, with maxtok=32k, we get on avg 28.22 examples per gpu.
@@ -43,6 +45,7 @@ def get_config():
     c.evals.pplx.data.epochs = 1
     c.evals.pplx.data.name = "deduped_code"
     c.evals.pplx.data.split = "codewall_val"
+    c.evals.pplx.data.tokenizer = lambda: getattr(c.data, "tokenizer", None)
     c.evals.pplx.iter.maxtok = lambda: c.maxtok
 
     # One example is on average 1k tokens. So we can go for 1M, 4M, 16M, 64M examples.

@@ -1,7 +1,63 @@
+import os
+
+os.environ.setdefault("TIKTOKEN_CACHE_DIR", "")  # Disable tiktoken fs-cache, it leads to mistakes!
+
 from functools import cache
 
+import regex
 import tiktoken
 from tiktoken.load import load_tiktoken_bpe
+
+PATTERNS = {
+    # borrowed from: https://www.internalfb.com/code/fbsource/[cd5f9614da86]/genai/xlformers/core/tokenizers/finetune.py?lines=281
+    # bento notebook: https://fburl.com/anp/u3rlrljj.
+    "o200k": (
+        r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|"
+        r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|"
+        r"\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+"
+    ),
+    # The GPT-4 regex, but split digits individually, and ignore english-specific 'nt etc.
+    "gpt4-onedigit": r"[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
+    # Conservative code regex. Key choices are:
+    # - identifiers keep '_' and trailing digits together
+    # - common identifier prefixes like '.', '::', '->', '@', '#', '$' stay attached
+    # - line-start indentation is isolated as its own chunk, even when it gets deep
+    # - inline spaces attach to the following word/number/punctuation to avoid wrecking prose
+    # - markup/css attribute names with '-', ':', '.' stay together when used like attrs
+    # - PHP-specific forms keep namespace chains and property access intact
+    # - numbers keep common code literal forms together, including separators and suffixes
+    # - the fallback still catches leftover mid-line spaces/tabs such as double-spaces or trailing ws
+    "code": (
+        r"(?m)^[ \t]+|"
+        r" ?[_\p{L}][_\p{L}\p{N}]*(?:[-:\.][_\p{L}\p{N}]+)+(?=\s*=)|"
+        r" ?\$\{[$]?[_\p{L}][_\p{L}\p{N}]*\}|"
+        r" ?\{\$[_\p{L}][_\p{L}\p{N}]*\}|"
+        r" ?\\?[_\p{L}][_\p{L}\p{N}]*(?:\\[_\p{L}][_\p{L}\p{N}]*)+|"
+        r" ?(?:\?->|->|::)\$[_\p{L}][_\p{L}\p{N}]*|"
+        r" ?(?:[$@#]|\\|\.|::|->|\?->)?[_\p{L}][_\p{L}\p{N}]*|"
+        r" ?0[xX][0-9A-Fa-f](?:[0-9A-Fa-f_']*[0-9A-Fa-f])?(?:\.[0-9A-Fa-f](?:[0-9A-Fa-f_']*[0-9A-Fa-f])?)?(?:[pP][+-]?[0-9](?:[0-9_']*[0-9])?)?[A-Za-z%]*|"
+        r" ?0[bB][01](?:[01_']*[01])?[A-Za-z%]*|"
+        r" ?0[oO][0-7](?:[0-7_']*[0-7])?[A-Za-z%]*|"
+        r" ?[0-9](?:[0-9_']*[0-9])?(?:\.[0-9](?:[0-9_']*[0-9])?)?(?:[eE][+-]?[0-9](?:[0-9_']*[0-9])?)?[A-Za-z%]*|"
+        r" ?\.[0-9](?:[0-9_']*[0-9])?(?:[eE][+-]?[0-9](?:[0-9_']*[0-9])?)?[A-Za-z%]*|"
+        r"\r\n|[\r\n]|"
+        r" ?(?:[^\s\p{L}\p{N}_$\\{]|[$](?![_\p{L}])|\\(?![_\p{L}])|\{(?!\$[_\p{L}]))+|"
+        r"[ \t]+"
+    ),
+}
+
+
+def get_pattern(regex_name="o200k"):
+    return PATTERNS.get(regex_name, regex_name)
+
+
+@cache
+def get_pretok_regex(regex_name="o200k"):
+    return regex.compile(get_pattern(regex_name))
+
+
+def pretokenize(text, regex_name="o200k"):
+    return get_pretok_regex(regex_name).findall(text)
 
 
 class Tiktoken:
@@ -9,17 +65,7 @@ class Tiktoken:
         path = path or "/checkpoint/rigi/bv2/l4_200k_base.model"
 
         # "pretokenization" step done via regexp
-        pattern = {
-            # borrowed from: https://www.internalfb.com/code/fbsource/[cd5f9614da86]/genai/xlformers/core/tokenizers/finetune.py?lines=281
-            # bento notebook: https://fburl.com/anp/u3rlrljj.
-            "o200k": (
-                r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|"
-                r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|"
-                r"\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+"
-            ),
-            # The GPT-4 regex, but split digits individually, and ignore english-specific 'nt etc.
-            "gpt4-onedigit": r"[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
-        }[regex]
+        pattern = get_pattern(regex)
 
         # load actual tokens
         tokens = load_tiktoken_bpe(path)
