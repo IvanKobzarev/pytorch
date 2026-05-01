@@ -1,6 +1,7 @@
 from functools import cache, partial
 
 import torch
+from torch._dynamo.decorators import mark_unbacked
 from torch.nn.attention.flex_attention import BlockMask, create_block_mask
 
 
@@ -174,9 +175,9 @@ def make_docmask_gpu_v3(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, SUPER
     Uses compact (NB, max_per_row) index arrays instead of (NB, NB).
 
     max_per_row: controls index array column width.
-      "dynamic" (default): computed from data, dims marked dynamic via mark_dynamic.
+      "dynamic" (default): computed from data, dims marked unbacked.
       int: fixed width (asserts if too small). Use for torch.compile(dynamic=False).
-      None: computed from data (shapes vary, no mark_dynamic).
+      None: computed from data (shapes vary, no symbolic marking).
     """
     attn_regions = torch.as_tensor(attn_regions)
     document_ids = torch.as_tensor(document_ids)
@@ -284,12 +285,9 @@ def make_docmask_gpu_v3(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, SUPER
         seq_lengths=(ntoks, ntoks),
     )
     if max_per_row == "dynamic":
-        # Use positive index: mark_dynamic with negative indices is broken
-        # (torch stores -1 raw, but builder.py iterates range(ndim) so -1
-        # is never matched). See bv2/tools/repro_mark_dynamic_blockmask.py.
         d = mask.kv_indices.ndim - 1
-        torch._dynamo.mark_dynamic(mask.kv_indices, d)
-        torch._dynamo.mark_dynamic(mask.full_kv_indices, d)
-        torch._dynamo.mark_dynamic(mask.q_indices, d)
-        torch._dynamo.mark_dynamic(mask.full_q_indices, d)
+        mark_unbacked(mask.kv_indices, d)
+        mark_unbacked(mask.full_kv_indices, d)
+        mark_unbacked(mask.q_indices, d)
+        mark_unbacked(mask.full_q_indices, d)
     return mask

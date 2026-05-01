@@ -10,6 +10,7 @@ from functools import partial
 
 import numpy as np
 import torch
+from torch._dynamo.decorators import mark_unbacked
 from torch.nn.attention.flex_attention import BlockMask
 
 try:
@@ -239,10 +240,10 @@ def _compute_segments_and_mpr(di, ntoks, BS, NB, max_per_row):
 
 def _apply_dynamic(mask):
     d = mask.kv_indices.ndim - 1
-    torch._dynamo.mark_dynamic(mask.kv_indices, d)
-    torch._dynamo.mark_dynamic(mask.full_kv_indices, d)
-    torch._dynamo.mark_dynamic(mask.q_indices, d)
-    torch._dynamo.mark_dynamic(mask.full_q_indices, d)
+    mark_unbacked(mask.kv_indices, d)
+    mark_unbacked(mask.full_kv_indices, d)
+    mark_unbacked(mask.q_indices, d)
+    mark_unbacked(mask.full_q_indices, d)
 
 
 # ---------------------------------------------------------------------------
@@ -394,8 +395,8 @@ def make_docmask_cpu(ntoks, attn_regions, document_ids, BLOCK_SIZE=128, max_per_
     """CPU document mask for packed multi-document sequences.
 
     max_per_row controls index array width:
-      None: auto-compute width from data (shapes vary, no mark_dynamic).
-      "dynamic" (default): auto-compute width and mark last dim dynamic.
+      None: auto-compute width from data (shapes vary, no symbolic marking).
+      "dynamic" (default): auto-compute width and mark the last dim unbacked.
       int: fixed width, asserts if too small.
     """
     if ntoks == 0:

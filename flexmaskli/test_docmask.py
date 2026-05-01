@@ -7,6 +7,10 @@ import flexmaskli.docmask_gpu as uf
 from flexmaskli.test_utils import blockmask_to_dense, compare_block_masks
 
 
+def _has_unbacked_mark(t):
+    return hasattr(t, "_dynamo_unbacked_indices")
+
+
 def _dense_docmask(make_fn, ntoks, attn_regions, document_ids, BS):
     return blockmask_to_dense(
         make_fn(ntoks, attn_regions, document_ids, BLOCK_SIZE=BS)
@@ -346,8 +350,11 @@ def test_stable_shapes_for_compile(make_fn, kw_extra):
     mask_b = fn(ntoks, ar_b, doc_b, **kw)
 
     if kw_extra.get("max_per_row") == "dynamic":
-        # With dynamic, shapes may differ but dims are marked dynamic.
-        # Just verify the function ran without error.
+        # With "dynamic", shapes may differ but the compact-width dim is
+        # marked unbacked so torch.compile(dynamic=False) can treat shape
+        # reads symbolically instead of specializing to the first width.
+        assert _has_unbacked_mark(mask_a.kv_indices)
+        assert _has_unbacked_mark(mask_b.kv_indices)
         return
 
     # All BlockMask tensors must have identical shapes across batches
@@ -418,7 +425,7 @@ def test_v3_cross_superblock_max_per_row():
     v3_nb = uf.make_docmask_gpu_v3(ntoks, att, ids, BLOCK_SIZE=BS, SUPERBLOCK_SIZE=SB, max_per_row=NB, compile=False)
     compare_block_masks(ref, v3_nb)
 
-    # v3 with auto-computed max_per_row (no mark_dynamic)
+    # v3 with auto-computed max_per_row (no symbolic width marking)
     v3_auto = uf.make_docmask_gpu_v3(
         ntoks, att, ids, BLOCK_SIZE=BS, SUPERBLOCK_SIZE=SB, max_per_row=None, compile=False
     )
@@ -426,14 +433,14 @@ def test_v3_cross_superblock_max_per_row():
 
 
 @pytest.mark.gpu
-def test_v3_mark_dynamic_recompile():
-    """mark_dynamic on BlockMask index tensors prevents recompilation
+def test_v3_mark_unbacked_recompile():
+    """mark_unbacked on BlockMask index tensors prevents recompilation
     under torch.compile(dynamic=False) when the index dimension changes
     size between calls.
 
-    This was broken when we used mark_dynamic(t, -1) because negative
-    indices aren't normalized (PyTorch bug). Fixed by using positive
-    indices in make_docmask_gpu_v3."""
+    The compact width is still concrete on the example tensors; the key
+    behavior is that shape reads from the marked dim create unbacked
+    symbols instead of baking in the first call's width."""
     from torch.nn.attention.flex_attention import flex_attention
 
     BS = 128
@@ -454,6 +461,8 @@ def test_v3_mark_dynamic_recompile():
     # Verify shapes actually differ
     assert mask_wide.kv_indices.shape[-1] != mask_narrow.kv_indices.shape[-1], \
         f"Test setup error: shapes should differ, got {mask_wide.kv_indices.shape[-1]} and {mask_narrow.kv_indices.shape[-1]}"
+    assert _has_unbacked_mark(mask_wide.kv_indices)
+    assert _has_unbacked_mark(mask_narrow.kv_indices)
 
     # Compile flex_attention with strict settings
     torch._dynamo.config.recompile_limit = 1
@@ -468,7 +477,7 @@ def test_v3_mark_dynamic_recompile():
     with torch.no_grad():
         cflex(q, k, v, block_mask=mask_wide)
 
-    # Second call with different shape should NOT recompile (mark_dynamic)
+    # Second call with different shape should NOT recompile.
     with torch.no_grad():
         cflex(q, k, v, block_mask=mask_narrow)
 
@@ -799,8 +808,8 @@ def test_compiled_flex_attention_docmask_cpu_dynamic():
         make_docmask_cpu(maxtok, v, seq["iseq"], ..., max_per_row="dynamic")
 
     Two different document packings (same ntoks) produce masks with different
-    compact index widths. If mark_dynamic doesn't properly communicate the
-    dynamic dimension to the triton kernel, the second call will produce
+    compact index widths. If mark_unbacked doesn't communicate that width as
+    symbolic shape data to the triton kernel, the second call will produce
     wrong outputs (stale kernel reads indices at the first call's width).
     """
     from torch.nn.attention.flex_attention import flex_attention
@@ -900,9 +909,9 @@ def test_compiled_flex_attention_docmask_dynamic():
     cpu1 = make_docmask_cpu(ntoks, ar1, di1, BLOCK_SIZE=BS, max_per_row="dynamic")
     cpu2 = make_docmask_cpu(ntoks, ar2, di2, BLOCK_SIZE=BS, max_per_row="dynamic")
 
-    # Verify dynamic uses smaller width and has mark_dynamic
+    # Verify "dynamic" uses compact width and carries unbacked metadata.
     assert cpu1.kv_indices.shape[-1] <= ntoks // BS
-    assert hasattr(cpu1.kv_indices, '_dynamo_dynamic_indices')
+    assert _has_unbacked_mark(cpu1.kv_indices)
 
     # GPU reference
     gpu1 = uf.make_docmask_gpu(ntoks, ar1.cuda(), di1.cuda(), BLOCK_SIZE=BS)
@@ -1008,9 +1017,9 @@ def test_docmask_max_per_row_shapes():
     assert full.kv_indices.shape[-1] == NB
     assert auto.kv_indices.shape[-1] <= NB
     assert comp.kv_indices.shape[-1] <= NB
-    assert not hasattr(auto.kv_indices, '_dynamo_dynamic_indices')
-    assert hasattr(comp.kv_indices, '_dynamo_dynamic_indices')
-    assert not hasattr(full.kv_indices, '_dynamo_dynamic_indices')
+    assert not _has_unbacked_mark(auto.kv_indices)
+    assert _has_unbacked_mark(comp.kv_indices)
+    assert not _has_unbacked_mark(full.kv_indices)
 
 
 @pytest.mark.parametrize("variant", [

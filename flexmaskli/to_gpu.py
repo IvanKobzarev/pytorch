@@ -1,4 +1,4 @@
-"""Move a BlockMask (with closure tensors and dynamic indices) to a device."""
+"""Move a BlockMask (with closure tensors and unbacked metadata) to a device."""
 
 from functools import partial
 
@@ -7,16 +7,30 @@ import torch
 
 def blockmask_to_gpu(bm, device):
     """Move a BlockMask to device, handling closure tensors."""
-    # Preserve mark_dynamic annotations: bm.to() creates new tensors that
-    # lose _dynamo_dynamic_indices. Re-apply after moving.
-    dynamic_marks = {}
+    # Preserve mark_unbacked annotations: bm.to() creates new tensors that
+    # lose Dynamo attrs. Re-apply after moving.
+    unbacked_marks = {}
     for attr in ("kv_indices", "full_kv_indices", "q_indices", "full_q_indices"):
         t = getattr(bm, attr)
-        if hasattr(t, '_dynamo_dynamic_indices'):
-            dynamic_marks[attr] = t._dynamo_dynamic_indices
+        saved = {}
+        for key in (
+            "_dynamo_dynamic_indices",
+            "_dynamo_unbacked_indices",
+            "_dynamo_strict_unbacked_indices",
+            "_dynamo_unbacked_bounds",
+            "_dynamo_shape_ids",
+            "_dynamo_hint_overrides",
+            "_specialize_on",
+        ):
+            if hasattr(t, key):
+                saved[key] = getattr(t, key)
+        if saved:
+            unbacked_marks[attr] = saved
     bm = bm.to(device)
-    for attr, marks in dynamic_marks.items():
-        getattr(bm, attr)._dynamo_dynamic_indices = marks
+    for attr, saved in unbacked_marks.items():
+        dst = getattr(bm, attr)
+        for key, value in saved.items():
+            setattr(dst, key, value)
     # BlockMask.to() moves block indices but not tensors captured
     # in the mask_mod closure. Move those too so flex_attention
     # doesn't hit CPU tensors during inductor lowering.

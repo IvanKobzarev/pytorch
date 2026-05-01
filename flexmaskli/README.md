@@ -35,7 +35,7 @@ Fork of v2 with compact `(NB, max_per_row)` index arrays instead of `(NB, NB)`:
 - **GPU-native transpose**: uses argsort + scatter on device to transpose kv→q arrays without leaving the GPU.
 - **Direct `BlockMask` constructor**: passes all 8 tensors directly, avoiding any NB-wide intermediates.
 - **`max_per_row` parameter**:
-  - `"dynamic"` (default): computed from data, dims marked via `mark_dynamic` for `torch.compile(dynamic=False)` compatibility. Shapes can vary between batches without recompilation.
+  - `"dynamic"` (default): computed from data, dims marked via `mark_unbacked` for `torch.compile(dynamic=False)` compatibility. Shapes can vary between batches without recompilation.
   - `None`: computed from data (shapes vary per batch — not torch.compile compatible).
   - `int`: fixed width (asserts if too small). Always compile-safe.
 
@@ -73,18 +73,18 @@ The `mask_mod` closure uses 2D indexing (`attn_regions[b, q_idx]`) which is comp
 Standalone utility for moving a BlockMask to a device. Handles three things that `BlockMask.to(device)` alone does not:
 
 - **Closure tensors**: `mask_mod` is a `functools.partial` whose `.keywords` may contain CPU tensors. Iterates them and calls `.to(device)`.
-- **`_dynamo_dynamic_indices`**: `.to()` creates new tensors that lose dynamic marking. Re-applies from the originals.
+- **Unbacked metadata**: `.to()` creates new tensors that lose Dynamo's unbacked-shape metadata. Re-applies it from the originals.
 
 ### torch.compile compatibility
 
 `train.py` uses `torch.compile(dynamic=False)` with `recompile_limit=1`, so BlockMask tensor shapes must be stable across batches.
 
-- **Docmask `max_per_row="dynamic"`**: dims marked dynamic via `mark_dynamic` → no recompilation when index width varies between batches. Recommended for gpu_v3 and cpu.
+- **Docmask `max_per_row="dynamic"`**: dims marked unbacked via `mark_unbacked` → no recompilation when index width varies between batches. Recommended for gpu_v3 and cpu.
 - **Docmask `max_per_row=<int>`**: fixed shape, no dynamism. Use NB (always safe) or a tighter bound.
 - **Batchmask**: fixed NB-width arrays (stable shapes by construction).
 - `make_docmask_gpu` and `gpu_v2` produce stable shapes inherently (NB-wide arrays).
 
-**Note**: `mark_dynamic` must be called with **positive** dimension indices. Negative indices (e.g. `-1`) are silently ignored due to a PyTorch bug. Our code uses `ndim - 1`.
+**Note**: the code marks the trailing compact-width dim (`ndim - 1`) as unbacked.
 
 ## Benchmark results (H200, torch 2.9.1+cu126)
 
@@ -162,4 +162,4 @@ Both `make_docmask_cpu` and `make_batchmask_cpu` handle non-block-aligned `ntoks
 - **Training (docmask)**: use `make_docmask_cpu` (auto-dispatches to numba if available) with `max_per_row="dynamic"`. 45ms at 4M tokens. Prefetchable off GPU.
 - **Decoding (batchmask)**: use `make_batchmask_cpu`. Single JIT call, fixed output shapes, no GPU memory fragmentation. 3-47x faster than per-element + stack.
 - **GPU docmask**: use `make_docmask_gpu_v3` with `max_per_row="dynamic"`. Same or faster speed as v2, O(n) memory instead of O(n²). At 4M tokens: 185 MiB vs 64 GiB.
-- **GPU transfer**: use `blockmask_to_gpu` (in `to_gpu.py`). Handles BlockMask closure tensors and `_dynamo_dynamic_indices` preservation.
+- **GPU transfer**: use `blockmask_to_gpu` (in `to_gpu.py`). Handles BlockMask closure tensors and unbacked-metadata preservation.
