@@ -91,9 +91,12 @@
             padding: 8px;
             border-bottom: 1px solid var(--border);
             flex-shrink: 0;
+            display: flex;
+            gap: 6px;
         }
         .tree-search input {
-            width: 100%;
+            flex: 1;
+            min-width: 0;
             padding: 6px 8px;
             border: 1px solid var(--border);
             border-radius: 4px;
@@ -104,6 +107,23 @@
         .tree-search input:focus {
             outline: none;
             border-color: var(--accent);
+        }
+        .tree-search button {
+            width: 30px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg);
+            color: var(--muted);
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .tree-search button:hover {
+            border-color: var(--accent);
+            color: var(--text);
+        }
+        .tree-search button:disabled {
+            cursor: wait;
+            opacity: 0.6;
         }
         .tree-content {
             flex: 1;
@@ -146,6 +166,16 @@
             font-size: 11px;
             font-family: ui-monospace, monospace;
         }
+        .tree-size-calc {
+            margin-left: auto;
+            padding-left: 8px;
+            cursor: pointer;
+            color: var(--muted);
+            font-size: 11px;
+            font-family: ui-monospace, monospace;
+            opacity: 0.4;
+        }
+        .tree-size-calc:hover { opacity: 0.8; }
         .tree-children {
             display: none;
         }
@@ -230,6 +260,7 @@
         <div class="tree-panel">
             <div class="tree-search">
                 <input type="text" id="treeSearch" placeholder="Search files..." />
+                <button type="button" id="loadAllBtn" title="Load full tree and calculate sizes" onclick="loadFullTree()">🖩</button>
             </div>
             <div class="tree-content" id="treePanel">
                 <div class="loading">Loading file tree...</div>
@@ -247,7 +278,7 @@
 
     <script>
         // Parse URL: /files/{xid}/{file_path}
-        const pathMatch = window.location.pathname.match(/^\/files\/([^\/]+)(?:\/(.+))?$/);
+        const pathMatch = window.location.pathname.match(/^\/files\/([^\/]+)(?:\/(.*))?$/);
         const xid = pathMatch ? pathMatch[1] : '';
         const initialFullPath = pathMatch && pathMatch[2] ? decodeURIComponent(pathMatch[2]) : null;
 
@@ -326,6 +357,36 @@
             return TEXT_EXTS.has(ext) ? '🗎︎' : '📄︎';
         }
 
+        function findTreeItem(items, targetPath) {
+            for (const item of items) {
+                if (item.path === targetPath) return item;
+                if (item.children) {
+                    const found = findTreeItem(item.children, targetPath);
+                    if (found) return found;
+                }
+            }
+            return null;
+        }
+
+        async function calculateDirSize(path, sizeSpan) {
+            sizeSpan.textContent = '...';
+            try {
+                const fullPath = basePath ? `${basePath}/${path}` : path;
+                const resp = await fetch(`/api/xid/${xid}/files/size/${encodeURIComponent(fullPath)}`);
+                if (!resp.ok) throw new Error('Failed to calculate size');
+                const data = await resp.json();
+                const item = findTreeItem(treeData, path);
+                if (item) item.size = data.size;
+                sizeSpan.className = 'tree-size';
+                sizeSpan.removeAttribute('data-size-path');
+                sizeSpan.removeAttribute('title');
+                sizeSpan.textContent = formatSize(data.size);
+            } catch (e) {
+                sizeSpan.textContent = 'err';
+                sizeSpan.title = e.message;
+            }
+        }
+
         function renderTree(items, depth = 0, forceExpanded = false) {
             let html = '';
             for (const item of items) {
@@ -342,8 +403,10 @@
                 }
                 html += `<span class="tree-icon">${icon}</span>`;
                 html += `<span class="tree-name">${escapeHtml(item.name)}</span>`;
-                if (item.type === 'file' && item.size !== undefined) {
+                if (item.size !== undefined) {
                     html += `<span class="tree-size">${formatSize(item.size)}</span>`;
+                } else if (item.type === 'dir') {
+                    html += `<span class="tree-size-calc" data-size-path="${escapeHtml(item.path)}" title="Calculate size">🖩</span>`;
                 }
                 html += `</div>`;
 
@@ -383,6 +446,42 @@
 
         function renderFullTree(panel) {
             panel.innerHTML = renderTree(treeData, 0, false);
+        }
+
+        function getTreeUrl(depth = 1, dirSizes = false) {
+            const url = basePath
+                ? `/api/xid/${xid}/files/tree/${encodeURIComponent(basePath)}`
+                : `/api/xid/${xid}/files/tree`;
+            const params = new URLSearchParams({depth});
+            if (dirSizes) params.set('dir_sizes', '1');
+            return `${url}?${params}`;
+        }
+
+        async function loadFullTree() {
+            const button = document.getElementById('loadAllBtn');
+            button.disabled = true;
+            button.textContent = '...';
+            try {
+                const resp = await fetch(getTreeUrl(-1, true));
+                if (!resp.ok) throw new Error('Failed to load full tree');
+                const data = await resp.json();
+                treeData = data.tree;
+                rootPath = data.root_path || '';
+
+                const query = document.getElementById('treeSearch').value.trim();
+                if (query) {
+                    handleSearch(query);
+                } else {
+                    const panel = document.getElementById('treePanel');
+                    renderFullTree(panel);
+                    if (selectedPath) expandToPath(panel, selectedPath);
+                }
+            } catch (e) {
+                document.getElementById('treePanel').innerHTML = `<div class="error">Error: ${e.message}</div>`;
+            } finally {
+                button.disabled = false;
+                button.textContent = '🖩';
+            }
         }
 
         function handleSearch(query) {
@@ -446,10 +545,7 @@
         async function loadTree() {
             try {
                 // If we have a basePath (work-unit folder), load only that subtree
-                const treeUrl = basePath
-                    ? `/api/xid/${xid}/files/tree/${encodeURIComponent(basePath)}`
-                    : `/api/xid/${xid}/files/tree`;
-                const resp = await fetch(treeUrl);
+                const resp = await fetch(getTreeUrl());
                 if (!resp.ok) throw new Error('Failed to load tree');
                 const data = await resp.json();
                 treeData = data.tree;
@@ -459,6 +555,12 @@
                 renderFullTree(panel);
 
                 panel.addEventListener('click', async (e) => {
+                    const sizeCalc = e.target.closest('.tree-size-calc');
+                    if (sizeCalc) {
+                        await calculateDirSize(sizeCalc.dataset.sizePath, sizeCalc);
+                        return;
+                    }
+
                     const item = e.target.closest('.tree-item');
                     if (!item) return;
 
@@ -483,6 +585,8 @@
                                     if (children && data.tree) {
                                         const fixedTree = prependPathToTree(data.tree, path);
                                         children.innerHTML = renderTree(fixedTree, getDepthFromPath(path) + 1, false);
+                                        const treeItem = findTreeItem(treeData, path);
+                                        if (treeItem) treeItem.children = fixedTree;
                                     }
                                 }
                             } catch (err) {
@@ -554,16 +658,8 @@
         }
 
         function getPathType(items, targetPath) {
-            for (const item of items) {
-                if (item.path === targetPath) {
-                    return item.type;
-                }
-                if (item.children) {
-                    const found = getPathType(item.children, targetPath);
-                    if (found) return found;
-                }
-            }
-            return null;
+            const item = findTreeItem(items, targetPath);
+            return item ? item.type : null;
         }
 
         async function loadFile(path) {

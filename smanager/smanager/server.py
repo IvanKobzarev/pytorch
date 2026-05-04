@@ -1172,26 +1172,30 @@ def _is_text_file(path: Path) -> bool:
         return False
 
 
-def _build_files_tree(path: Path, base: Path, depth: int = -1) -> list:
+def _build_files_tree(path: Path, base: Path, depth: int = -1, dir_sizes=False) -> list:
     """Build file tree with size info for workdir browsing.
 
     Args:
         path: Current directory to list
         base: Base path for computing relative paths
         depth: Max recursion depth. -1 for unlimited, 0 for no children, 1 for one level, etc.
+        dir_sizes: Include recursive sizes for directories.
     """
     items = []
     try:
         for entry in sorted(path.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
             rel_path = str(entry.relative_to(base))
             if entry.is_dir():
-                children = [] if depth == 0 else _build_files_tree(entry, base, depth - 1 if depth > 0 else -1)
-                items.append({
+                children = [] if depth == 0 else _build_files_tree(entry, base, depth - 1 if depth > 0 else -1, dir_sizes)
+                item = {
                     "name": entry.name,
                     "path": rel_path,
                     "type": "dir",
                     "children": children
-                })
+                }
+                if dir_sizes:
+                    item["size"] = sum(child.get("size", 0) for child in children) if depth != 0 else _path_size(entry)
+                items.append(item)
             else:
                 try:
                     size = entry.stat().st_size
@@ -1208,21 +1212,55 @@ def _build_files_tree(path: Path, base: Path, depth: int = -1) -> list:
     return items
 
 
+def _path_size(path):
+    if path.is_symlink():
+        try:
+            return path.lstat().st_size
+        except OSError:
+            return 0
+
+    if path.is_file():
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+
+    total = 0
+    try:
+        for entry in path.iterdir():
+            total += _path_size(entry)
+    except OSError:
+        pass
+    return total
+
+
 @app.get("/api/xid/{xid}/files/tree")
-def get_files_tree(xid: str, depth: int = 1):
+def get_files_tree(xid: str, depth: int = 1, dir_sizes=False):
     """Get file tree for XID's workdir. Use depth=1 for lazy loading."""
     wd_path = _get_workdir(xid)
-    return {"xid": xid, "root_path": str(wd_path), "tree": _build_files_tree(wd_path, wd_path, depth)}
+    dir_sizes = str(dir_sizes).lower() in ("1", "true", "yes", "on")
+    return {"xid": xid, "root_path": str(wd_path), "tree": _build_files_tree(wd_path, wd_path, depth, dir_sizes)}
 
 
 @app.get("/api/xid/{xid}/files/tree/{wuname:path}")
-def get_wu_files_tree(xid: str, wuname: str, depth: int = 1):
+def get_wu_files_tree(xid: str, wuname: str, depth: int = 1, dir_sizes=False):
     """Get file tree for a specific work-unit's directory. Use depth=1 for lazy loading."""
     wd_path = _get_workdir(xid)
     wu_path = _safe_path(wd_path, wuname)
     if not wu_path.exists() or not wu_path.is_dir():
         raise HTTPException(status_code=404, detail=f"Work-unit directory not found: {wuname}")
-    return {"xid": xid, "wuname": wuname, "root_path": str(wu_path), "tree": _build_files_tree(wu_path, wu_path, depth)}
+    dir_sizes = str(dir_sizes).lower() in ("1", "true", "yes", "on")
+    return {"xid": xid, "wuname": wuname, "root_path": str(wu_path), "tree": _build_files_tree(wu_path, wu_path, depth, dir_sizes)}
+
+
+@app.get("/api/xid/{xid}/files/size/{file_path:path}")
+def get_files_size(xid, file_path):
+    """Get recursive size for a file or directory in an XID's workdir."""
+    wd_path = _get_workdir(xid)
+    full_path = _safe_path(wd_path, file_path)
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail=f"Path not found: {file_path}")
+    return {"xid": xid, "path": file_path, "size": _path_size(full_path)}
 
 
 @app.get("/api/xid/{xid}/files/content/{file_path:path}")
