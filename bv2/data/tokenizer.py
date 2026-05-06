@@ -66,6 +66,7 @@ class Tiktoken:
 
         # "pretokenization" step done via regexp
         pattern = get_pattern(regex)
+        self.pat_str = pattern
 
         # load actual tokens
         tokens = load_tiktoken_bpe(path)
@@ -77,10 +78,12 @@ class Tiktoken:
         self.bos = base_dict_size
         self.eos = base_dict_size + 1
         self.sep = base_dict_size + 2
+        self.bos_drop = base_dict_size + 3
         self.special_tokens = {
             "<|bos|>": self.bos,
             "<|eos|>": self.eos,
             "<|sep|>": self.sep,
+            "<|bos_drop|>": self.bos_drop,
         }
 
         self.tokenizer = tiktoken.Encoding(

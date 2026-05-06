@@ -1,10 +1,13 @@
 import json
 from io import BytesIO
+from itertools import pairwise
 from zipfile import ZipFile
 
 import numpy as np
+import regex
 
 import bv2.data.dpack as d
+import bv2.utils as u
 from bv2.data.common import get_sackli_reader, shuffled_iota_exids
 from bv2.data.pp import sanity_check
 from bv2.data.tokenizer import get_tiktoken
@@ -23,22 +26,58 @@ PATH = {
 
 
 class Dataset:
-    def __init__(self, split, first_N=float("inf"), tokenizer=None, seed=0, epochs=None, cache=False):
+    def __init__(self, split, first_N=float("inf"), tokenizer=None, seed=0, epochs=None, cache=False,
+                 bpe_drop_p=0.0, bpe_drop_frac=0.0, mode_tokens=False):
         # Idea: here or in pp: randomize sub-seqlen, because many are >32k!
         self.reader = get_sackli_reader(PATH[split], cache)
         self.tt = get_tiktoken(**tokenizer or {})
         self.first_N = first_N
         self.epochs = epochs
+        self.seed = seed
+        self.bpe_drop_p = bpe_drop_p
+        self.bpe_drop_frac = bpe_drop_frac
+        self.mode_tokens = mode_tokens
+        self.ranks = self.tt.tokenizer._mergeable_ranks
+        self._pat = regex.compile(self.tt.pat_str)
+
+    def _encode_with_dropout(self, text, rng):
+        result = []
+        for word in self._pat.findall(text):
+            parts = [bytes([b]) for b in word.encode("utf-8")]
+            skipped = set()
+            while len(parts) > 1:
+                best = min((r for a, b in pairwise(parts)
+                            if (r := self.ranks.get(a + b)) is not None and r not in skipped),
+                           default=None)
+                if best is None:
+                    break
+                if rng.random() < self.bpe_drop_p:
+                    skipped.add(best)
+                    continue
+                merged, i = [], 0
+                while i < len(parts):
+                    if i + 1 < len(parts) and self.ranks.get(parts[i] + parts[i + 1]) == best:
+                        merged.append(parts[i] + parts[i + 1])
+                        i += 2
+                    else:
+                        merged.append(parts[i])
+                        i += 1
+                parts = merged
+            result.extend(self.ranks[p] for p in parts)
+        return result
 
     def make_example(self, exid, epoch):
         with ZipFile(BytesIO(self.reader[exid])) as zf:
             data = json.load(zf.open("txt.json"))
             # NOTE: Not using "meta.json" here yet.
 
-        toks = self.tt.encode(data)
+        rng = u.rng(self.seed, "bpe_drop", exid, epoch)
+        used_drop = rng.random() < self.bpe_drop_frac
+        toks = self._encode_with_dropout(data, rng) if used_drop else self.tt.encode(data)
+        first = self.tt.bos_drop if (self.mode_tokens and used_drop) else self.tt.bos
 
         return sanity_check({
-            "toki": d.pack_text(np.r_[self.tt.bos, toks], positions="auto"),
+            "toki": d.pack_text(np.r_[first, toks], positions="auto"),
             "toko": d.pack_text(np.r_[toks, self.tt.eos], positions="zero"),
             "lowe": np.ones(len(toks) + 1, np.float32),
             "attn_regions": np.zeros(1 + len(toks), int),  # 0 = AR
