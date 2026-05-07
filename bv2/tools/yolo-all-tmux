@@ -6,6 +6,7 @@ set PROMPT_ENTER_B '❯ 1. Yes'
 set POLL 2.0    # seconds between checks
 set DELAY 0.5   # seconds before sending response
 set CAPTURE_BACK 30
+set CAPTURE_FORWARD 10
 set STATE_DIR (mktemp -d)
 
 function cleanup --on-event fish_exit
@@ -16,8 +17,13 @@ while true
     for pane_id in (tmux list-panes -a -F '#{pane_id}')
         set -l state_file "$STATE_DIR/"(string replace -a '%' '_' -- "$pane_id")
         set -l cursor_y (tmux display-message -p -t "$pane_id" '#{cursor_y}' 2>/dev/null)
+        set -l pane_height (tmux display-message -p -t "$pane_id" '#{pane_height}' 2>/dev/null)
         set -l start_y (math "$cursor_y - $CAPTURE_BACK")
-        set -l lines (tmux capture-pane -t "$pane_id" -p -S "$start_y" -E "$cursor_y" 2>/dev/null | string match -rv '^[[:space:]]*$' | tail -n 10 | string collect)
+        test "$start_y" -lt 0; and set start_y 0
+        set -l end_y (math "$cursor_y + $CAPTURE_FORWARD")
+        set -l max_y (math "$pane_height - 1")
+        test "$end_y" -gt "$max_y"; and set end_y "$max_y"
+        set -l lines (tmux capture-pane -t "$pane_id" -p -S "$start_y" -E "$end_y" 2>/dev/null | string match -rv '^[[:space:]]*$' | string collect)
         set -l action ''
         if string match -q -- "*$PROMPT_Y*" -- $lines
             set action y
@@ -32,8 +38,13 @@ while true
                 begin
                     sleep $DELAY
                     set -l cursor_y (tmux display-message -p -t "$pane_id" '#{cursor_y}' 2>/dev/null)
+                    set -l pane_height (tmux display-message -p -t "$pane_id" '#{pane_height}' 2>/dev/null)
                     set -l start_y (math "$cursor_y - $CAPTURE_BACK")
-                    set -l now (tmux capture-pane -t "$pane_id" -p -S "$start_y" -E "$cursor_y" 2>/dev/null | string match -rv '^[[:space:]]*$' | tail -n 10 | string collect)
+                    test "$start_y" -lt 0; and set start_y 0
+                    set -l end_y (math "$cursor_y + $CAPTURE_FORWARD")
+                    set -l max_y (math "$pane_height - 1")
+                    test "$end_y" -gt "$max_y"; and set end_y "$max_y"
+                    set -l now (tmux capture-pane -t "$pane_id" -p -S "$start_y" -E "$end_y" 2>/dev/null | string match -rv '^[[:space:]]*$' | string collect)
                     if test "$now" = "$lines"
                         if test "$action" = y
                             tmux send-keys -t "$pane_id" y
