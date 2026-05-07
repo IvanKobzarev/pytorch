@@ -1,5 +1,6 @@
 import atexit
 import hashlib
+import json
 import os
 import re
 import signal
@@ -143,13 +144,50 @@ def broadcast_object_from(rank, obj, world_size=None, my_rank=None):
 _ABOUT_TO_GET_KILLED = False
 
 
-def install_preemption_handler(signals=(signal.SIGTERM,)):
+def install_exit_handler(config_path=None):
+    global _ABOUT_TO_GET_KILLED
+    _ABOUT_TO_GET_KILLED = False
+    exit_status = None
+    had_exception = False
+
+    def write_exit_status(status):
+        nonlocal exit_status
+        exit_status = status
+        with open(config_path, "r") as f:
+            config = json.load(f)
+        config["exit_status"] = status
+        config["exit_status_at"] = datetime.now().isoformat(timespec="seconds")
+        tmp = config_path + ".tmp"
+        with open(tmp, "w+") as f:
+            json.dump(config, f, indent=0)
+            f.write("\n")
+        os.replace(tmp, config_path)
+
     def handler(signum, frame):
         global _ABOUT_TO_GET_KILLED
-        _ABOUT_TO_GET_KILLED = perf_counter()
-        print(f"[{distr.get_rank()}] Got termination signal {signum}, checkpointing and quitting ASAP! ({_ABOUT_TO_GET_KILLED})")
-    for s in signals:
+        _ABOUT_TO_GET_KILLED = _ABOUT_TO_GET_KILLED or perf_counter()
+        if config_path and exit_status is None:
+            write_exit_status(("preempted" if signum == signal.SIGUSR2 else "stopped") + " (wip)")
+        print(f"Got termination signal {signum}, checkpointing and quitting ASAP! ({_ABOUT_TO_GET_KILLED})")
+
+    def finalize_exit_status():
+        if exit_status is None:
+            write_exit_status("error" if had_exception else "done")
+        elif exit_status.endswith(" (wip)"):
+            write_exit_status("error" if had_exception else exit_status[:-6])
+
+    old_excepthook = sys.excepthook
+
+    def excepthook(*args):
+        nonlocal had_exception
+        had_exception = True
+        old_excepthook(*args)
+
+    for s in (signal.SIGUSR2, signal.SIGTERM):
         signal.signal(s, handler)
+    sys.excepthook = excepthook
+    if config_path:
+        atexit.register(finalize_exit_status)
 
 
 def about_to_get_killed():

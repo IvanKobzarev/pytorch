@@ -100,8 +100,11 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     if rank == 0:
         os.makedirs(workdir, exist_ok=True)
-        with open(pjoin(workdir, "config.json"), "w+") as f:
+        with open(config_path := pjoin(workdir, "config.json"), "w+") as f:
             f.write(c.to_flat_json(indent=0))
+        u.install_exit_handler(config_path)
+    else:
+        u.install_exit_handler()
 
     u.install_torch_trace(rank, workdir)
 
@@ -427,7 +430,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     if u.about_to_get_killed():
         mw.finish(training_done=False)
-        u.printR(f"Finished {perf_counter() - u.about_to_get_killed()}s after getting the pre-emption call!")
+        u.printR(f"Finished {perf_counter() - u.about_to_get_killed()}s after getting the shutdown signal!")
     else:
         mw.finish(training_done=True)
         if rank == 0:
@@ -741,5 +744,4 @@ if __name__ == "__main__":
     prints0(f"{u.BLUE}Python{u.RESET} {sys.version.split()[0]}")
     prints0(f"{u.BLUE}PyTorch{u.RESET} {torch.__version__}")
 
-    u.install_preemption_handler()
     sws.run(partial(main, rank=rank, local_rank=local_rank, world_size=world_size))

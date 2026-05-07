@@ -12,6 +12,7 @@
 #SBATCH --cpus-per-gpu=24
 #SBATCH --mem-per-gpu=255000
 #SBATCH --time=7-0:0:0
+#SBATCH --signal=USR2@30
 #SBATCH --output=/checkpoint/rigi/bv2/slurm_out/%u/%j.txt
 #SBATCH --open-mode=append
 set -x
@@ -68,4 +69,4 @@ srun \
   --cpus-per-task="$((SLURM_CPUS_ON_NODE / NTASKS_PER_NODE))" \
   --cpu-bind=cores \
   --mem-bind=local \
-  bash -c 'export CUDA_VISIBLE_DEVICES=$SLURM_LOCALID; bv2/tools/_python "$@" c.jid:="$SLURM_JOB_ID" c.gpus:="$((SLURM_GPUS_PER_NODE * SLURM_JOB_NUM_NODES))" c.gpu:="$SLURM_JOB_PARTITION"' _ "$@"
+  bash -c 'export CUDA_VISIBLE_DEVICES=$SLURM_LOCALID; exec bv2/tools/_python "$@" c.jid:="$SLURM_JOB_ID" c.gpus:="$((SLURM_GPUS_PER_NODE * SLURM_JOB_NUM_NODES))" c.gpu:="$SLURM_JOB_PARTITION"' _ "$@"
