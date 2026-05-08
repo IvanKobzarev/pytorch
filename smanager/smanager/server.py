@@ -683,7 +683,11 @@ def _load_metric_only(args):
 
 def load_launchids(wd_path):
     path = wd_path / "launchids.json"
-    return json.loads(path.read_text()) if path.exists() else {}
+    launchids = json.loads(path.read_text()) if path.exists() else {}
+    for info in launchids.values():
+        if "launchjid" not in info and "jid" in info:
+            info["launchjid"] = info["jid"]
+    return launchids
 
 
 def extract_wid(submit_line):
@@ -822,8 +826,8 @@ def get_xid_info(xid: str):
                 continue  # Keep old (higher or equal jid)
             # Otherwise fall through to replace
 
-        if str(wid) in launchids and launchids[str(wid)].get("jid") and not new_jid:
-            config["jid"] = launchids[str(wid)]["jid"]
+        if str(wid) in launchids and launchids[str(wid)].get("launchjid") and not new_jid:
+            config["jid"] = launchids[str(wid)]["launchjid"]
         if wid in launches:
             config["_launch_line"] = launches[wid]["launch_line"]
             if not config.get("name"):
@@ -836,8 +840,8 @@ def get_xid_info(xid: str):
         if "jid" in config:
             jids.add(config["jid"])
     for info in launchids.values():
-        if info.get("jid"):
-            jids.add(info["jid"])
+        if info.get("launchjid"):
+            jids.add(info["launchjid"])
     jids.update(int(jid) for jid in jobs_by_jid.keys() if jid.isdigit())
 
     t2 = time.time()
@@ -896,7 +900,7 @@ def get_xid_info(xid: str):
         if wid in configs:
             continue
         info = launchids.get(str(wid), {})
-        jid = info.get("jid")
+        jid = info.get("launchjid")
         sacct = saccts.get(jid, {})
         configs[wid] = {"jid": jid, "name": launch["name"], "_launch_line": launch["launch_line"]}
         if sacct.get('state', {}).get('current'):

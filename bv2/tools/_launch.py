@@ -101,7 +101,7 @@ def main(slurm=True):
         _dm1 = "dm1" in os.environ.get("SLURM_CLUSTER_NAME", "")
         defaults = {"cpus-per-gpu": 16 if _dm1 else 24, "mem-per-gpu": 225000 if _dm1 else 255000}
         memcpu = [f"--{k}={v}" for k, v in defaults.items() if not any(k in a for a in slurm_args)]
-        launcher = ["sbatch", *slurm_args, *memcpu, "--job-name", xid, "bv2/tools/launch_fair_srun"]
+        launcher = ["sbatch", *slurm_args, *memcpu, "--job-name", xid]
         train_args = ["-m", module] + (["--config", conf_file] if conf_file else [])
     else:
         launcher = ["bv2/tools/_local_run"]
@@ -149,7 +149,10 @@ def main(slurm=True):
 
             print(f"{log_xwid} | {log_args}", end="" if slurm else "\n\n", flush=True)
 
-            command_words = [*launcher, *train_args, *work_unit_args, f"xid:=\"{xid}\"", f"wid:={wid}", *sws_args]
+            command_words = [*launcher]
+            if slurm:
+                command_words += [f"--comment=xid={xid},wid={wid}", "bv2/tools/launch_fair_srun"]
+            command_words += [*train_args, *work_unit_args, f"xid:=\"{xid}\"", f"wid:={wid}", *sws_args]
             ret = subprocess.run(command_words, capture_output=slurm, text=True, shell=False)
 
             if not slurm:
@@ -161,11 +164,11 @@ def main(slurm=True):
             # Write the exact launch command into a shell file that can be used to re-launch:
             (wd / f"launch_{wid}.sh").write_text(f"#!/bin/bash\ncd {code_dst}\n" + shlex.join(command_words) + "\n", encoding="utf-8")
             (wd / f"launch_{wid}.sh").chmod(0o755)
-            launchids[str(wid)] = {"jid": None, "args": work_unit_args, "overrides": sws_args}
+            launchids[str(wid)] = {"launchjid": None, "args": work_unit_args, "overrides": sws_args}
 
             if ret.returncode == 0:
                 if match := re.search(r"Submitted batch job (\d+)", ret.stdout):
-                    launchids[str(wid)]["jid"] = int(match.group(1))
+                    launchids[str(wid)]["launchjid"] = int(match.group(1))  # For the rare case of job dying before config written.
                     print(f"\r{log_xwid} | job {RESET}{match.group(1)}{LIGHT} | {log_args}", flush=True)
                 else:
                     print("No JobID found in STDOUT??:", flush=True)
