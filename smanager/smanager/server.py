@@ -49,11 +49,13 @@ SCRIPT_DIR = Path(__file__).parent
 
 # Use ThreadPoolExecutor for parallel I/O (NFS can be slow, so use many threads)
 executor = ThreadPoolExecutor(max_workers=64)
+fs_executor = ThreadPoolExecutor(max_workers=64)
 
 
 def shutdown_handler(signum, frame):
     log.info("Received signal %s, shutting down...", signum)
     executor.shutdown(wait=False, cancel_futures=True)
+    fs_executor.shutdown(wait=False, cancel_futures=True)
     os._exit(0)
 
 
@@ -152,6 +154,7 @@ PREFS_DIR = Path(f"/checkpoint/rigi/{getuser()}")  # Set via --prefs-dir flag
 ARCHIVE_DIR = Path("/checkpoint/rigi/bv2/workdirs-archive")  # Set via --archive-dir flag
 NUM_RECENT = 50
 ACTIONS_ENABLED = True  # Set via --no-actions flag
+SLURM_NO_START_TIME = 0xFFFFFFFE
 
 _xid_re = re.compile(r'\d{4,6}_\d{6}')
 
@@ -168,8 +171,8 @@ def extract_xid(name):
 
 
 def get_jobs(group=GROUP, users=USERS):
-    widths = [20, 20, 20, 20, 20, 20, 40, 20, 20, 20, 20, 20, 20]
-    fmt = "JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:40,NumNodes:20,tres-per-node:20,RestartCnt:20,Reason:20,Priority:20,PriorityLong:20"
+    widths = [20, 20, 20, 20, 20, 20, 40, 20, 20, 20, 20, 20, 20, 100]
+    fmt = "JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:40,NumNodes:20,tres-per-node:20,RestartCnt:20,Reason:20,Priority:20,PriorityLong:20,Comment:100"
     lines = run_cmd(f"squeue -A {group}" + (f" -u {users}" if users else "") + f" -O {fmt}")
     offsets = [sum(widths[:i]) for i in range(len(widths))]
     jobs = [[j[offsets[i]:offsets[i]+widths[i]].strip() for i in range(len(widths))] for j in lines if j.strip()]
@@ -204,13 +207,58 @@ def extract_common_name(workdir_names, xid):
     return common.strip(" -_")
 
 
+def dir_names(path):
+    with os.scandir(path) as it:
+        return [e.name for e in it if e.is_dir()]
+
+
+def wid_from_workdir_name(name):
+    if m := re.search(r'-(\d+)$', name):
+        return int(m.group(1))
+    return None
+
+
+def state_from_exit_status(status):
+    if not status:
+        return None
+    status = str(status).lower()
+    if status.endswith(" (wip)"):
+        status = status[:-6]
+    if status == "done":
+        return True
+    if status == "stopped":
+        return "CANCELLED"
+    if status == "preempted":
+        return "PREEMPTED"
+    if status == "error":
+        return False
+    return status.upper()
+
+
+def state_from_sacct(sacct):
+    state = sacct.get('state', {}).get('current', [None])[-1]
+    exit_code = sacct.get('exit_code', {}).get('return_code', {}).get('number', 0)
+    if state == 'CANCELLED':
+        return 'CANCELLED' if exit_code == 0 else 'CANCELLED_FAIL'
+    return state or 'UNKNOWN'
+
+
+def detail_status_from_exit_status(status):
+    state = state_from_exit_status(status)
+    if state is True:
+        return "DONE"
+    if state is False:
+        return "FAILED"
+    return state
+
+
 def _extra_info(xid_info):
     """Get extra info for an XID.
 
     Args:
         xid_info: Tuple of (xid, info) or (xid, info, skip_config_loading)
-            If skip_config_loading is True, skip loading config.json files
-            (faster but won't detect duplicate workdirs for warnings).
+            Config loading is only a fallback/backcompat path for legacy
+            workdirs that cannot be mapped to WIDs from launch metadata/name.
     """
     if len(xid_info) == 3:
         xid, info, skip_config_loading = xid_info
@@ -223,110 +271,142 @@ def _extra_info(xid_info):
         info["user"] = wd_path.owner()
     except:
         info["user"] = "?"
-    # Count total WUs from launch scripts (includes pending jobs without workdirs)
-    info["total_wus"] = len(list(wd_path.glob("launch_*.sh")))
+
+    launchids = load_launchids(wd_path)
+    launch_wids = {normalize_wid(wid) for wid in launchids}
+    # LEGACY/BACKCOMPAT: experiments before launchids.json. Remove after
+    # every experiment has launch metadata.
+    if not launch_wids:
+        launch_wids = {int(m.group(1)) for f in wd_path.glob("launch_*.sh") if (m := re.match(r'launch_(\d+)\.sh', f.name))}
+    info["total_wus"] = len(launch_wids)
+
+    launch_jid_by_wid = {
+        normalize_wid(wid): normalize_jid(meta.get("launchjid"))
+        for wid, meta in launchids.items()
+        if isinstance(meta, dict)
+    }
+    wid_by_launch_jid = {jid: wid for wid, jid in launch_jid_by_wid.items() if jid}
     launchinfo = wd_path / 'launchinfo.txt'
     workdir_names = []
     wid_counts = {}  # wid -> count (for duplicate detection)
+    workdir_by_wid = {}
+    workdir_done_by_wid = {}
+    workdir_jid_by_wid = {}
+    config_by_wid = {}
+    info["wus"] = {}
+    wuwd_names = dir_names(wd_path)
+    done_results = fs_executor.map(_load_done_only, [(wd_path, wuwd_name) for wuwd_name in wuwd_names])
+    for wuwd_name, (_, wid, is_done, mtime) in zip(wuwd_names, done_results):
+        wuwd = wd_path / wuwd_name
+        if wid is None and not skip_config_loading:
+            # LEGACY/BACKCOMPAT: old/manual workdir names may not end in
+            # "-{wid}". Remove after all workdir dirs use the normal
+            # suffix convention or are indexed elsewhere.
+            config = load_config(wuwd)
+            wid = normalize_wid(config.get("wid", wuwd_name))
+            config_by_wid[wid] = config
+            if config.get("jid"):
+                workdir_jid_by_wid[wid] = normalize_jid(config.get("jid"))
+            try:
+                mtime = (wuwd / "DONE").stat().st_mtime
+                is_done = True
+            except FileNotFoundError:
+                pass
+        if wid is None:
+            continue
+        # LEGACY/BACKCOMPAT: DONE predates exit_status. Hot overview uses
+        # it only when exit_status is missing; inactive overview still uses
+        # it as the cheap broad-scan signal until statuses are indexed.
+        if is_done and mtime > info.get("finish_time", 0):
+            info["finish_time"] = mtime
+        workdir_names.append(wuwd_name)
+        workdir_by_wid[wid] = wuwd_name
+        wid_counts[wid] = wid_counts.get(wid, 0) + 1
+        workdir_done_by_wid[wid] = workdir_done_by_wid.get(wid, False) or is_done
+
+    for wid in launch_wids | set(workdir_done_by_wid):
+        info["wus"][str(wid)] = workdir_done_by_wid.get(wid, False)
+
     if launchinfo.is_file():
-        info["wus"] = {}
-        for wuwd in wd_path.iterdir():
-            if wuwd.is_dir():
-                done_path = wuwd / "DONE"
-                try:
-                    mtime = done_path.stat().st_mtime
-                    info["wus"][str(wuwd.name)] = True
-                    if mtime > info.get("finish_time", 0):
-                        info["finish_time"] = mtime
-                except FileNotFoundError:
-                    info["wus"][str(wuwd.name)] = False
-                workdir_names.append(wuwd.name)
-                if not skip_config_loading:
-                    # Load config to get wid for duplicate detection
-                    config = load_config(wuwd)
-                    wid = config.get("wid", wuwd.name)
-                    wid_counts[wid] = wid_counts.get(wid, 0) + 1
         try:
             info["config"] = next(re.finditer(r"bv2/config/(.*?) ", launchinfo.read_text())).group(1)
         except:
             info["config"] = "?"
     else:
-        info["wus"] = {}
         info["config"] = "?"
-        for wuwd in wd_path.iterdir():
-            if wuwd.is_dir():
-                workdir_names.append(wuwd.name)
-                if not skip_config_loading:
-                    # Load config to get wid for duplicate detection
-                    config = load_config(wuwd)
-                    wid = config.get("wid", wuwd.name)
-                    wid_counts[wid] = wid_counts.get(wid, 0) + 1
 
-    # Calculate Done-ish count if jobs are available
-    # Note: A job might write DONE but get stuck running in Slurm without quitting.
-    # Without explicit xid-jid mapping, we must load DONE workdir configs to get their JID and compare to running jobs.
+    # Calculate Done-ish count if jobs are available.
+    # A job might write DONE but get stuck running in Slurm without quitting.
     info["done_ish_count"] = 0
     info["actual_done_count"] = 0
-    info["finished_states"] = {}  # Track finished job states from sacct (CANCELLED, FAILED, etc.)
 
-    if "jobs" in info and info.get("wus"):
-        jobs_by_jid = {job.get("JOBID", ""): job for job in info["jobs"] if job.get("JOBID")}
-        done_wuwd_names = [name for name, is_done in info["wus"].items() if is_done]
-        not_done_wuwd_names = [name for name, is_done in info["wus"].items() if not is_done]
+    if "jobs" in info:
+        active_by_wid = {}
+        active_jid_by_wid = {}
+        for job in info["jobs"]:
+            wid = extract_wid(job.get("COMMENT", ""))
+            jid = normalize_jid(job.get("JOBID"))
+            if wid is None and jid:
+                # LEGACY/BACKCOMPAT: older Slurm jobs may not have xid/wid
+                # comments. Remove after all live jobs have comment metadata.
+                wid = wid_by_launch_jid.get(jid)
+            if wid is not None and jid:
+                active_by_wid[wid] = job.get("STATE", "UNKNOWN")
+                active_jid_by_wid[wid] = jid
 
-        if done_wuwd_names:
-            try:
-                config_args = [(wd_path, wuwd_name) for wuwd_name in done_wuwd_names]
-                config_results = list(executor.map(_load_config_only, config_args))
+        finished_by_wid = {}
+        if not skip_config_loading:
+            missing_config_wids = [
+                wid for wid in set(workdir_done_by_wid) - set(active_by_wid)
+                if wid in workdir_by_wid and wid not in config_by_wid
+            ]
+            config_results = fs_executor.map(
+                _load_config_only,
+                [(wd_path, workdir_by_wid[wid]) for wid in missing_config_wids],
+            )
+            for wid, (_, config) in zip(missing_config_wids, config_results):
+                config_by_wid[wid] = config
 
-                done_ish = 0
-                actual_done = 0
+            sacct_jids = {}
+            for wid in (set(workdir_done_by_wid) - set(active_by_wid)):
+                wuwd_name = workdir_by_wid.get(wid)
+                if not wuwd_name:
+                    continue
+                config = config_by_wid.get(wid)
+                state = state_from_exit_status(config.get("exit_status"))
+                if state is not None:
+                    finished_by_wid[wid] = state
+                elif workdir_done_by_wid.get(wid):
+                    # LEGACY/BACKCOMPAT: DONE predates exit_status. Remove
+                    # after exit_status has been backfilled into existing
+                    # configs.
+                    finished_by_wid[wid] = True
+                elif jid := normalize_jid(config.get("jid")):
+                    # LEGACY/BACKCOMPAT: exit_status is the intended source of
+                    # terminal state. Remove sacct fallback after exit_status
+                    # has been backfilled into existing configs.
+                    sacct_jids[jid] = wid
+            for jid, sacct in load_sacct_many(sacct_jids).items():
+                finished_by_wid[sacct_jids[jid]] = state_from_sacct(sacct)
+        if finished_by_wid:
+            info["finished_states"] = dict(Counter(finished_by_wid.values()))
 
-                for wuwd_name, config in config_results:
-                    jid = config.get("jid")
-                    if jid and str(jid) in jobs_by_jid:
-                        slurm_state = jobs_by_jid[str(jid)].get("STATE", "")
-                        if slurm_state == "RUNNING":
-                            done_ish += 1
-                        else:
-                            actual_done += 1
+        if active_by_wid or workdir_done_by_wid or launch_wids:
+            states = Counter()
+            for wid in launch_wids | set(workdir_done_by_wid) | set(active_by_wid):
+                if wid in active_by_wid:
+                    if (workdir_done_by_wid.get(wid) and active_by_wid[wid] == "RUNNING"
+                            and active_jid_by_wid.get(wid) == (workdir_jid_by_wid.get(wid) or launch_jid_by_wid.get(wid))):
+                        states["DONE_ISH"] += 1
                     else:
-                        actual_done += 1
-
-                info["done_ish_count"] = done_ish
-                info["actual_done_count"] = actual_done
-            except Exception as e:
-                log.warning("Failed to calculate done_ish for %s: %s", xid, e)
-
-        # Query sacct for not-done jobs that aren't in squeue to get their actual finished state
-        if not_done_wuwd_names:
-            try:
-                config_args = [(wd_path, wuwd_name) for wuwd_name in not_done_wuwd_names]
-                config_results = list(executor.map(_load_config_only, config_args))
-                # Get JIDs for jobs not in squeue
-                jids_to_check = []
-                for wuwd_name, config in config_results:
-                    jid = config.get("jid")
-                    if jid and str(jid) not in jobs_by_jid:
-                        jids_to_check.append(jid)
-                # Query sacct for these JIDs
-                if jids_to_check:
-                    sacct_results = list(executor.map(load_sacct, jids_to_check))
-                    finished_states = {}
-                    for sacct in sacct_results:
-                        if not sacct:
-                            continue
-                        state = sacct.get('state', {}).get('current', [None])[-1]
-                        exit_code = sacct.get('exit_code', {}).get('return_code', {}).get('number', 0)
-                        # Map to display state
-                        if state == 'CANCELLED':
-                            display_state = 'CANCELLED' if exit_code == 0 else 'CANCELLED_FAIL'
-                        else:
-                            display_state = state or 'UNKNOWN'
-                        finished_states[display_state] = finished_states.get(display_state, 0) + 1
-                    info["finished_states"] = finished_states
-            except Exception as e:
-                log.warning("Failed to get finished states for %s: %s", xid, e)
+                        states[active_by_wid[wid]] += 1
+                elif wid in finished_by_wid:
+                    states[finished_by_wid[wid]] += 1
+                elif wid in workdir_done_by_wid:
+                    states[workdir_done_by_wid[wid]] += 1
+                else:
+                    states["UNKNOWN"] += 1
+            info["effective_states"] = dict(states)
 
     info["name"] = extract_common_name(workdir_names, xid)
     # Count WUs with duplicate workdirs (warning_count)
@@ -427,29 +507,36 @@ def get_overview():
         return {"hot": {}}
 
     # Build jobs lookup and track misc (non-XID) jobs
-    jobs_by_name = {}
+    jobs_by_xid = {}
     misc_jobs = []
     for row in job_rows:
         job = dict(zip(headers, row))
         name = job.get("NAME", "")
-        if extract_xid(name):
-            if name not in jobs_by_name:
-                jobs_by_name[name] = []
-            jobs_by_name[name].append(job)
+        if xid := extract_xid(name):
+            if xid not in jobs_by_xid:
+                jobs_by_xid[xid] = []
+            jobs_by_xid[xid].append(job)
         else:
             misc_jobs.append(job)
 
-    # Only get workdirs that have active jobs
+    # Only resolve workdirs for XIDs that have active jobs. New launchers use
+    # /workdirs/{xid}, so this avoids scanning the whole NFS directory.
     t2 = time.time()
-    active_xids = set(jobs_by_name.keys())
-    workdirs = [d.name for d in BASEDIR.iterdir() if d.is_dir() and extract_xid(d.name) in active_xids]
-    wd_by_xid = {extract_xid(wd): wd for wd in workdirs}
-    log.info("  - iterdir took %.2fs (%d workdirs matched)", time.time() - t2, len(workdirs))
+    active_xids = set(jobs_by_xid.keys())
+    wd_by_xid = {xid: xid for xid in active_xids if (BASEDIR / xid).is_dir()}
+    missing_xids = active_xids - set(wd_by_xid)
+    if missing_xids:
+        # LEGACY/BACKCOMPAT: older/renamed workdir folders may contain the XID
+        # without being exactly /workdirs/{xid}. Remove after backfill.
+        for d in BASEDIR.iterdir():
+            if d.is_dir() and (xid := extract_xid(d.name)) in missing_xids:
+                wd_by_xid[xid] = d.name
+    log.info("  - workdir lookup took %.2fs (%d workdirs matched)", time.time() - t2, len(wd_by_xid))
 
     # Build hot xids
     hot_xids = {}
     for xid, wd in wd_by_xid.items():
-        xid_jobs = jobs_by_name.get(xid, [])
+        xid_jobs = jobs_by_xid.get(xid, [])
         states = Counter(j.get("STATE", "") for j in xid_jobs)
         if states:
             hot_xids[xid] = {"states": dict(states), "wd": wd, "jobs": xid_jobs}
@@ -521,7 +608,7 @@ def get_overview_inactive():
     log.info("GET /api/overview/inactive - fetching...")
 
     # Read all workdirs (client will filter out hot XIDs)
-    workdirs = [d.name for d in BASEDIR.iterdir() if d.is_dir()]
+    workdirs = dir_names(BASEDIR)
     wd_by_xid = {xid: wd for wd in workdirs if (xid := extract_xid(wd))}
 
     # Build list of all XIDs (client filters out hot ones)
@@ -534,26 +621,11 @@ def get_overview_inactive():
     cold_xids = {xid: all_xids[xid] for xid in all_list[:NUM_RECENT]}
     frozen_xids = {xid: all_xids[xid] for xid in all_list[NUM_RECENT:]}
 
-    # Add extra info with threading (skip config loading for faster response)
+    # Add extra info with threading. Config reads are disabled here because they
+    # are only fallback/backcompat for legacy workdir names.
     cold_items = [(xid, info, True) for xid, info in cold_xids.items()]
     cold_results = list(executor.map(_extra_info, cold_items))
     cold_xids = dict(cold_results)
-
-    # Query sacct for cold experiments without finish_time
-    def _get_sacct_finish(args):
-        xid, info = args
-        if info.get("finish_time"):
-            return xid, info
-        user = info.get("user", "")
-        if not user or user == "?":
-            return xid, info
-        sacct_time = get_sacct_end_time(xid, user)
-        if sacct_time:
-            info["finish_time"] = sacct_time
-        return xid, info
-
-    cold_with_sacct = list(executor.map(_get_sacct_finish, cold_xids.items()))
-    cold_xids = dict(cold_with_sacct)
 
     frozen_items = [(xid, info, True) for xid, info in frozen_xids.items()]
     frozen_results = list(executor.map(_extra_info, frozen_items))
@@ -676,6 +748,17 @@ def _load_config_only(args):
     return wuwd_name, load_config(wd_path / wuwd_name)
 
 
+def _load_done_only(args):
+    wd_path, wuwd_name = args
+    wid = wid_from_workdir_name(wuwd_name)
+    if wid is None:
+        return wuwd_name, None, False, None
+    try:
+        return wuwd_name, wid, True, (wd_path / wuwd_name / "DONE").stat().st_mtime
+    except FileNotFoundError:
+        return wuwd_name, wid, False, None
+
+
 def _load_metric_only(args):
     wd_path, wuwd_name, metric_name = args
     return wuwd_name, last_metric(wd_path / wuwd_name, metric_name)
@@ -693,7 +776,7 @@ def load_launchids(wd_path):
 def extract_wid(submit_line):
     if not submit_line:
         return None
-    if m := re.search(r'wid:=(\d+)', submit_line):
+    if m := re.search(r'\bwid:?=(\d+)', submit_line):
         return int(m.group(1))
     if m := re.search(r'launch_(\d+)\.sh', submit_line):
         return int(m.group(1))
@@ -707,6 +790,11 @@ def normalize_jid(jid):
         return jid
     jid = str(jid).split('.', 1)[0]
     return int(jid) if jid.isdigit() else None
+
+
+def normalize_wid(wid):
+    normalized = normalize_jid(wid)
+    return normalized if normalized is not None else wid
 
 
 def extract_launch_info(launch_file):
@@ -742,12 +830,46 @@ def extract_exit_code(sacct):
     return ret.get("number")
 
 
+def hms(s):
+    if not s:
+        return "n/a"
+    m, s = divmod(s, 60)
+    h, m = divmod(m, 60)
+    d, h = divmod(h, 24)
+    parts = []
+    if d:
+        parts.append(f"{d}d")
+        parts.append(f"{h:02d}h{m:02d}m{s:02d}s")
+    elif h:
+        parts.append(f"{h}h{m:02d}m{s:02d}s")
+    elif m:
+        parts.append(f"{m}m{s:02d}s")
+    else:
+        parts.append(f"{s}s")
+    return "".join(parts)
+
+
+def format_sacct(sacct):
+    time_info = sacct.get("time", {})
+    start = time_info.get("start", 0)
+    eligible = time_info.get("eligible", 0)
+    state = sacct.get("state", {}).get("current", [])
+    return {
+        "restarts": sacct.get("restart_cnt", 0),
+        "exit_code": extract_exit_code(sacct),
+        "status": state[-1] if state else None,
+        "qwait": "never" if start in [0, SLURM_NO_START_TIME] else hms(start - eligible),
+        "runtime": hms(time_info.get("elapsed", 0)),
+    }
+
+
 def _find_xid_path(xid):
     """Find the workdir path for an XID."""
     wd_path = BASEDIR / xid
     if wd_path.exists():
         return wd_path
-    # Slow path: iterate BASEDIR to find partial match
+    # LEGACY/BACKCOMPAT: old/renamed experiments may not live exactly at
+    # /workdirs/{xid}. Remove after all experiments are backfilled there.
     t0 = time.time()
     for d in BASEDIR.iterdir():
         if d.is_dir() and xid in d.name:
@@ -755,6 +877,162 @@ def _find_xid_path(xid):
             return d
     log.info("  - _find_xid_path fallback took %.2fs (not found)", time.time() - t0)
     return None
+
+
+def _load_current_xid_jobs(xid):
+    xid_widths = [20, 20, 20, 20, 20, 20, 40, 20, 20, 20, 20, 100]
+    xid_fmt = "JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:40,NumNodes:20,GRES:20,RestartCnt:20,Reason:20,Comment:100"
+    lines = run_cmd(f"squeue -n {xid} -O {xid_fmt}")
+    offsets = [sum(xid_widths[:i]) for i in range(len(xid_widths))]
+    rows = [[j[offsets[i]:offsets[i]+xid_widths[i]].strip() for i in range(len(xid_widths))] for j in lines if j.strip()]
+    if len(rows) < 2:
+        return {}
+    headers, job_rows = rows[0], rows[1:]
+    return {row[0]: dict(zip(headers, row)) for row in job_rows}
+
+
+def _jobs_by_wid(jobs_by_jid, launchids):
+    launch_wid_by_jid = {
+        normalize_jid(meta.get("launchjid")): normalize_wid(wid)
+        for wid, meta in launchids.items()
+        if isinstance(meta, dict) and normalize_jid(meta.get("launchjid"))
+    }
+    jobs = {}
+    unknown = []
+    for jid_str, job in jobs_by_jid.items():
+        jid = normalize_jid(jid_str)
+        wid = extract_wid(job.get("COMMENT", ""))
+        if wid is None and jid:
+            # LEGACY/BACKCOMPAT: older Slurm jobs may not have xid/wid
+            # comments. Remove after all live jobs have comment metadata.
+            wid = launch_wid_by_jid.get(jid)
+        if wid is None:
+            # LEGACY/BACKCOMPAT: keep no-comment jobs visible rather than
+            # dropping them. Remove after all live jobs have comment metadata.
+            unknown.append(job)
+            continue
+        old = jobs.get(wid)
+        if old is None or (jid or 0) > (normalize_jid(old.get("JOBID")) or 0):
+            jobs[wid] = job
+    for i, job in enumerate(unknown):
+        jobs[f"??{i}"] = job
+    return jobs
+
+
+def _workdirs_by_suffix(wd_path):
+    workdirs = {}
+    warnings = {}
+    for wuwd_name in dir_names(wd_path):
+        wid = wid_from_workdir_name(wuwd_name)
+        if wid is None:
+            continue
+        if wid in workdirs:
+            warnings.setdefault(wid, []).append(f"Duplicate workdir detected ({workdirs[wid]}, {wuwd_name})")
+            try:
+                if (wd_path / wuwd_name).stat().st_mtime <= (wd_path / workdirs[wid]).stat().st_mtime:
+                    continue
+            except OSError:
+                continue
+        workdirs[wid] = wuwd_name
+    return workdirs, warnings
+
+
+def _launch_args(meta):
+    if not isinstance(meta, dict):
+        return []
+    return [*meta.get("overrides", []), *meta.get("args", [])]
+
+
+def _nsteps_from_args(args):
+    for arg in reversed(args):
+        if not re.search(r'(^|[.])nsteps:?=', arg):
+            continue
+        value = re.split(r':?=', arg, 1)[1].strip('"\'')
+        return int(value) if value.isdigit() else None
+    return None
+
+
+def _get_xid_info_from_launchids(xid, wd_path, launchids, t0):
+    t1 = time.time()
+    jobs_by_jid = _load_current_xid_jobs(xid)
+    log.info("  - squeue took %.2fs", time.time() - t1)
+
+    t2 = time.time()
+    workdirs, warnings = _workdirs_by_suffix(wd_path)
+    log.info("  - mapped %d workdirs by suffix in %.2fs", len(workdirs), time.time() - t2)
+
+    jobs_by_wid = _jobs_by_wid(jobs_by_jid, launchids)
+    launch_wids = {normalize_wid(wid) for wid in launchids}
+    all_wids = launch_wids | set(jobs_by_wid)
+
+    t3 = time.time()
+    inactive_wids = [wid for wid in all_wids - set(jobs_by_wid) if wid in workdirs]
+    config_results = fs_executor.map(_load_config_only, [(wd_path, workdirs[wid]) for wid in inactive_wids])
+    configs = {wid: config for wid, (_, config) in zip(inactive_wids, config_results)}
+    log.info("  - loaded %d inactive configs in %.2fs", len(configs), time.time() - t3)
+
+    wus = []
+    for wid in sorted(all_wids, key=lambda x: (0, int(x)) if str(x).isdigit() else (1, str(x))):
+        meta = launchids.get(str(wid), {})
+        args = _launch_args(meta)
+        job = jobs_by_wid.get(wid)
+        wuwd_name = workdirs.get(wid)
+        config = configs.get(wid, {})
+
+        if job:
+            jid = normalize_jid(job.get("JOBID"))
+            status = job.get("STATE", "UNKNOWN")
+            reason = job.get("REASON", "")
+            restarts = int(job.get("RESTART_COUNT", 0) or 0)
+            runtime = job.get("TIME") or job.get("TIME_USED") or "n/a"
+        else:
+            jid = normalize_jid(config.get("jid")) or normalize_jid(meta.get("launchjid") if isinstance(meta, dict) else None)
+            status = detail_status_from_exit_status(config.get("exit_status"))
+            if status is None:
+                if wuwd_name and (wd_path / wuwd_name / "DONE").is_file():
+                    # LEGACY/BACKCOMPAT: DONE predates exit_status. Remove
+                    # after exit_status has been backfilled into existing
+                    # configs.
+                    status = "DONE"
+                else:
+                    status = "UNKNOWN"
+            reason = ""
+            restarts = 0
+            runtime = "n/a"
+
+        wus.append({
+            "wid": wid,
+            "jid": jid,
+            "restarts": restarts,
+            "exit_code": None,
+            "status": status,
+            "reason": reason,
+            "nsteps": config.get("nsteps") or _nsteps_from_args(args),
+            "config_args": args,
+            "name": config.get("name", meta.get("name", "") if isinstance(meta, dict) else ""),
+            "qwait": "n/a",
+            "runtime": runtime,
+            "workdir": f"{wd_path.name}/{wuwd_name}" if wuwd_name else "",
+            "launch_script": str(wd_path / f"launch_{wid}.sh"),
+            "warnings": warnings.get(wid, []),
+        })
+
+    note_file = wd_path / "NOTE.md"
+    result = {
+        "xid": xid,
+        "note": note_file.read_text().strip() if note_file.exists() else "",
+        "wus": wus,
+        "launch_command": (wd_path / "launchinfo.txt").read_text() if (wd_path / "launchinfo.txt").exists() else "",
+    }
+    log.info("GET /api/xid/%s - done: %d launch-indexed work units (%.2fs)", xid, len(wus), time.time() - t0)
+    return result
+
+
+@app.get("/api/sacct")
+def get_sacct_info(jids=""):
+    """Get accounting info for known job IDs."""
+    saccts = load_sacct_many(jid.strip() for jid in jids.split(","))
+    return {str(jid): format_sacct(sacct) for jid, sacct in saccts.items()}
 
 
 @app.get("/api/xid/{xid}")
@@ -768,10 +1046,17 @@ def get_xid_info(xid: str):
         raise HTTPException(status_code=404, detail=f"XID {xid} not found")
     log.info("  - found path in %.2fs", time.time() - t0)
 
+    launchids = load_launchids(wd_path)
+    if launchids:
+        return _get_xid_info_from_launchids(xid, wd_path, launchids, t0)
+
+    # LEGACY/BACKCOMPAT: full reconstruction for experiments without
+    # launchids.json. Remove after launch metadata is backfilled.
+
     # Get current jobs for this xid
     t1 = time.time()
-    xid_widths = [20, 20, 20, 20, 20, 20, 40, 20, 20, 20, 20]
-    xid_fmt = "JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:40,NumNodes:20,GRES:20,RestartCnt:20,Reason:20"
+    xid_widths = [20, 20, 20, 20, 20, 20, 40, 20, 20, 20, 20, 100]
+    xid_fmt = "JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:40,NumNodes:20,GRES:20,RestartCnt:20,Reason:20,Comment:100"
     lines = run_cmd(f"squeue -n {xid} -O {xid_fmt}")
     log.info("  - squeue took %.2fs", time.time() - t1)
     xid_offsets = [sum(xid_widths[:i]) for i in range(len(xid_widths))]
@@ -784,15 +1069,14 @@ def get_xid_info(xid: str):
 
     # Get workdirs
     t2 = time.time()
-    workdirs = [d.name for d in wd_path.iterdir() if d.is_dir()]
+    workdirs = dir_names(wd_path)
     log.info("  - found %d workdirs (iterdir took %.2fs)", len(workdirs), time.time() - t2)
 
     # Load configs in parallel
     t1 = time.time()
-    config_results = list(executor.map(_load_config_only, [(wd_path, wd) for wd in workdirs]))
+    config_results = list(fs_executor.map(_load_config_only, [(wd_path, wd) for wd in workdirs]))
     log.info("  - loaded configs in %.2fs", time.time() - t1)
 
-    launchids = load_launchids(wd_path)
     launches = {}
     for launch_file in sorted(wd_path.glob("launch_*.sh")):
         if not (lm := re.match(r'launch_(\d+)\.sh', launch_file.name)):
@@ -802,7 +1086,7 @@ def get_xid_info(xid: str):
     configs = {}
     warnings = {}  # wid -> list of warning strings
     for wuwd_name, config in config_results:
-        wid = config.get("wid", wuwd_name)
+        wid = normalize_wid(config.get("wid", wuwd_name))
         new_jid = config.get("jid")
         config["_wuwd_name"] = wuwd_name  # Store actual workdir name for DONE check
 
@@ -826,8 +1110,6 @@ def get_xid_info(xid: str):
                 continue  # Keep old (higher or equal jid)
             # Otherwise fall through to replace
 
-        if str(wid) in launchids and launchids[str(wid)].get("launchjid") and not new_jid:
-            config["jid"] = launchids[str(wid)]["launchjid"]
         if wid in launches:
             config["_launch_line"] = launches[wid]["launch_line"]
             if not config.get("name"):
@@ -839,9 +1121,6 @@ def get_xid_info(xid: str):
     for wid, config in configs.items():
         if "jid" in config:
             jids.add(config["jid"])
-    for info in launchids.values():
-        if info.get("launchjid"):
-            jids.add(info["launchjid"])
     jids.update(int(jid) for jid in jobs_by_jid.keys() if jid.isdigit())
 
     t2 = time.time()
@@ -876,8 +1155,12 @@ def get_xid_info(xid: str):
         if jid_str in existing_jids:
             continue  # Already have this job from workdirs
         jid = int(jid_str) if jid_str.isdigit() else None
-        # Try to extract wid from sacct submit_line
-        wid = extract_wid(saccts[jid].get("submit_line", "")) if jid and jid in saccts else None
+        # LEGACY/BACKCOMPAT: old current jobs may be missing Slurm comments,
+        # so sacct.submit_line is used to recover WID. Remove after comments
+        # and launch metadata are backfilled.
+        wid = extract_wid(job_info.get("COMMENT", ""))
+        if wid is None and jid and jid in saccts:
+            wid = extract_wid(saccts[jid].get("submit_line", ""))
         # If we couldn't extract wid, use "??" placeholder
         if wid is None:
             wid = f"??{pending_unknown_idx}"
@@ -895,16 +1178,20 @@ def get_xid_info(xid: str):
             configs[wid] = {"jid": jid, "name": "", "pending_only": True}
             status[wid] = job_info.get("STATE", "PENDING")
 
+    # LEGACY/BACKCOMPAT: launch-only WUs for experiments without launchids in
+    # the fast path. Remove with the full reconstruction path above.
+    saccts.update(load_sacct_many(
+        normalize_jid(launchids.get(str(wid), {}).get("launchjid")) for wid in launches if wid not in configs
+    ))
+
     # Add WUs from launch files that aren't represented yet
     for wid, launch in sorted(launches.items()):
         if wid in configs:
             continue
-        info = launchids.get(str(wid), {})
-        jid = info.get("launchjid")
-        sacct = saccts.get(jid, {})
+        jid = normalize_jid(launchids.get(str(wid), {}).get("launchjid"))
         configs[wid] = {"jid": jid, "name": launch["name"], "_launch_line": launch["launch_line"]}
-        if sacct.get('state', {}).get('current'):
-            status[wid] = sacct['state']['current'][-1]
+        if jid and jid in saccts and saccts[jid].get('state', {}).get('current'):
+            status[wid] = saccts[jid]['state']['current'][-1]
         else:
             status[wid] = "UNKNOWN"
 
@@ -921,31 +1208,12 @@ def get_xid_info(xid: str):
         if not sws_args and str(wid) in launchids:
             sws_args = [*launchids[str(wid)].get("overrides", []), *launchids[str(wid)].get("args", [])]
 
-        # Time formatting
-        def hms(s):
-            if not s:
-                return "n/a"
-            m, s = divmod(s, 60)
-            h, m = divmod(m, 60)
-            d, h = divmod(h, 24)
-            parts = []
-            if d:
-                parts.append(f"{d}d")
-                parts.append(f"{h:02d}h{m:02d}m{s:02d}s")
-            elif h:
-                parts.append(f"{h}h{m:02d}m{s:02d}s")
-            elif m:
-                parts.append(f"{m}m{s:02d}s")
-            else:
-                parts.append(f"{s}s")
-            return "".join(parts)
-
         time_info = sacct.get("time", {})
         elapsed = time_info.get("elapsed", 0)
         eligible = time_info.get("eligible", 0)
         start = time_info.get("start", 0)
 
-        if start in [0, 4294967294]:
+        if start in [0, SLURM_NO_START_TIME]:
             qwait = "never"
         else:
             qwait = hms(start - eligible)
@@ -990,18 +1258,38 @@ def get_xid_metrics(xid: str, metric: str = "train/loss"):
     if not wd_path:
         raise HTTPException(status_code=404, detail=f"XID {xid} not found")
 
+    launchids = load_launchids(wd_path)
+    if launchids:
+        workdirs, _ = _workdirs_by_suffix(wd_path)
+        metric_results = list(fs_executor.map(_load_metric_only, [(wd_path, wd, metric) for wd in workdirs.values()]))
+        config_results = list(fs_executor.map(_load_config_only, [(wd_path, wd) for wd in workdirs.values()]))
+        metric_by_wuwd = {wuwd_name: metrics for wuwd_name, metrics in metric_results}
+        config_by_wuwd = {wuwd_name: config for wuwd_name, config in config_results}
+        result = {}
+        for wid, wuwd_name in workdirs.items():
+            result[wid] = metric_by_wuwd.get(wuwd_name, {})
+            nsteps = config_by_wuwd.get(wuwd_name, {}).get("nsteps") or _nsteps_from_args(_launch_args(launchids.get(str(wid), {})))
+            if nsteps:
+                result[wid]["_nsteps"] = nsteps
+        log.info("GET /api/xid/%s/metrics - done: %d launch-indexed WUs (%.2fs)", xid, len(result), time.time() - t0)
+        return result
+
+    # LEGACY/BACKCOMPAT: config scan for experiments without launchids.json.
+    # Remove after launch metadata is backfilled.
+
     # Get workdirs
-    workdirs = [d.name for d in wd_path.iterdir() if d.is_dir()]
+    workdirs = dir_names(wd_path)
 
     # Load configs and metrics in parallel
-    config_results = list(executor.map(_load_config_only, [(wd_path, wd) for wd in workdirs]))
-    metric_results = list(executor.map(_load_metric_only, [(wd_path, wd, metric) for wd in workdirs]))
+    config_results = list(fs_executor.map(_load_config_only, [(wd_path, wd) for wd in workdirs]))
+    metric_results = list(fs_executor.map(_load_metric_only, [(wd_path, wd, metric) for wd in workdirs]))
 
     # Build wid -> metrics mapping (same duplicate resolution as main endpoint)
     metric_by_wuwd = {wuwd_name: metrics for wuwd_name, metrics in metric_results}
+    config_by_wuwd = {wuwd_name: config for wuwd_name, config in config_results}
     wid_to_wuwd = {}
     for wuwd_name, config in config_results:
-        wid = config.get("wid", wuwd_name)
+        wid = normalize_wid(config.get("wid", wuwd_name))
         new_jid = config.get("jid") or 0
         if wid in wid_to_wuwd:
             old_jid = wid_to_wuwd[wid][1]
@@ -1013,6 +1301,8 @@ def get_xid_metrics(xid: str, metric: str = "train/loss"):
     result = {}
     for wid, (wuwd_name, _) in wid_to_wuwd.items():
         result[wid] = metric_by_wuwd.get(wuwd_name, {})
+        if nsteps := config_by_wuwd.get(wuwd_name, {}).get("nsteps"):
+            result[wid]["_nsteps"] = nsteps
 
     log.info("GET /api/xid/%s/metrics - done: %d WUs (%.2fs)", xid, len(result), time.time() - t0)
     return result
@@ -1023,7 +1313,8 @@ def get_wu_config(xid: str, wid: int):
     """Get full config.json for a specific work unit."""
     wd_path = BASEDIR / xid
     if not wd_path.exists():
-        # Try to find it
+        # LEGACY/BACKCOMPAT: old/renamed experiments may not live exactly at
+        # /workdirs/{xid}. Remove after all experiments are backfilled there.
         for d in BASEDIR.iterdir():
             if d.is_dir() and xid in d.name:
                 wd_path = d
@@ -1031,7 +1322,20 @@ def get_wu_config(xid: str, wid: int):
         else:
             raise HTTPException(status_code=404, detail=f"XID {xid} not found")
 
-    # Find the work unit directory by checking each config's wid field
+    wid_str = str(wid)
+    for d in wd_path.iterdir():
+        if not d.is_dir() or not d.name.endswith(f"-{wid_str}"):
+            continue
+        config_path = d / "config.json"
+        if config_path.exists():
+            return Response(
+                content=json.dumps(json.loads(config_path.read_text()), indent=2),
+                media_type="application/json",
+            )
+
+    # LEGACY/BACKCOMPAT: old/manual workdir names may not end in "-{wid}".
+    # Remove after all workdir dirs use the normal suffix convention or are
+    # indexed elsewhere.
     for d in wd_path.iterdir():
         if not d.is_dir():
             continue
@@ -1324,14 +1628,21 @@ def _resolve_wu_dir(xid: str, wid) -> str:
 
     Returns the directory name (not full path) or empty string for XID root.
     Priority:
-    1. Folder with exact work-unit name (from config.json wid match)
-    2. Folder ending in '-{wid}'
+    1. Folder ending in '-{wid}'
+    2. Folder with exact work-unit name (from config.json wid match)
     3. Fallback to XID root
     """
     wd_path = _get_workdir(xid)
     wid_str = str(wid)
 
-    # First, check all subdirs for config.json with matching wid
+    # First, use the normal launcher/train naming convention.
+    for subdir in wd_path.iterdir():
+        if subdir.is_dir() and subdir.name.endswith(f"-{wid_str}"):
+            return subdir.name
+
+    # LEGACY/BACKCOMPAT: old/manual workdir names may not end in "-{wid}".
+    # Remove after all workdir dirs use the normal suffix convention or are
+    # indexed elsewhere.
     for subdir in wd_path.iterdir():
         if not subdir.is_dir():
             continue
@@ -1343,11 +1654,6 @@ def _resolve_wu_dir(xid: str, wid) -> str:
                     return subdir.name
             except:
                 pass
-
-    # Second, look for folder ending in '-{wid}'
-    for subdir in wd_path.iterdir():
-        if subdir.is_dir() and subdir.name.endswith(f"-{wid_str}"):
-            return subdir.name
 
     # Fallback to XID root
     return ""

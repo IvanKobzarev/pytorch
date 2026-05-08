@@ -198,6 +198,7 @@
         .bg-run { background: #3b82f6; }
         .bg-pend { background: #eab308; }
         .bg-hold { background: #f97316; }
+        .bg-unknown { background: #9ca3af; }
         .server-badge {
             display: inline-block;
             padding: 1px 5px;
@@ -1076,6 +1077,7 @@
                 { key: 'RUNNING', cls: 'bg-run', label: 'Running' },
                 { key: 'PENDING', cls: 'bg-pend', label: 'Pending' },
                 { key: 'REQUEUE_HOLD', cls: 'bg-hold', label: 'Hold' },
+                { key: 'UNKNOWN', cls: 'bg-unknown', label: 'Unknown' },
             ];
 
             // Calculate total
@@ -1137,52 +1139,58 @@
                 const serverName = servers[sIdx].name;
 
                 for (const [xid, info] of Object.entries(data.hot || {})) {
-                    // Compute states: use DONE files for finished, Slurm for in-progress
+                    // New servers send launchids+squeue-derived effective states.
+                    // LEGACY/BACKCOMPAT: keep the old client-side reconstruction for older servers.
+                    let states = info.effective_states;
                     const wus = info.wus || {};
                     const slurmStates = info.states || {};
                     const finishedStates = info.finished_states || {};
+                    const wuCount = info.total_wus || Object.keys(wus).length;
 
-                    // Count WUs by DONE file status
-                    const nDone = Object.values(wus).filter(v => v === true).length;
-                    const nNotDone = Object.values(wus).filter(v => v === false).length;
+                    if (!states) {
+                        // Count WUs by DONE file status
+                        const nDone = Object.values(wus).filter(v => v === true).length;
+                        const nNotDone = Object.values(wus).filter(v => v === false).length;
 
-                    // In-progress states from Slurm
-                    const nRunning = slurmStates.RUNNING || 0;
-                    const nPending = slurmStates.PENDING || 0;
-                    const nHold = slurmStates.REQUEUE_HOLD || 0;
-                    const nCompleting = slurmStates.COMPLETING || 0;
-                    const nInProgress = nRunning + nPending + nHold + nCompleting;
+                        // In-progress states from Slurm
+                        const nRunning = slurmStates.RUNNING || 0;
+                        const nPending = slurmStates.PENDING || 0;
+                        const nHold = slurmStates.REQUEUE_HOLD || 0;
+                        const nCompleting = slurmStates.COMPLETING || 0;
+                        const nInProgress = nRunning + nPending + nHold + nCompleting;
 
-                    // Done-ish = DONE file exists but Slurm still shows running
-                    // This happens when job is finishing up but Slurm hasn't caught up
-                    const nDoneIsh = info.done_ish_count || 0;
-                    const nActualDone = info.actual_done_count || 0;
-                    const nActualRunning = nRunning - nDoneIsh;
+                        // Done-ish = DONE file exists but Slurm still shows running
+                        // This happens when job is finishing up but Slurm hasn't caught up
+                        const nDoneIsh = info.done_ish_count || 0;
+                        const nActualDone = info.actual_done_count || 0;
+                        const nActualRunning = nRunning - nDoneIsh;
 
-                    // Count finished states from sacct (CANCELLED, CANCELLED_FAIL, FAILED, etc.)
-                    const nFinished = Object.values(finishedStates).reduce((a, b) => a + b, 0);
-                    // Failed = remaining WUs without DONE file that aren't in-progress or finished
-                    const nFail = Math.max(0, nNotDone - nInProgress - nFinished);
+                        // Legacy payloads may include finished states from older server-side lookups.
+                        const nFinished = Object.values(finishedStates).reduce((a, b) => a + b, 0);
+                        // Failed = remaining WUs without DONE file that aren't in-progress or finished
+                        const nFail = Math.max(0, nNotDone - nInProgress - nFinished);
+                        const nUnknown = Math.max(0, wuCount - nDone - nNotDone - nInProgress);
 
-                    // Build states object for display
-                    const states = {};
-                    if (nFail > 0) states[false] = nFail;
-                    // Add finished states from sacct (CANCELLED, CANCELLED_FAIL, FAILED, TIMEOUT, etc.)
-                    for (const [state, count] of Object.entries(finishedStates)) {
-                        if (count > 0) states[state] = count;
+                        // Build states object for display
+                        states = {};
+                        if (nFail > 0) states[false] = nFail;
+                        // Add legacy finished states (CANCELLED, FAILED, TIMEOUT, etc.).
+                        for (const [state, count] of Object.entries(finishedStates)) {
+                            if (count > 0) states[state] = count;
+                        }
+                        if (nActualDone > 0) states[true] = nActualDone;
+                        if (nDoneIsh > 0) states['DONE_ISH'] = nDoneIsh;
+                        if (nCompleting > 0) states.COMPLETING = nCompleting;
+                        if (nActualRunning > 0) states.RUNNING = nActualRunning;
+                        if (nPending > 0) states.PENDING = nPending;
+                        if (nHold > 0) states.REQUEUE_HOLD = nHold;
+                        if (nUnknown > 0) states.UNKNOWN = nUnknown;
                     }
-                    if (nActualDone > 0) states[true] = nActualDone;
-                    if (nDoneIsh > 0) states['DONE_ISH'] = nDoneIsh;
-                    if (nCompleting > 0) states.COMPLETING = nCompleting;
-                    if (nActualRunning > 0) states.RUNNING = nActualRunning;
-                    if (nPending > 0) states.PENDING = nPending;
-                    if (nHold > 0) states.REQUEUE_HOLD = nHold;
 
                     // Aggregate
                     for (const [k, v] of Object.entries(states)) {
                         allStates[k] = (allStates[k] || 0) + v;
                     }
-                    const wuCount = info.total_wus || Object.keys(wus).length;
                     totalWUs += wuCount;
                     totalGPUs += info.total_gpus || 0;
 
@@ -1650,6 +1658,7 @@
                         renderXidDetail(data, metric);
                         // Fetch metrics separately
                         fetchAndPopulateMetrics(servers[i].url, xid, metric);
+                        fetchAndPopulateSacct(servers[i].url);
                         return;
                     }
                 } catch (e) {
@@ -1687,6 +1696,7 @@
 
                 // Then fetch metrics separately (lazy load)
                 fetchAndPopulateMetrics(servers[serverIdx].url, xid, metric);
+                fetchAndPopulateSacct(servers[serverIdx].url);
             } catch (e) {
                 servers[serverIdx].status = 'error';
                 renderServers();
@@ -1705,13 +1715,64 @@
             }
         }
 
+        async function fetchAndPopulateSacct(serverUrl) {
+            const activeStatuses = ['RUNNING', 'PENDING', 'REQUEUE_HOLD', 'COMPLETING'];
+            const jids = [...new Set((currentXidData?.wus || [])
+                .filter(wu => wu.jid && !activeStatuses.includes(wu.status))
+                .map(wu => wu.jid))];
+            if (jids.length === 0) return;
+            try {
+                const resp = await fetch(`${serverUrl}/api/sacct?jids=${encodeURIComponent(jids.join(','))}`, { signal: AbortSignal.timeout(60000) });
+                if (!resp.ok) return;
+                populateSacct(await resp.json());
+            } catch (e) {
+                console.log('Failed to fetch sacct:', e);
+            }
+        }
+
+        function populateSacct(sacctData) {
+            const activeStatuses = ['RUNNING', 'PENDING', 'REQUEUE_HOLD', 'COMPLETING'];
+            for (const wu of currentXidData?.wus || []) {
+                const info = sacctData[String(wu.jid)];
+                if (!info) continue;
+                wu.restarts = info.restarts ?? wu.restarts;
+                wu.exit_code = info.exit_code;
+                wu.qwait = info.qwait || wu.qwait;
+                wu.runtime = info.runtime || wu.runtime;
+                if (!activeStatuses.includes(wu.status) && wu.status !== 'DONE' && info.status) {
+                    wu.status = info.status;
+                }
+
+                const restartCell = document.querySelector(`td[data-wid="${wu.wid}"][data-field="restarts"]`);
+                const statusCell = document.querySelector(`td[data-wid="${wu.wid}"][data-field="status"]`);
+                const qwaitCell = document.querySelector(`td[data-wid="${wu.wid}"][data-field="qwait"]`);
+                const runtimeCell = document.querySelector(`td[data-wid="${wu.wid}"][data-field="runtime"]`);
+
+                if (restartCell) restartCell.textContent = wu.restarts ?? 0;
+                if (qwaitCell) qwaitCell.textContent = wu.qwait || 'n/a';
+                if (runtimeCell) runtimeCell.textContent = wu.runtime || 'n/a';
+                if (statusCell) {
+                    const hasExitCode = wu.exit_code !== null && wu.exit_code !== undefined;
+                    const effectiveStatus = (wu.status === 'CANCELLED' && hasExitCode && wu.exit_code !== 0) ? 'CANCELLED_FAIL' : wu.status;
+                    const statusEmoji = STATE_EMOJIS[effectiveStatus] || '❓';
+                    const isPending = ['PENDING', 'REQUEUE_HOLD'].includes(wu.status);
+                    statusCell.title = isPending && wu.reason
+                        ? `${wu.status} (${wu.reason})`
+                        : `${wu.status} (exit: ${hasExitCode ? wu.exit_code : '?'})`;
+                    statusCell.innerHTML = `<span class="status-emoji status-${String(effectiveStatus).toLowerCase()}">${statusEmoji}</span>`;
+                }
+            }
+        }
+
         function populateMetrics(metricsData, metricName) {
             // Update each row's step, metric, and progress cells
             for (const [wid, metrics] of Object.entries(metricsData)) {
                 const stepCell = document.querySelector(`td[data-wid="${wid}"][data-field="step"]`);
                 const metricCell = document.querySelector(`td[data-wid="${wid}"][data-field="metric"]`);
                 const progressCell = document.querySelector(`td[data-wid="${wid}"][data-field="progress"]`);
-                const nsteps = parseInt(document.querySelector(`tr[data-wid="${wid}"]`)?.dataset?.nsteps) || 0;
+                const row = document.querySelector(`tr[data-wid="${wid}"]`);
+                if (row && metrics._nsteps) row.dataset.nsteps = metrics._nsteps;
+                const nsteps = parseInt(row?.dataset?.nsteps) || 0;
 
                 if (stepCell) {
                     const step = metrics.step;
@@ -1789,7 +1850,7 @@
                 let actionBtn = '';
                 if (isActive) {
                     actionBtn = `<span class="action-btn" onclick="stopJob('${serverUrl}', ${wu.jid})" title="Stop (scancel ${wu.jid})">⏸️</span>`;
-                } else if (wu.status !== 'UNKNOWN' && wu.launch_script) {
+                } else if (wu.launch_script) {
                     const escapedScript = wu.launch_script.replace(/'/g, "\\'");
                     actionBtn = `<span class="action-btn" onclick="resumeJob('${serverUrl}', '${escapedScript}', ${wu.jid})" title="Restart">▶️</span>`;
                 }
@@ -1818,8 +1879,8 @@
                         <td class="text-center"><input type="checkbox" class="row-select" onchange="updateRowSelection(this)" /></td>
                         <td class="mono text-right">${widDisplay}</td>
                         <td class="mono">${wu.jid ? `<a href="${serverUrl}/log/${wu.jid}" target="_blank" title="View Slurm log">${wu.jid}</a><span class="copy-btn" onclick="navigator.clipboard.writeText('${wu.jid}')" title="Copy JID">⎘</span>` : ''}<span class="code-btn fa-icon" onclick="window.open('${serverUrl}/files/${data.xid}/wu/${wu.wid}', '_blank')" title="Browse workdir">🗁</span></td>
-                        <td class="mono text-center">${wu.restarts}</td>
-                        <td class="text-center" title="${statusTooltip}"><span class="status-emoji status-${effectiveStatus.toLowerCase()}">${statusEmoji}</span></td>
+                        <td class="mono text-center" data-wid="${wu.wid}" data-field="restarts">${wu.restarts}</td>
+                        <td class="text-center" data-wid="${wu.wid}" data-field="status" title="${statusTooltip}"><span class="status-emoji status-${effectiveStatus.toLowerCase()}">${statusEmoji}</span></td>
                         <td class="text-center">${requeueBtn}</td>
                         <td class="text-center">${actionBtn}</td>
                         <td class="mono text-right" data-wid="${wu.wid}" data-field="progress">-</td>
@@ -1827,8 +1888,8 @@
                         ${metricToShow ? `<td class="mono text-right" data-wid="${wu.wid}" data-field="metric">-</td>` : ''}
                         <td class="config-args">${configArgs}<span class="config-view-btn" onclick="showFullConfig('${serverUrl}', '${data.xid}', ${wu.wid})" title="View full config">🔍︎</span></td>
                         <td>${esc(wu.name)}</td>
-                        <td class="mono text-right">${wu.qwait}</td>
-                        <td class="mono text-right">${wu.runtime}</td>
+                        <td class="mono text-right" data-wid="${wu.wid}" data-field="qwait">${wu.qwait}</td>
+                        <td class="mono text-right" data-wid="${wu.wid}" data-field="runtime">${wu.runtime}</td>
                     </tr>`;
             }
 
@@ -2024,7 +2085,7 @@
             if (selectedRows.length === 0) {
                 const activeStatuses = ['RUNNING', 'PENDING', 'REQUEUE_HOLD', 'COMPLETING'];
                 scripts = (currentXidData?.wus || [])
-                    .filter(wu => !activeStatuses.includes(wu.status) && wu.status !== 'UNKNOWN' && wu.launch_script)
+                    .filter(wu => !activeStatuses.includes(wu.status) && wu.launch_script)
                     .map(wu => wu.launch_script);
                 if (scripts.length === 0) { alert('No non-active runs to start'); return; }
                 if (!confirm(`Start all ${scripts.length} non-active run(s)?`)) return;
