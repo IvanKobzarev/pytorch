@@ -250,9 +250,13 @@
         .footer-row { font-weight: 600; background: var(--header-bg) !important; }
         .config-args em { color: var(--accent); font-style: normal; }
         .config-args { font-style: normal; }
-        .config-view-btn { cursor: pointer; opacity: 0; margin-left: 4px; }
-        tr:hover .config-view-btn { opacity: 0.4; }
-        .config-view-btn:hover { opacity: 1 !important; }
+        .config-constant-args { opacity: 0.72; }
+        .config-constant-args.has-varying { border-left: 1px solid var(--border); margin-left: 0.5em; padding-left: 0.6em; }
+        .config-constant-args.is-hidden { display: none; }
+        .config-view-btn, .config-const-toggle { cursor: pointer; opacity: 0; margin-left: 4px; }
+        tr:hover .config-view-btn, tr:hover .config-const-toggle { opacity: 0.4; }
+        .config-view-btn:hover, .config-const-toggle:hover { opacity: 1 !important; }
+        .config-const-toggle.active { opacity: 0.6; }
         .progress-bar {
             position: relative;
             border-radius: 3px;
@@ -324,7 +328,7 @@
         .fav-toggle { cursor: pointer; font-size: 16px; opacity: 0.4; }
         .fav-toggle:hover { opacity: 0.7; }
         /* Use symbol font for all icon buttons and symbol text */
-        .copy-btn, .code-btn, .stop-btn, .action-btn, .rq-btn, .fav-btn, .del-btn, .archive-btn, .delckpt-btn, .fav-toggle, .bulk-action-btn, .config-view-btn, .status-emoji, .warning-text, .col-fav, .col-rq, .col-del, .col-archive, .col-delckpt, .col-flattli {
+        .copy-btn, .code-btn, .stop-btn, .action-btn, .rq-btn, .fav-btn, .del-btn, .archive-btn, .delckpt-btn, .fav-toggle, .bulk-action-btn, .config-view-btn, .config-const-toggle, .status-emoji, .warning-text, .col-fav, .col-rq, .col-del, .col-archive, .col-delckpt, .col-flattli {
             font-family: var(--font-symbols);
         }
         /* FontAwesome icons (regular weight) */
@@ -587,6 +591,36 @@
         };
 
         const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+        function renderConfigArg(arg) {
+            arg = String(arg ?? '');
+            const idx = arg.indexOf('=');
+            if (idx < 0) return esc(arg);
+            return `${esc(arg.slice(0, idx))}=<em>${esc(arg.slice(idx + 1))}</em>`;
+        }
+
+        function renderConfigArgs(args) {
+            return args.map(renderConfigArg).join(' ');
+        }
+
+        function commonConfigArgs(wus) {
+            if (!wus.length) return new Set();
+            const counts = new Map();
+            for (const wu of wus) {
+                for (const arg of new Set((wu.config_args || []).map(a => String(a ?? '')))) {
+                    counts.set(arg, (counts.get(arg) || 0) + 1);
+                }
+            }
+            return new Set([...counts.entries()].filter(([_, n]) => n === wus.length).map(([arg]) => arg));
+        }
+
+        function toggleConstantConfigArgs(btn) {
+            const constants = btn.parentElement.querySelector('.config-constant-args');
+            const hidden = constants.classList.toggle('is-hidden');
+            btn.textContent = hidden ? '+' : '-';
+            btn.title = hidden ? btn.dataset.showTitle : 'Hide constant config args';
+            btn.classList.toggle('active', !hidden);
+        }
 
         let servers = [];
         let overviewData = {};
@@ -1835,15 +1869,20 @@
                 </thead>
                 <tbody>`;
 
+            const constantConfigArgs = commonConfigArgs(wus);
             for (const wu of wus) {
                 const statusInfo = STATE_ICONS[wu.status] || { icon: wu.status, cls: '' };
                 const hasExitCode = wu.exit_code !== null && wu.exit_code !== undefined;
                 const effectiveStatus = (wu.status === 'CANCELLED' && hasExitCode && wu.exit_code !== 0) ? 'CANCELLED_FAIL' : wu.status;
                 const statusEmoji = STATE_EMOJIS[effectiveStatus] || '❓';
-                const configArgs = (wu.config_args || []).map(a => {
-                    const [lhs, rhs] = a.split('=', 2);
-                    return `${esc(lhs)}=<em>${esc(rhs)}</em>`;
-                }).join(' ');
+                const allConfigArgs = wu.config_args || [];
+                const varyingArgs = allConfigArgs.filter(a => !constantConfigArgs.has(String(a ?? '')));
+                const fixedArgs = allConfigArgs.filter(a => constantConfigArgs.has(String(a ?? '')));
+                const configArgs = renderConfigArgs(varyingArgs);
+                const fixedConfigArgs = renderConfigArgs(fixedArgs);
+                const constantToggle = fixedArgs.length
+                    ? `<span class="config-constant-args ${configArgs ? 'has-varying ' : ''}is-hidden">${fixedConfigArgs}</span><span class="config-const-toggle" onclick="toggleConstantConfigArgs(this)" data-show-title="Show ${fixedArgs.length} constant config args" title="Show ${fixedArgs.length} constant config args">+</span>`
+                    : '';
 
                 // Action button: stop if running/pending/hold, play if stopped/done/failed
                 const isActive = ['RUNNING', 'PENDING', 'REQUEUE_HOLD', 'COMPLETING'].includes(wu.status);
@@ -1886,7 +1925,7 @@
                         <td class="mono text-right" data-wid="${wu.wid}" data-field="progress">-</td>
                         <td class="mono text-right" data-wid="${wu.wid}" data-field="step">-</td>
                         ${metricToShow ? `<td class="mono text-right" data-wid="${wu.wid}" data-field="metric">-</td>` : ''}
-                        <td class="config-args">${configArgs}<span class="config-view-btn" onclick="showFullConfig('${serverUrl}', '${data.xid}', ${wu.wid})" title="View full config">🔍︎</span></td>
+                        <td class="config-args">${configArgs}${constantToggle}<span class="config-view-btn" onclick="showFullConfig('${serverUrl}', '${data.xid}', ${wu.wid})" title="View full config">🔍︎</span></td>
                         <td>${esc(wu.name)}</td>
                         <td class="mono text-right" data-wid="${wu.wid}" data-field="qwait">${wu.qwait}</td>
                         <td class="mono text-right" data-wid="${wu.wid}" data-field="runtime">${wu.runtime}</td>
