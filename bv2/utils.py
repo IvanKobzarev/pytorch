@@ -153,15 +153,11 @@ def install_exit_handler(config_path=None):
     def write_exit_status(status):
         nonlocal exit_status
         exit_status = status
-        with open(config_path, "r") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
         config["exit_status"] = status
         config["exit_status_at"] = datetime.now().isoformat(timespec="seconds")
-        tmp = config_path + ".tmp"
-        with open(tmp, "w+") as f:
-            json.dump(config, f, indent=0)
-            f.write("\n")
-        os.replace(tmp, config_path)
+        nfs_safe_overwrite(config_path, json.dumps(config, indent=0) + "\n")
 
     def handler(signum, frame):
         global _ABOUT_TO_GET_KILLED
@@ -362,3 +358,15 @@ def clone_function(f, name_suffix=""):
     g.__module__ = f.__module__
     g.__qualname__ = f.__qualname__
     return g
+
+
+def nfs_safe_overwrite(path, text):
+    # There's a bug in cw's NFS for some combination of doing tmp-write+rename and then later
+    # doing "w+" from a different machine, causes the file to be corrupted. This works around it.
+    # I hate this just as much as you.
+    with os.fdopen(os.open(path, os.O_RDWR | os.O_CREAT, 0o666), "r+", encoding="utf-8") as f:
+        f.seek(0)
+        f.write(text)
+        f.truncate()
+        f.flush()
+        os.fsync(f.fileno())

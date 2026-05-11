@@ -100,8 +100,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     if rank == 0:
         os.makedirs(workdir, exist_ok=True)
-        with open(config_path := pjoin(workdir, "config.json"), "w+") as f:
-            f.write(c.to_flat_json(indent=0))
+        config_path = pjoin(workdir, "config.json")
+        u.nfs_safe_overwrite(config_path, c.to_flat_json(indent=0))
         u.install_exit_handler(config_path)
     else:
         u.install_exit_handler()
