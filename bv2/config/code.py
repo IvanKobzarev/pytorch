@@ -11,6 +11,7 @@ def get_config():
 
     c.data.name = "deduped_code"
     c.data.split = "codewall_train_0.25M"
+    c.data.cache = True
     c.data.tokenizer.regex = "code"
     c.data.tokenizer.path = "/checkpoint/rigi/bv2/code_4k.tt"
     c.iter.maxtok = lambda: c.maxtok
