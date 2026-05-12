@@ -603,6 +603,17 @@
             return args.map(renderConfigArg).join(' ');
         }
 
+        function matchesFilterText(searchable, filterText, regexMode) {
+            filterText = filterText.trim();
+            if (!filterText) return true;
+            if (regexMode) {
+                try { return new RegExp(filterText).test(searchable); }
+                catch { return false; }
+            }
+            const searchableLower = searchable.toLowerCase();
+            return filterText.toLowerCase().split(/\s+/).every(word => searchableLower.includes(word));
+        }
+
         function commonConfigArgs(wus) {
             if (!wus.length) return new Set();
             const counts = new Map();
@@ -1157,6 +1168,28 @@
 
         let allColdRows = [];  // Global for filtering
 
+        function overviewSearchText(r) {
+            const finishedDate = r.finishTime
+                ? new Date(r.finishTime * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+                : '';
+            return [
+                r.xid,
+                r.user,
+                r.done,
+                r.done ? 'done' : '',
+                r.fail,
+                r.fail ? 'fail failed' : '',
+                r.config,
+                r.name,
+                r.note,
+                r.note || r.name,
+                r.server,
+                r.warningCount ? 'warning warnings' : '',
+                r.finishTime ? formatAgo(r.finishTime) : '',
+                finishedDate,
+            ].join(' ');
+        }
+
         function renderOverview() {
             const hotBody = document.querySelector('#hotTable tbody');
             const hotFoot = document.querySelector('#hotTable tfoot');
@@ -1416,14 +1449,14 @@
         }
 
         function filterColdTable() {
-            const filter = (document.getElementById('coldFilter').value || '').toLowerCase();
+            const filter = document.getElementById('coldFilter').value || '';
             const coldBody = document.querySelector('#coldTable tbody');
             let filtered = allColdRows;
             if (showOnlyFavorites) {
                 filtered = filtered.filter(r => favorites.has(r.xid));
             }
-            if (filter) {
-                filtered = filtered.filter(r => r.xid.toLowerCase().includes(filter) || r.user.toLowerCase().includes(filter));
+            if (filter.trim()) {
+                filtered = filtered.filter(r => matchesFilterText(overviewSearchText(r), filter, false));
             }
 
             coldBody.innerHTML = filtered.map(r => {
@@ -1955,7 +1988,7 @@
                 const wu = wuMap[wid];
                 if (!wu) return;
 
-                if (!filterText) {
+                if (!filterText.trim()) {
                     row.style.display = '';
                     return;
                 }
@@ -1964,14 +1997,7 @@
                 const configArgsText = (wu.config_args || []).join(' ');
                 const searchable = [wu.wid, wu.jid, wu.status, statusEmoji, configArgsText, wu.name].join(' ');
 
-                let matches;
-                if (regexFilterMode) {
-                    try { matches = new RegExp(filterText).test(searchable); }
-                    catch { matches = false; }
-                } else {
-                    matches = searchable.toLowerCase().includes(filterText.toLowerCase());
-                }
-                row.style.display = matches ? '' : 'none';
+                row.style.display = matchesFilterText(searchable, filterText, regexFilterMode) ? '' : 'none';
             });
             updateHeaderCheckbox();
             updateBulkActionButtons();
