@@ -10,6 +10,7 @@ import time
 import signal
 import sys
 import os
+import stat
 import shutil
 from datetime import datetime
 from getpass import getuser
@@ -209,7 +210,7 @@ def extract_common_name(workdir_names, xid):
 
 def dir_names(path):
     with os.scandir(path) as it:
-        return [e.name for e in it if e.is_dir()]
+        return [e.name for e in it if e.is_dir(follow_symlinks=False)]
 
 
 def wid_from_workdir_name(name):
@@ -277,7 +278,11 @@ def _extra_info(xid_info):
     # LEGACY/BACKCOMPAT: experiments before launchids.json. Remove after
     # every experiment has launch metadata.
     if not launch_wids:
-        launch_wids = {int(m.group(1)) for f in wd_path.glob("launch_*.sh") if (m := re.match(r'launch_(\d+)\.sh', f.name))}
+        with os.scandir(wd_path) as it:
+            launch_wids = {int(m.group(1)) for e in it
+                           if e.name.startswith("launch_") and e.name.endswith(".sh")
+                           and e.is_file(follow_symlinks=False)
+                           and (m := re.match(r'launch_(\d+)\.sh', e.name))}
     info["total_wus"] = len(launch_wids)
 
     launch_jid_by_wid = {
@@ -455,12 +460,13 @@ def set_note(xid: str, note: str = Body(..., embed=True)):
     # Find the XID's workdir
     wd_path = BASEDIR / xid
     if not wd_path.exists():
-        for d in BASEDIR.iterdir():
-            if d.is_dir() and xid in d.name:
-                wd_path = d
-                break
-        else:
-            raise HTTPException(status_code=404, detail=f"XID {xid} not found")
+        with os.scandir(BASEDIR) as it:
+            for e in it:
+                if xid in e.name and e.is_dir(follow_symlinks=False):
+                    wd_path = Path(e.path)
+                    break
+            else:
+                raise HTTPException(status_code=404, detail=f"XID {xid} not found")
     note_file = wd_path / "NOTE.md"
     note = note.strip()
     if note:
@@ -528,9 +534,10 @@ def get_overview():
     if missing_xids:
         # LEGACY/BACKCOMPAT: older/renamed workdir folders may contain the XID
         # without being exactly /workdirs/{xid}. Remove after backfill.
-        for d in BASEDIR.iterdir():
-            if d.is_dir() and (xid := extract_xid(d.name)) in missing_xids:
-                wd_by_xid[xid] = d.name
+        with os.scandir(BASEDIR) as it:
+            for e in it:
+                if (xid := extract_xid(e.name)) in missing_xids and e.is_dir(follow_symlinks=False):
+                    wd_by_xid[xid] = e.name
     log.info("  - workdir lookup took %.2fs (%d workdirs matched)", time.time() - t2, len(wd_by_xid))
 
     # Build hot xids
@@ -871,10 +878,11 @@ def _find_xid_path(xid):
     # LEGACY/BACKCOMPAT: old/renamed experiments may not live exactly at
     # /workdirs/{xid}. Remove after all experiments are backfilled there.
     t0 = time.time()
-    for d in BASEDIR.iterdir():
-        if d.is_dir() and xid in d.name:
-            log.info("  - _find_xid_path fallback took %.2fs", time.time() - t0)
-            return d
+    with os.scandir(BASEDIR) as it:
+        for e in it:
+            if xid in e.name and e.is_dir(follow_symlinks=False):
+                log.info("  - _find_xid_path fallback took %.2fs", time.time() - t0)
+                return Path(e.path)
     log.info("  - _find_xid_path fallback took %.2fs (not found)", time.time() - t0)
     return None
 
@@ -1071,7 +1079,7 @@ def get_xid_info(xid: str):
     # Get workdirs
     t2 = time.time()
     workdirs = dir_names(wd_path)
-    log.info("  - found %d workdirs (iterdir took %.2fs)", len(workdirs), time.time() - t2)
+    log.info("  - found %d workdirs (scandir took %.2fs)", len(workdirs), time.time() - t2)
 
     # Load configs in parallel
     t1 = time.time()
@@ -1079,10 +1087,14 @@ def get_xid_info(xid: str):
     log.info("  - loaded configs in %.2fs", time.time() - t1)
 
     launches = {}
-    for launch_file in sorted(wd_path.glob("launch_*.sh")):
-        if not (lm := re.match(r'launch_(\d+)\.sh', launch_file.name)):
+    with os.scandir(wd_path) as it:
+        launch_names = sorted(e.name for e in it
+                              if e.name.startswith("launch_") and e.name.endswith(".sh")
+                              and e.is_file(follow_symlinks=False))
+    for name in launch_names:
+        if not (lm := re.match(r'launch_(\d+)\.sh', name)):
             continue
-        launches[int(lm.group(1))] = extract_launch_info(launch_file)
+        launches[int(lm.group(1))] = extract_launch_info(wd_path / name)
 
     configs = {}
     warnings = {}  # wid -> list of warning strings
@@ -1317,18 +1329,22 @@ def get_wu_config(xid: str, wid: int):
     if not wd_path.exists():
         # LEGACY/BACKCOMPAT: old/renamed experiments may not live exactly at
         # /workdirs/{xid}. Remove after all experiments are backfilled there.
-        for d in BASEDIR.iterdir():
-            if d.is_dir() and xid in d.name:
-                wd_path = d
-                break
-        else:
-            raise HTTPException(status_code=404, detail=f"XID {xid} not found")
+        with os.scandir(BASEDIR) as it:
+            for e in it:
+                if xid in e.name and e.is_dir(follow_symlinks=False):
+                    wd_path = Path(e.path)
+                    break
+            else:
+                raise HTTPException(status_code=404, detail=f"XID {xid} not found")
 
     wid_str = str(wid)
-    for d in wd_path.iterdir():
-        if not d.is_dir() or not d.name.endswith(f"-{wid_str}"):
+    suffix = f"-{wid_str}"
+    with os.scandir(wd_path) as it:
+        sub_dirs = [e.name for e in it if e.is_dir(follow_symlinks=False)]
+    for name in sub_dirs:
+        if not name.endswith(suffix):
             continue
-        config_path = d / "config.json"
+        config_path = wd_path / name / "config.json"
         if config_path.exists():
             return Response(
                 content=json.dumps(json.loads(config_path.read_text()), indent=2),
@@ -1338,10 +1354,8 @@ def get_wu_config(xid: str, wid: int):
     # LEGACY/BACKCOMPAT: old/manual workdir names may not end in "-{wid}".
     # Remove after all workdir dirs use the normal suffix convention or are
     # indexed elsewhere.
-    for d in wd_path.iterdir():
-        if not d.is_dir():
-            continue
-        config_path = d / "config.json"
+    for name in sub_dirs:
+        config_path = wd_path / name / "config.json"
         if not config_path.exists():
             continue
         try:
@@ -1378,28 +1392,35 @@ def _safe_path(base: Path, user_path: str) -> Path:
         raise HTTPException(status_code=400, detail=f"Invalid path: {e}")
 
 
-def _build_tree(path: Path, base: Path) -> list:
+def _build_tree(path, base):
     """Recursively build a file tree structure."""
     items = []
     try:
-        for entry in sorted(path.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
-            rel_path = str(entry.relative_to(base))
-            if entry.is_dir():
-                items.append({
-                    "name": entry.name,
-                    "path": rel_path,
-                    "type": "dir",
-                    "children": _build_tree(entry, base)
-                })
-            else:
-                items.append({
-                    "name": entry.name,
-                    "path": rel_path,
-                    "type": "file",
-                    "size": entry.stat().st_size
-                })
-    except PermissionError:
-        pass
+        with os.scandir(path) as it:
+            entries = [(e, e.is_dir(follow_symlinks=False)) for e in it]
+    except (PermissionError, OSError):
+        return items
+    entries.sort(key=lambda x: (not x[1], x[0].name.lower()))
+    for entry, is_dir in entries:
+        rel_path = os.path.relpath(entry.path, base)
+        if is_dir:
+            items.append({
+                "name": entry.name,
+                "path": rel_path,
+                "type": "dir",
+                "children": _build_tree(entry.path, base),
+            })
+        else:
+            try:
+                size = entry.stat(follow_symlinks=False).st_size
+            except OSError:
+                size = 0
+            items.append({
+                "name": entry.name,
+                "path": rel_path,
+                "type": "file",
+                "size": size,
+            })
     return items
 
 
@@ -1482,7 +1503,7 @@ def _is_text_file(path: Path) -> bool:
         return False
 
 
-def _build_files_tree(path: Path, base: Path, depth: int = -1, dir_sizes=False) -> list:
+def _build_files_tree(path, base, depth=-1, dir_sizes=False):
     """Build file tree with size info for workdir browsing.
 
     Args:
@@ -1493,52 +1514,57 @@ def _build_files_tree(path: Path, base: Path, depth: int = -1, dir_sizes=False) 
     """
     items = []
     try:
-        for entry in sorted(path.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
-            rel_path = str(entry.relative_to(base))
-            if entry.is_dir():
-                children = [] if depth == 0 else _build_files_tree(entry, base, depth - 1 if depth > 0 else -1, dir_sizes)
-                item = {
-                    "name": entry.name,
-                    "path": rel_path,
-                    "type": "dir",
-                    "children": children
-                }
-                if dir_sizes:
-                    item["size"] = sum(child.get("size", 0) for child in children) if depth != 0 else _path_size(entry)
-                items.append(item)
-            else:
-                try:
-                    size = entry.stat().st_size
-                except:
-                    size = 0
-                items.append({
-                    "name": entry.name,
-                    "path": rel_path,
-                    "type": "file",
-                    "size": size
-                })
-    except PermissionError:
-        pass
+        with os.scandir(path) as it:
+            entries = [(e, e.is_dir(follow_symlinks=False)) for e in it]
+    except (PermissionError, OSError):
+        return items
+    entries.sort(key=lambda x: (not x[1], x[0].name.lower()))
+    for entry, is_dir in entries:
+        rel_path = os.path.relpath(entry.path, base)
+        if is_dir:
+            children = [] if depth == 0 else _build_files_tree(entry.path, base, depth - 1 if depth > 0 else -1, dir_sizes)
+            item = {
+                "name": entry.name,
+                "path": rel_path,
+                "type": "dir",
+                "children": children
+            }
+            if dir_sizes:
+                item["size"] = sum(child.get("size", 0) for child in children) if depth != 0 else _path_size(entry.path)
+            items.append(item)
+        else:
+            try:
+                size = entry.stat(follow_symlinks=False).st_size
+            except OSError:
+                size = 0
+            items.append({
+                "name": entry.name,
+                "path": rel_path,
+                "type": "file",
+                "size": size
+            })
     return items
 
 
 def _path_size(path):
-    if path.is_symlink():
-        try:
-            return path.lstat().st_size
-        except OSError:
-            return 0
-
-    if path.is_file():
-        try:
-            return path.stat().st_size
-        except OSError:
-            return 0
-
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return 0
+    if not stat.S_ISDIR(st.st_mode):
+        return st.st_size
     total = 0
     try:
-        for entry in path.iterdir():
-            total += _path_size(entry)
+        with os.scandir(path) as it:
+            for entry in it:
+                try:
+                    est = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if stat.S_ISDIR(est.st_mode):
+                    total += _path_size(entry.path)
+                else:
+                    total += est.st_size
     except OSError:
         pass
     return total
@@ -1636,24 +1662,26 @@ def _resolve_wu_dir(xid: str, wid) -> str:
     """
     wd_path = _get_workdir(xid)
     wid_str = str(wid)
+    suffix = f"-{wid_str}"
+
+    with os.scandir(wd_path) as it:
+        sub_dirs = [e.name for e in it if e.is_dir(follow_symlinks=False)]
 
     # First, use the normal launcher/train naming convention.
-    for subdir in wd_path.iterdir():
-        if subdir.is_dir() and subdir.name.endswith(f"-{wid_str}"):
-            return subdir.name
+    for name in sub_dirs:
+        if name.endswith(suffix):
+            return name
 
     # LEGACY/BACKCOMPAT: old/manual workdir names may not end in "-{wid}".
     # Remove after all workdir dirs use the normal suffix convention or are
     # indexed elsewhere.
-    for subdir in wd_path.iterdir():
-        if not subdir.is_dir():
-            continue
-        config_file = subdir / "config.json"
+    for name in sub_dirs:
+        config_file = wd_path / name / "config.json"
         if config_file.exists():
             try:
                 config = json.loads(config_file.read_text())
                 if str(config.get("wid")) == wid_str:
-                    return subdir.name
+                    return name
             except:
                 pass
 
@@ -1702,10 +1730,10 @@ def get_log(jid: int):
     """Get raw log content for a Slurm job."""
     # Search for the log file in all user directories
     log_filename = f"{jid}.txt"
-    for user_dir in SLURM_OUT_DIR.iterdir():
-        if not user_dir.is_dir():
-            continue
-        log_path = user_dir / log_filename
+    with os.scandir(SLURM_OUT_DIR) as it:
+        user_dirs = [e.path for e in it if e.is_dir(follow_symlinks=False)]
+    for user_dir in user_dirs:
+        log_path = Path(user_dir) / log_filename
         if log_path.exists():
             content = log_path.read_text(errors="replace")
             return Response(content=content, media_type="text/plain; charset=utf-8")
