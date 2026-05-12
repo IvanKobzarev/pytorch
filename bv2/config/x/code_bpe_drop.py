@@ -16,7 +16,6 @@ def get_config():
     c.data.bpe_drop_p = 0.063
     c.data.bpe_drop_frac = 0.25
     c.data.tokenizer.first_N = None
-    c.data.tokenizer.extras = ("bos_drop",)
     c.iter.maxtok = lambda: c.maxtok
 
     # rough estimation of ~64 epochs
@@ -47,7 +46,6 @@ def get_config():
     c.evals.pplx.data.bpe_drop_p = 0.0
     c.evals.pplx.data.bpe_drop_frac = 0.0
     c.evals.pplx.data.tokenizer.first_N = lambda: c.data.tokenizer.first_N
-    c.evals.pplx.data.tokenizer.extras = lambda: c.data.tokenizer.extras
     c.evals.pplx.iter.maxtok = 1024*64
 
     # Byte-level eval: force full BPE-dropout so every token is split to bytes.
@@ -59,7 +57,6 @@ def get_config():
     c.evals.pplx_byte.data.bpe_drop_p = 1.0
     c.evals.pplx_byte.data.bpe_drop_frac = 1.0
     c.evals.pplx_byte.data.tokenizer.first_N = lambda: c.data.tokenizer.first_N
-    c.evals.pplx_byte.data.tokenizer.extras = lambda: c.data.tokenizer.extras
     c.evals.pplx_byte.iter.maxtok = 1024*64
 
     return c
@@ -97,23 +94,23 @@ def sweep():
             # BPE dropout variants
             for frac, p, nsteps in [(0.25, 0.063, 7601), (0.25, 0.117, 7851), (0.25, 0.1803, 8163), (0.25, 0.3407, 9047), (0.25, 0.5266, 10204), (0.25, 1.0, 13141),
                                     (0.50, 0.063, 7835), (0.50, 0.117, 8309), (0.50, 0.1803, 8903), (0.50, 0.3407, 10597), (0.50, 0.5266, 12808), (0.50, 1.0, 18444)]:
-                yield f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", f"c.nsteps={nsteps}", f"c.data.bpe_drop_p={p}", f"c.data.bpe_drop_frac={frac}", "c.data.mode_tokens=True"
+                yield f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", f"c.nsteps={nsteps}", f"c.data.bpe_drop_p={p}", f"c.data.bpe_drop_frac={frac}"
 
             # baselines (no BPE dropout)
-            yield f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", "c.nsteps=7341", "c.data.bpe_drop_p=0.0", "c.data.bpe_drop_frac=0.0", "c.data.mode_tokens=False"
+            yield f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", "c.nsteps=7341", "c.data.bpe_drop_p=0.0", "c.data.bpe_drop_frac=0.0"
 
             # byte tokenizer baselines
             for first_N, nsteps in [(256, 29766),]:
-                yield f"c.data.tokenizer.first_N={first_N}", f"c.nsteps={nsteps}", f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", "c.data.bpe_drop_p=0.0", "c.data.bpe_drop_frac=0.0", "c.data.mode_tokens=False"
+                yield f"c.data.tokenizer.first_N={first_N}", f"c.nsteps={nsteps}", f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", "c.data.bpe_drop_p=0.0", "c.data.bpe_drop_frac=0.0"
 
     # Same sweep but on 1M data (4x more data -> 4x more steps).
     for depth, dim in [(12, 3072), (12, 2048), (8, 2048), (8, 1024)]:
         for lr_muon in [3e-3, 6e-3, 1e-2, 3e-2]:
             for frac, p, nsteps in [(0.25, 0.063, 7601*4), (0.25, 0.117, 7851*4), (0.25, 0.1803, 8163*4), (0.25, 0.3407, 9047*4), (0.25, 0.5266, 10204*4), (0.25, 1.0, 13141*4),
                                     (0.50, 0.063, 7835*4), (0.50, 0.117, 8309*4), (0.50, 0.1803, 8903*4), (0.50, 0.3407, 10597*4), (0.50, 0.5266, 12808*4), (0.50, 1.0, 18444*4)]:
-                yield 'c.data.split="codewall_train_1M"', f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", f"c.nsteps={nsteps}", f"c.data.bpe_drop_p={p}", f"c.data.bpe_drop_frac={frac}", "c.data.mode_tokens=True"
+                yield 'c.data.split="codewall_train_1M"', f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", f"c.nsteps={nsteps}", f"c.data.bpe_drop_p={p}", f"c.data.bpe_drop_frac={frac}"
 
-            yield 'c.data.split="codewall_train_1M"', f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", f"c.nsteps={7341*4}", "c.data.bpe_drop_p=0.0", "c.data.bpe_drop_frac=0.0", "c.data.mode_tokens=False"
+            yield 'c.data.split="codewall_train_1M"', f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", f"c.nsteps={7341*4}", "c.data.bpe_drop_p=0.0", "c.data.bpe_drop_frac=0.0"
 
             for first_N, nsteps in [(256, 29766*4),]:
-                yield 'c.data.split="codewall_train_1M"', f"c.data.tokenizer.first_N={first_N}", f"c.nsteps={nsteps}", f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", "c.data.bpe_drop_p=0.0", "c.data.bpe_drop_frac=0.0", "c.data.mode_tokens=False"
+                yield 'c.data.split="codewall_train_1M"', f"c.data.tokenizer.first_N={first_N}", f"c.nsteps={nsteps}", f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", "c.data.bpe_drop_p=0.0", "c.data.bpe_drop_frac=0.0"
