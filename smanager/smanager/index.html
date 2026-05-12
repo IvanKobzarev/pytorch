@@ -1871,6 +1871,7 @@
             const wus = data.wus || [];
             const serverIdx = document.getElementById('xidServer').value;
             const serverUrl = servers[serverIdx]?.url || '';
+            const serverName = servers[serverIdx]?.name || '';
             const xid = data.xid;
             const note = data.note || '';
             const displayText = note || data.name || '';
@@ -1882,6 +1883,7 @@
             // Update XID display and actions in the header bar
             document.getElementById('xidDisplay').textContent = xid;
             document.getElementById('xidActions').innerHTML = `
+                <span class="server-badge" title="Server hosting this XID">${esc(serverName)}</span>
                 <span class="xid-btn ${favorites.has(xid) ? 'active' : ''}" onclick="toggleFavoriteDetail('${xid}')" title="Favorite">${favorites.has(xid) ? '❤︎' : '♡'}</span>
                 <span class="xid-btn fa-icon" onclick="window.open('${serverUrl}/code/${xid}', '_blank')" title="Browse source code">🗎</span>
                 <span class="xid-btn fa-icon" onclick="window.open('${serverUrl}/files/${xid}', '_blank')" title="Browse workdir">🗁</span>
