@@ -37,10 +37,11 @@ class Dataset:
         self.bpe_drop_p = bpe_drop_p
         self.bpe_drop_frac = bpe_drop_frac
         self.mode_tokens = mode_tokens
-        self.ranks = self.tt.tokenizer._mergeable_ranks
+        self.ranks = self.tt.mergeable_ranks
         self._pat = regex.compile(self.tt.pat_str)
 
     def _encode_with_dropout(self, text, rng):
+        # Per pretoken drop here. To explore per merge drop and per sequence drop variants.
         result = []
         for word in self._pat.findall(text):
             parts = [bytes([b]) for b in word.encode("utf-8")]

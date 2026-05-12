@@ -93,6 +93,7 @@ class Tiktoken:
             special_tokens=self.special_tokens,
         )
 
+        self.mergeable_ranks = tokens
         self.n_vocab = self.tokenizer.n_vocab
 
     def encode(self, text):
