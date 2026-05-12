@@ -155,6 +155,10 @@ def main(slurm=True):
             command_words += [*train_args, *work_unit_args, f"xid:=\"{xid}\"", f"wid:={wid}", *sws_args]
             ret = subprocess.run(command_words, capture_output=slurm, text=True, shell=False)
 
+            # Record per-WID launch metadata for both slurm and local runs;
+            # the slurm branch below fills in launchjid from sbatch's stdout.
+            launchids[str(wid)] = {"launchjid": None, "args": work_unit_args, "overrides": sws_args}
+
             if not slurm:
                 if ret.returncode != 0:
                     print(f"\n{RED}{BOLD}Job {wid} failed with return code {ret.returncode}. Stopping sweep.{RESET}")
@@ -164,7 +168,6 @@ def main(slurm=True):
             # Write the exact launch command into a shell file that can be used to re-launch:
             (wd / f"launch_{wid}.sh").write_text(f"#!/bin/bash\ncd {code_dst}\n" + shlex.join(command_words) + "\n", encoding="utf-8")
             (wd / f"launch_{wid}.sh").chmod(0o755)
-            launchids[str(wid)] = {"launchjid": None, "args": work_unit_args, "overrides": sws_args}
 
             if ret.returncode == 0:
                 if match := re.search(r"Submitted batch job (\d+)", ret.stdout):
@@ -182,8 +185,8 @@ def main(slurm=True):
     except KeyboardInterrupt:
         print(f"\n{RED}{BOLD}Launch interrupted. See command below to kill launched jobs.{RESET}")
 
+    launchids_file.write_text(json.dumps(launchids, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if slurm:
-        launchids_file.write_text(json.dumps(launchids, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"{RESET}To kill all these jobs: {BLUE}scancel -n {xid}{RESET}")
         print(f"To see status of all these jobs (triple-click to select line):\n"
             f"{BLUE}squeue -n {xid}{RESET} -O JobId:9,Name:20,UserName:5,State:10,TimeUsed:11,NumCPUs:5,NumNodes:6,GRES:14,RestartCnt:4,QOS:9,Reason")
