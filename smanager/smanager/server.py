@@ -1021,6 +1021,7 @@ def _get_xid_info_from_launchids(xid, wd_path, launchids, t0):
     result = {
         "xid": xid,
         "note": note_file.read_text().strip() if note_file.exists() else "",
+        "name": extract_common_name(workdirs.values(), xid),
         "wus": wus,
         "launch_command": (wd_path / "launchinfo.txt").read_text() if (wd_path / "launchinfo.txt").exists() else "",
     }
@@ -1242,6 +1243,7 @@ def get_xid_info(xid: str):
     result = {
         "xid": xid,
         "note": note,
+        "name": extract_common_name(workdirs, xid),
         "wus": wus,
         "launch_command": (wd_path / "launchinfo.txt").read_text() if (wd_path / "launchinfo.txt").exists() else "",
     }

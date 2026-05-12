@@ -893,9 +893,10 @@
                 if (currentXidData) currentXidData.note = newNote;
                 // Update cell
                 const escapedNote = newNote.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                const displayText = newNote || currentXidData?.name || '';
                 cell.setAttribute('onclick', `editXidNote(this, ${serverIdx}, '${xid}', '${escapedNote}')`);
                 cell.className = `xid-note ${newNote ? 'has-note' : ''}`;
-                cell.innerHTML = newNote || '<span style="opacity:0.3">click to add note</span>';
+                cell.innerHTML = esc(displayText) || '<span style="opacity:0.3">click to add note</span>';
             };
 
             input.addEventListener('keydown', (e) => {
@@ -904,7 +905,7 @@
                     saveNote();
                 } else if (e.key === 'Escape') {
                     cell.className = `xid-note ${currentNote ? 'has-note' : ''}`;
-                    cell.innerHTML = currentNote || '<span style="opacity:0.3">click to add note</span>';
+                    cell.innerHTML = esc(currentNote || currentXidData?.name || '') || '<span style="opacity:0.3">click to add note</span>';
                     saved = true;
                 }
             });
@@ -1872,6 +1873,7 @@
             const serverUrl = servers[serverIdx]?.url || '';
             const xid = data.xid;
             const note = data.note || '';
+            const displayText = note || data.name || '';
             const escapedNote = note.replace(/'/g, "\\'").replace(/"/g, '&quot;');
 
             // Check if any jobs are active (for delete button visibility)
@@ -1884,7 +1886,7 @@
                 <span class="xid-btn fa-icon" onclick="window.open('${serverUrl}/code/${xid}', '_blank')" title="Browse source code">🗎</span>
                 <span class="xid-btn fa-icon" onclick="window.open('${serverUrl}/files/${xid}', '_blank')" title="Browse workdir">🗁</span>
                 ${!hasActiveJobs ? `<span class="xid-btn" onclick="deleteXidDetail('${serverUrl}', ${serverIdx}, '${xid}')" title="Delete ${xid}">🗑</span>` : ''}
-                <span class="xid-note ${note ? 'has-note' : ''}" onclick="editXidNote(this, ${serverIdx}, '${xid}', '${escapedNote}')">${note || '<span style="opacity:0.3">click to add note</span>'}</span>
+                <span class="xid-note ${note ? 'has-note' : ''}" onclick="editXidNote(this, ${serverIdx}, '${xid}', '${escapedNote}')">${esc(displayText) || '<span style="opacity:0.3">click to add note</span>'}</span>
             `;
 
             let html = `<div class="table-container-full"><table>
