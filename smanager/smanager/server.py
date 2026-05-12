@@ -268,21 +268,29 @@ def _extra_info(xid_info):
         skip_config_loading = False
 
     wd_path = BASEDIR / info["wd"]
-    try:
-        info["user"] = wd_path.owner()
-    except:
-        info["user"] = "?"
+
+    # Overlap independent NFS reads with the rest of the work.
+    owner_fut = fs_executor.submit(wd_path.owner)
+    launchinfo_fut = fs_executor.submit(lambda: (wd_path / 'launchinfo.txt').read_text())
+    note_fut = fs_executor.submit(lambda: (wd_path / 'NOTE.md').read_text())
 
     launchids = load_launchids(wd_path)
-    launch_wids = {normalize_wid(wid) for wid in launchids}
+
+    # Single scandir gathers both subdir names and (legacy) launch_*.sh files.
+    wuwd_names = []
+    launch_wids_from_files = set()
+    with os.scandir(wd_path) as it:
+        for e in it:
+            name = e.name
+            if e.is_dir(follow_symlinks=False):
+                wuwd_names.append(name)
+            elif (name.startswith("launch_") and name.endswith(".sh")
+                  and e.is_file(follow_symlinks=False)
+                  and (m := re.match(r'launch_(\d+)\.sh', name))):
+                launch_wids_from_files.add(int(m.group(1)))
     # LEGACY/BACKCOMPAT: experiments before launchids.json. Remove after
     # every experiment has launch metadata.
-    if not launch_wids:
-        with os.scandir(wd_path) as it:
-            launch_wids = {int(m.group(1)) for e in it
-                           if e.name.startswith("launch_") and e.name.endswith(".sh")
-                           and e.is_file(follow_symlinks=False)
-                           and (m := re.match(r'launch_(\d+)\.sh', e.name))}
+    launch_wids = {normalize_wid(wid) for wid in launchids} or launch_wids_from_files
     info["total_wus"] = len(launch_wids)
 
     launch_jid_by_wid = {
@@ -291,7 +299,6 @@ def _extra_info(xid_info):
         if isinstance(meta, dict)
     }
     wid_by_launch_jid = {jid: wid for wid, jid in launch_jid_by_wid.items() if jid}
-    launchinfo = wd_path / 'launchinfo.txt'
     workdir_names = []
     wid_counts = {}  # wid -> count (for duplicate detection)
     workdir_by_wid = {}
@@ -299,7 +306,6 @@ def _extra_info(xid_info):
     workdir_jid_by_wid = {}
     config_by_wid = {}
     info["wus"] = {}
-    wuwd_names = dir_names(wd_path)
     done_results = fs_executor.map(_load_done_only, [(wd_path, wuwd_name) for wuwd_name in wuwd_names])
     for wuwd_name, (_, wid, is_done, mtime) in zip(wuwd_names, done_results):
         wuwd = wd_path / wuwd_name
@@ -332,12 +338,9 @@ def _extra_info(xid_info):
     for wid in launch_wids | set(workdir_done_by_wid):
         info["wus"][str(wid)] = workdir_done_by_wid.get(wid, False)
 
-    if launchinfo.is_file():
-        try:
-            info["config"] = next(re.finditer(r"bv2/config/(.*?) ", launchinfo.read_text())).group(1)
-        except:
-            info["config"] = "?"
-    else:
+    try:
+        info["config"] = next(re.finditer(r"bv2/config/(.*?) ", launchinfo_fut.result())).group(1)
+    except (OSError, StopIteration):
         info["config"] = "?"
 
     # Calculate Done-ish count if jobs are available.
@@ -416,9 +419,14 @@ def _extra_info(xid_info):
     info["name"] = extract_common_name(workdir_names, xid)
     # Count WUs with duplicate workdirs (warning_count)
     info["warning_count"] = sum(1 for c in wid_counts.values() if c > 1)
-    # Read note if exists
-    note_file = wd_path / "NOTE.md"
-    info["note"] = note_file.read_text().strip() if note_file.exists() else ""
+    try:
+        info["note"] = note_fut.result().strip()
+    except FileNotFoundError:
+        info["note"] = ""
+    try:
+        info["user"] = owner_fut.result()
+    except Exception:
+        info["user"] = "?"
     return xid, info
 
 
@@ -428,10 +436,11 @@ def health():
 
 
 def _read_xid_file(filename):
-    path = PREFS_DIR / filename
-    if not path.exists():
+    try:
+        text = (PREFS_DIR / filename).read_text()
+    except FileNotFoundError:
         return []
-    return [line.strip() for line in path.read_text().splitlines() if line.strip()]
+    return [line.strip() for line in text.splitlines() if line.strip()]
 
 
 def _write_xid_file(filename, xids):
@@ -528,8 +537,10 @@ def get_overview():
     # Only resolve workdirs for XIDs that have active jobs. New launchers use
     # /workdirs/{xid}, so this avoids scanning the whole NFS directory.
     t2 = time.time()
-    active_xids = set(jobs_by_xid.keys())
-    wd_by_xid = {xid: xid for xid in active_xids if (BASEDIR / xid).is_dir()}
+    active_xids = list(jobs_by_xid.keys())
+    is_dir_results = fs_executor.map(lambda xid: (BASEDIR / xid).is_dir(), active_xids)
+    wd_by_xid = {xid: xid for xid, ok in zip(active_xids, is_dir_results) if ok}
+    active_xids = set(active_xids)
     missing_xids = active_xids - set(wd_by_xid)
     if missing_xids:
         # LEGACY/BACKCOMPAT: older/renamed workdir folders may contain the XID
@@ -644,18 +655,13 @@ def get_overview_inactive():
 
 
 def load_config(wd_path):
-    config_file = wd_path / "config.json"
-    if not config_file.exists():
-        return {}
     try:
-        return json.loads(config_file.read_text())
+        return json.loads((wd_path / "config.json").read_text())
+    except FileNotFoundError:
+        return {}
     except Exception as e:
         log.debug("load_config failed for %s: %s", wd_path, e)
-        # Fallback to raw JSON without sws
-        try:
-            return json.loads((wd_path / "config.json").read_text())
-        except:
-            return {}
+        return {}
 
 
 def last_metric(wd_path, metric_name="train/loss"):
@@ -772,8 +778,10 @@ def _load_metric_only(args):
 
 
 def load_launchids(wd_path):
-    path = wd_path / "launchids.json"
-    launchids = json.loads(path.read_text()) if path.exists() else {}
+    try:
+        launchids = json.loads((wd_path / "launchids.json").read_text())
+    except FileNotFoundError:
+        return {}
     for info in launchids.values():
         if "launchjid" not in info and "jid" in info:
             info["launchjid"] = info["jid"]
@@ -961,14 +969,18 @@ def _nsteps_from_args(args):
 
 
 def _get_xid_info_from_launchids(xid, wd_path, launchids, t0):
+    # Fire squeue + small NFS reads up front so they overlap with the scandir/config work.
     t1 = time.time()
-    jobs_by_jid = _load_current_xid_jobs(xid)
-    log.info("  - squeue took %.2fs", time.time() - t1)
+    squeue_fut = fs_executor.submit(_load_current_xid_jobs, xid)
+    note_fut = fs_executor.submit(lambda: (wd_path / "NOTE.md").read_text())
+    launchinfo_fut = fs_executor.submit(lambda: (wd_path / "launchinfo.txt").read_text())
 
     t2 = time.time()
     workdirs, warnings = _workdirs_by_suffix(wd_path)
     log.info("  - mapped %d workdirs by suffix in %.2fs", len(workdirs), time.time() - t2)
 
+    jobs_by_jid = squeue_fut.result()
+    log.info("  - squeue took %.2fs", time.time() - t1)
     jobs_by_wid = _jobs_by_wid(jobs_by_jid, launchids)
     launch_wids = {normalize_wid(wid) for wid in launchids}
     all_wids = launch_wids | set(jobs_by_wid)
@@ -978,6 +990,13 @@ def _get_xid_info_from_launchids(xid, wd_path, launchids, t0):
     config_results = fs_executor.map(_load_config_only, [(wd_path, workdirs[wid]) for wid in inactive_wids])
     configs = {wid: config for wid, (_, config) in zip(inactive_wids, config_results)}
     log.info("  - loaded %d inactive configs in %.2fs", len(configs), time.time() - t3)
+
+    # Pre-stat DONE files in parallel for inactive WUs whose exit_status is missing —
+    # avoids serializing N NFS roundtrips inside the wus loop below.
+    done_by_wid = dict(zip(inactive_wids, fs_executor.map(
+        lambda wid: (wd_path / workdirs[wid] / "DONE").is_file(),
+        inactive_wids,
+    )))
 
     wus = []
     for wid in sorted(all_wids, key=lambda x: (0, int(x)) if str(x).isdigit() else (1, str(x))):
@@ -997,7 +1016,7 @@ def _get_xid_info_from_launchids(xid, wd_path, launchids, t0):
             jid = normalize_jid(config.get("jid")) or normalize_jid(meta.get("launchjid") if isinstance(meta, dict) else None)
             status = detail_status_from_exit_status(config.get("exit_status"))
             if status is None:
-                if wuwd_name and (wd_path / wuwd_name / "DONE").is_file():
+                if done_by_wid.get(wid, False):
                     # LEGACY/BACKCOMPAT: DONE predates exit_status. Remove
                     # after exit_status has been backfilled into existing
                     # configs.
@@ -1025,13 +1044,20 @@ def _get_xid_info_from_launchids(xid, wd_path, launchids, t0):
             "warnings": warnings.get(wid, []),
         })
 
-    note_file = wd_path / "NOTE.md"
+    try:
+        note = note_fut.result().strip()
+    except FileNotFoundError:
+        note = ""
+    try:
+        launch_command = launchinfo_fut.result()
+    except FileNotFoundError:
+        launch_command = ""
     result = {
         "xid": xid,
-        "note": note_file.read_text().strip() if note_file.exists() else "",
+        "note": note,
         "name": extract_common_name(workdirs.values(), xid),
         "wus": wus,
-        "launch_command": (wd_path / "launchinfo.txt").read_text() if (wd_path / "launchinfo.txt").exists() else "",
+        "launch_command": launch_command,
     }
     log.info("GET /api/xid/%s - done: %d launch-indexed work units (%.2fs)", xid, len(wus), time.time() - t0)
     return result
@@ -1062,19 +1088,11 @@ def get_xid_info(xid: str):
     # LEGACY/BACKCOMPAT: full reconstruction for experiments without
     # launchids.json. Remove after launch metadata is backfilled.
 
-    # Get current jobs for this xid
+    # Fire squeue + small NFS reads up front so they overlap with the scandir/config work.
     t1 = time.time()
-    xid_widths = [20, 20, 20, 20, 20, 20, 40, 20, 20, 20, 20, 100]
-    xid_fmt = "JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:40,NumNodes:20,GRES:20,RestartCnt:20,Reason:20,Comment:100"
-    lines = run_cmd(f"squeue -n {xid} -O {xid_fmt}")
-    log.info("  - squeue took %.2fs", time.time() - t1)
-    xid_offsets = [sum(xid_widths[:i]) for i in range(len(xid_widths))]
-    xid_jobs = [[j[xid_offsets[i]:xid_offsets[i]+xid_widths[i]].strip() for i in range(len(xid_widths))] for j in lines if j.strip()]
-    if len(xid_jobs) >= 2:
-        headers, job_rows = xid_jobs[0], xid_jobs[1:]
-        jobs_by_jid = {row[0]: dict(zip(headers, row)) for row in job_rows}
-    else:
-        jobs_by_jid = {}
+    squeue_fut = fs_executor.submit(_load_current_xid_jobs, xid)
+    note_fut = fs_executor.submit(lambda: (wd_path / "NOTE.md").read_text())
+    launchinfo_fut = fs_executor.submit(lambda: (wd_path / "launchinfo.txt").read_text())
 
     # Get workdirs
     t2 = time.time()
@@ -1082,19 +1100,22 @@ def get_xid_info(xid: str):
     log.info("  - found %d workdirs (scandir took %.2fs)", len(workdirs), time.time() - t2)
 
     # Load configs in parallel
-    t1 = time.time()
+    t_cfg = time.time()
     config_results = list(fs_executor.map(_load_config_only, [(wd_path, wd) for wd in workdirs]))
-    log.info("  - loaded configs in %.2fs", time.time() - t1)
+    log.info("  - loaded configs in %.2fs", time.time() - t_cfg)
 
-    launches = {}
+    jobs_by_jid = squeue_fut.result()
+    log.info("  - squeue took %.2fs", time.time() - t1)
+
     with os.scandir(wd_path) as it:
         launch_names = sorted(e.name for e in it
                               if e.name.startswith("launch_") and e.name.endswith(".sh")
                               and e.is_file(follow_symlinks=False))
-    for name in launch_names:
-        if not (lm := re.match(r'launch_(\d+)\.sh', name)):
-            continue
-        launches[int(lm.group(1))] = extract_launch_info(wd_path / name)
+    launch_wids_names = [(int(m.group(1)), name) for name in launch_names
+                         if (m := re.match(r'launch_(\d+)\.sh', name))]
+    launch_futs = [(wid, fs_executor.submit(extract_launch_info, wd_path / name))
+                   for wid, name in launch_wids_names]
+    launches = {wid: f.result() for wid, f in launch_futs}
 
     configs = {}
     warnings = {}  # wid -> list of warning strings
@@ -1129,7 +1150,9 @@ def get_xid_info(xid: str):
                 config["name"] = launches[wid]["name"]
         configs[wid] = config
 
-    # Get sacct info for all jids
+    # Get sacct info for all jids in one batched call.
+    # (Launch-only WUs can't contribute jids here: this is the legacy path, which
+    # only runs when launchids.json is absent, so launchids is always {}.)
     jids = set()
     for wid, config in configs.items():
         if "jid" in config:
@@ -1137,15 +1160,23 @@ def get_xid_info(xid: str):
     jids.update(int(jid) for jid in jobs_by_jid.keys() if jid.isdigit())
 
     t2 = time.time()
-    jids_list = list(jids)
-    saccts = load_sacct_many(jids_list)
+    saccts = load_sacct_many(list(jids))
     log.info("  - loaded sacct in %.2fs", time.time() - t2)
+
+    # Parallelize DONE stats — one NFS roundtrip per WU would otherwise serialize.
+    t_done = time.time()
+    done_wids = [wid for wid, config in configs.items() if config.get("_wuwd_name")]
+    done_results = fs_executor.map(
+        lambda wid: (wd_path / configs[wid]["_wuwd_name"] / "DONE").is_file(),
+        done_wids,
+    )
+    done_by_wid = dict(zip(done_wids, done_results))
+    log.info("  - DONE stats in %.2fs (%d WUs)", time.time() - t_done, len(done_wids))
 
     # Determine status for each wid
     status = {}
     for wid, config in configs.items():
-        wuwd_name = config.get("_wuwd_name", "")
-        has_done = wuwd_name and (wd_path / wuwd_name / "DONE").is_file()
+        has_done = done_by_wid.get(wid, False)
         jid = config.get("jid")
         slurm_state = jobs_by_jid.get(str(jid), {}).get("STATE") if jid else None
 
@@ -1191,22 +1222,13 @@ def get_xid_info(xid: str):
             configs[wid] = {"jid": jid, "name": "", "pending_only": True}
             status[wid] = job_info.get("STATE", "PENDING")
 
-    # LEGACY/BACKCOMPAT: launch-only WUs for experiments without launchids in
-    # the fast path. Remove with the full reconstruction path above.
-    saccts.update(load_sacct_many(
-        normalize_jid(launchids.get(str(wid), {}).get("launchjid")) for wid in launches if wid not in configs
-    ))
-
-    # Add WUs from launch files that aren't represented yet
+    # Add WUs from launch files that aren't represented yet. Launchids is empty
+    # in the legacy path, so we can't recover a jid here — UNKNOWN status.
     for wid, launch in sorted(launches.items()):
         if wid in configs:
             continue
-        jid = normalize_jid(launchids.get(str(wid), {}).get("launchjid"))
-        configs[wid] = {"jid": jid, "name": launch["name"], "_launch_line": launch["launch_line"]}
-        if jid and jid in saccts and saccts[jid].get('state', {}).get('current'):
-            status[wid] = saccts[jid]['state']['current'][-1]
-        else:
-            status[wid] = "UNKNOWN"
+        configs[wid] = {"jid": None, "name": launch["name"], "_launch_line": launch["launch_line"]}
+        status[wid] = "UNKNOWN"
 
     # Format for response
     wus = []
@@ -1218,8 +1240,6 @@ def get_xid_info(xid: str):
         # Extract submit line args
         submit_line = sacct.get("submit_line", "") or config.get("_launch_line", "")
         sws_args = extract_sws_args(submit_line)
-        if not sws_args and str(wid) in launchids:
-            sws_args = [*launchids[str(wid)].get("overrides", []), *launchids[str(wid)].get("args", [])]
 
         time_info = sacct.get("time", {})
         elapsed = time_info.get("elapsed", 0)
@@ -1248,16 +1268,20 @@ def get_xid_info(xid: str):
             "warnings": warnings.get(wid, []),
         })
 
-    # Read note if exists
-    note_file = wd_path / "NOTE.md"
-    note = note_file.read_text().strip() if note_file.exists() else ""
-
+    try:
+        note = note_fut.result().strip()
+    except FileNotFoundError:
+        note = ""
+    try:
+        launch_command = launchinfo_fut.result()
+    except FileNotFoundError:
+        launch_command = ""
     result = {
         "xid": xid,
         "note": note,
         "name": extract_common_name(workdirs, xid),
         "wus": wus,
-        "launch_command": (wd_path / "launchinfo.txt").read_text() if (wd_path / "launchinfo.txt").exists() else "",
+        "launch_command": launch_command,
     }
     log.info("GET /api/xid/%s - done: %d work units (%.2fs)", xid, len(wus), time.time() - t0)
     return result
@@ -1275,10 +1299,11 @@ def get_xid_metrics(xid: str, metric: str = "train/loss"):
     launchids = load_launchids(wd_path)
     if launchids:
         workdirs, _ = _workdirs_by_suffix(wd_path)
-        metric_results = list(fs_executor.map(_load_metric_only, [(wd_path, wd, metric) for wd in workdirs.values()]))
-        config_results = list(fs_executor.map(_load_config_only, [(wd_path, wd) for wd in workdirs.values()]))
-        metric_by_wuwd = {wuwd_name: metrics for wuwd_name, metrics in metric_results}
-        config_by_wuwd = {wuwd_name: config for wuwd_name, config in config_results}
+        wd_names = list(workdirs.values())
+        metric_futs = [fs_executor.submit(_load_metric_only, (wd_path, wd, metric)) for wd in wd_names]
+        config_futs = [fs_executor.submit(_load_config_only, (wd_path, wd)) for wd in wd_names]
+        metric_by_wuwd = dict(f.result() for f in metric_futs)
+        config_by_wuwd = dict(f.result() for f in config_futs)
         result = {}
         for wid, wuwd_name in workdirs.items():
             result[wid] = metric_by_wuwd.get(wuwd_name, {})
@@ -1294,9 +1319,11 @@ def get_xid_metrics(xid: str, metric: str = "train/loss"):
     # Get workdirs
     workdirs = dir_names(wd_path)
 
-    # Load configs and metrics in parallel
-    config_results = list(fs_executor.map(_load_config_only, [(wd_path, wd) for wd in workdirs]))
-    metric_results = list(fs_executor.map(_load_metric_only, [(wd_path, wd, metric) for wd in workdirs]))
+    # Load configs and metrics in parallel — submit both up front so they interleave I/O.
+    config_futs = [fs_executor.submit(_load_config_only, (wd_path, wd)) for wd in workdirs]
+    metric_futs = [fs_executor.submit(_load_metric_only, (wd_path, wd, metric)) for wd in workdirs]
+    config_results = [f.result() for f in config_futs]
+    metric_results = [f.result() for f in metric_futs]
 
     # Build wid -> metrics mapping (same duplicate resolution as main endpoint)
     metric_by_wuwd = {wuwd_name: metrics for wuwd_name, metrics in metric_results}
@@ -1437,15 +1464,16 @@ def get_code_file(xid: str, file_path: str):
     src_path = _get_srcdir(xid)
     full_path = _safe_path(src_path, file_path)
 
-    if not full_path.exists():
+    try:
+        st = full_path.stat()
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
-
-    if not full_path.is_file():
+    if not stat.S_ISREG(st.st_mode):
         raise HTTPException(status_code=400, detail=f"Not a file: {file_path}")
 
     # Read file content (with size limit for safety)
     max_size = 10 * 1024 * 1024  # 10MB
-    if full_path.stat().st_size > max_size:
+    if st.st_size > max_size:
         raise HTTPException(status_code=400, detail=f"File too large (max {max_size // 1024 // 1024}MB)")
 
     try:
@@ -1604,13 +1632,15 @@ def get_files_content(xid: str, file_path: str):
     """Get file content - text for viewable files, error for binary."""
     wd_path = _get_workdir(xid)
     full_path = _safe_path(wd_path, file_path)
-    if not full_path.exists():
+    try:
+        st = full_path.stat()
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
-    if not full_path.is_file():
+    if not stat.S_ISREG(st.st_mode):
         raise HTTPException(status_code=400, detail=f"Not a file: {file_path}")
     # Size limit: 10MB for text display
     max_size = 10 * 1024 * 1024
-    file_size = full_path.stat().st_size
+    file_size = st.st_size
     if file_size > max_size:
         raise HTTPException(status_code=400, detail=f"File too large for inline display ({file_size // 1024 // 1024}MB). Use download instead.")
     if not _is_text_file(full_path):
@@ -1628,12 +1658,14 @@ def download_file(xid: str, file_path: str):
     from starlette.responses import StreamingResponse
     wd_path = _get_workdir(xid)
     full_path = _safe_path(wd_path, file_path)
-    if not full_path.exists():
+    try:
+        st = full_path.stat()
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
-    if not full_path.is_file():
+    if not stat.S_ISREG(st.st_mode):
         raise HTTPException(status_code=400, detail=f"Not a file: {file_path}")
 
-    file_size = full_path.stat().st_size
+    file_size = st.st_size
 
     def iter_file():
         chunk_size = 1024 * 1024  # 1MB chunks for better throughput
