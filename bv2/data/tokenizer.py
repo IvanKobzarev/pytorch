@@ -61,7 +61,7 @@ def pretokenize(text, regex_name="o200k"):
 
 
 class Tiktoken:
-    def __init__(self, first_N=None, path=None, regex="o200k"):
+    def __init__(self, first_N=None, path=None, regex="o200k", extras=()):
         path = path or "/checkpoint/rigi/bv2/l4_200k_base.model"
 
         # "pretokenization" step done via regexp
@@ -78,13 +78,15 @@ class Tiktoken:
         self.bos = base_dict_size
         self.eos = base_dict_size + 1
         self.sep = base_dict_size + 2
-        self.bos_drop = base_dict_size + 3
         self.special_tokens = {
             "<|bos|>": self.bos,
             "<|eos|>": self.eos,
             "<|sep|>": self.sep,
-            "<|bos_drop|>": self.bos_drop,
         }
+        for i, name in enumerate(extras):
+            tok_id = base_dict_size + 3 + i
+            self.special_tokens[f"<|{name}|>"] = tok_id
+            setattr(self, name, tok_id)
 
         self.tokenizer = tiktoken.Encoding(
             name="l4_200k_base",
@@ -108,5 +110,5 @@ class Tiktoken:
 
 
 @cache
-def get_tiktoken(first_N=None, path="/checkpoint/rigi/bv2/l4_200k_base.model", regex="o200k"):
-    return Tiktoken(first_N=first_N, path=path, regex=regex)
+def get_tiktoken(first_N=None, path="/checkpoint/rigi/bv2/l4_200k_base.model", regex="o200k", extras=()):
+    return Tiktoken(first_N=first_N, path=path, regex=regex, extras=tuple(extras))

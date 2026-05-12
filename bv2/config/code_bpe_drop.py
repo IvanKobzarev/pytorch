@@ -15,8 +15,8 @@ def get_config():
     c.data.split = "codewall_train_0.25M"
     c.data.bpe_drop_p = 0.063
     c.data.bpe_drop_frac = 0.25
-    c.data.mode_tokens = True
     c.data.tokenizer.first_N = None
+    c.data.tokenizer.extras = ("bos_drop",)
     c.iter.maxtok = lambda: c.maxtok
 
     # rough estimation of ~64 epochs
@@ -47,7 +47,7 @@ def get_config():
     c.evals.pplx.data.bpe_drop_p = 0.0
     c.evals.pplx.data.bpe_drop_frac = 0.0
     c.evals.pplx.data.tokenizer.first_N = lambda: c.data.tokenizer.first_N
-    c.evals.pplx.data.mode_tokens = False
+    c.evals.pplx.data.tokenizer.extras = lambda: c.data.tokenizer.extras
     c.evals.pplx.iter.maxtok = 1024*64
 
     # Byte-level eval: force full BPE-dropout so every token is split to bytes.
@@ -59,7 +59,7 @@ def get_config():
     c.evals.pplx_byte.data.bpe_drop_p = 1.0
     c.evals.pplx_byte.data.bpe_drop_frac = 1.0
     c.evals.pplx_byte.data.tokenizer.first_N = lambda: c.data.tokenizer.first_N
-    c.evals.pplx_byte.data.mode_tokens = True
+    c.evals.pplx_byte.data.tokenizer.extras = lambda: c.data.tokenizer.extras
     c.evals.pplx_byte.iter.maxtok = 1024*64
 
     return c

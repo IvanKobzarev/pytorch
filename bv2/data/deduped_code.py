@@ -27,7 +27,7 @@ PATH = {
 
 class Dataset:
     def __init__(self, split, first_N=float("inf"), tokenizer=None, seed=0, epochs=None, cache=False,
-                 bpe_drop_p=0.0, bpe_drop_frac=0.0, mode_tokens=False):
+                 bpe_drop_p=0.0, bpe_drop_frac=0.0):
         # Idea: here or in pp: randomize sub-seqlen, because many are >32k!
         self.reader = get_sackli_reader(PATH[split], cache)
         self.tt = get_tiktoken(**tokenizer or {})
@@ -36,7 +36,6 @@ class Dataset:
         self.seed = seed
         self.bpe_drop_p = bpe_drop_p
         self.bpe_drop_frac = bpe_drop_frac
-        self.mode_tokens = mode_tokens
         self.ranks = self.tt.mergeable_ranks
         self._pat = regex.compile(self.tt.pat_str)
 
@@ -75,7 +74,7 @@ class Dataset:
         rng = u.rng(self.seed, "bpe_drop", exid, epoch)
         used_drop = rng.random() < self.bpe_drop_frac
         toks = self._encode_with_dropout(data, rng) if used_drop else self.tt.encode(data)
-        first = self.tt.bos_drop if (self.mode_tokens and used_drop) else self.tt.bos
+        first = self.tt.bos_drop if used_drop else self.tt.bos
 
         return sanity_check({
             "toki": d.pack_text(np.r_[first, toks], positions="auto"),
