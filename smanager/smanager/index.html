@@ -1564,7 +1564,12 @@
             }
         }
 
+        function clearRowFilter() {
+            document.getElementById('rowFilterInput').value = '';
+        }
+
         function viewXid(xid, serverIdx) {
+            if (document.getElementById('xidInput').value !== xid) clearRowFilter();
             document.getElementById('xidInput').value = xid;
             document.getElementById('xidServer').value = serverIdx;
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -1668,6 +1673,7 @@
                 return;
             }
 
+            if (document.getElementById('xidInput').value !== xid) clearRowFilter();
             document.getElementById('xidInput').value = xid;
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.querySelector('[data-view="xid-detail"]').classList.add('active');
@@ -2145,10 +2151,12 @@
         // Tab switching
         document.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', () => {
+                const wasXidDetail = document.getElementById('xid-detail').classList.contains('active');
                 document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
                 tab.classList.add('active');
                 document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
                 document.getElementById(tab.dataset.view).classList.add('active');
+                if (wasXidDetail && tab.dataset.view !== 'xid-detail') clearRowFilter();
                 // Push to history when switching tabs
                 if (tab.dataset.view === 'xid-detail') {
                     const xid = document.getElementById('xidInput').value;
@@ -2169,11 +2177,13 @@
         // Handle back/forward navigation
         function handleNavigation() {
             const hash = window.location.hash;
+            const wasXidDetail = document.getElementById('xid-detail').classList.contains('active');
             if (hash === '#misc') {
                 document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
                 document.querySelector('[data-view="misc-detail"]').classList.add('active');
                 document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
                 document.getElementById('misc-detail').classList.add('active');
+                if (wasXidDetail) clearRowFilter();
                 renderMiscTable();
             } else if (hash && hash.length > 1) {
                 loadXidFromHash();
@@ -2183,6 +2193,7 @@
                 document.querySelector('[data-view="overview"]').classList.add('active');
                 document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
                 document.getElementById('overview').classList.add('active');
+                if (wasXidDetail) clearRowFilter();
             }
         }
         window.addEventListener('popstate', handleNavigation);
