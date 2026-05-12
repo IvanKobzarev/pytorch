@@ -45,6 +45,7 @@ def get_config():
     c.evals.pplx.steps = 250  # 500 steps is ~1ep of the 0.25M subset.
     c.evals.pplx.data.epochs = 1
     c.evals.pplx.data.name = "deduped_code"
+    c.evals.pplx.data.cache = lambda: c.data.cache
     c.evals.pplx.data.split = "codewall_val"
     c.evals.pplx.data.tokenizer = lambda: getattr(c.data, "tokenizer", None)
     c.evals.pplx.iter.maxtok = lambda: c.maxtok
