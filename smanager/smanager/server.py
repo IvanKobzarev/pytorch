@@ -421,6 +421,15 @@ def _extra_info(xid_info):
                     # config.json on startup, wiping any previously-written
                     # exit_status). Backfill can't eliminate this path.
                     sacct_jids[jid] = wid
+
+            # WUs in launchids that haven't created a workdir yet (just
+            # submitted, queued, or cancelled-before-running). Without this
+            # they fall into the "UNKNOWN" bucket in the overview even though
+            # sacct knows their state. Same batched sacct call covers them.
+            for wid in launch_wids - set(workdir_done_by_wid) - set(active_by_wid):
+                if (jid := launch_jid_by_wid.get(wid)) is not None:
+                    sacct_jids[jid] = wid
+
             for jid, sacct in load_sacct_many(sacct_jids).items():
                 finished_by_wid[sacct_jids[jid]] = state_from_sacct(sacct)
 
@@ -612,7 +621,7 @@ def get_overview():
             except:
                 gpus_per_job = 0
             info["gpus_per_job"] = gpus_per_job
-            info["total_gpus"] = gpus_per_job * info["states"].get("RUNNING", 0)
+            info["total_gpus"] = gpus_per_job * info.get("effective_states", {}).get("RUNNING", 0)
             info["max_restarts"] = max(int(j.get("RESTART_COUNT", 0)) for j in xid_jobs)
         else:
             info["qos"] = ""
