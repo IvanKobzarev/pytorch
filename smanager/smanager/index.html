@@ -1207,53 +1207,8 @@
                 const serverName = servers[sIdx].name;
 
                 for (const [xid, info] of Object.entries(data.hot || {})) {
-                    // New servers send launchids+squeue-derived effective states.
-                    // LEGACY/BACKCOMPAT: keep the old client-side reconstruction for older servers.
-                    let states = info.effective_states;
-                    const wus = info.wus || {};
-                    const slurmStates = info.states || {};
-                    const finishedStates = info.finished_states || {};
-                    const wuCount = info.total_wus || Object.keys(wus).length;
-
-                    if (!states) {
-                        // Count WUs by DONE file status
-                        const nDone = Object.values(wus).filter(v => v === true).length;
-                        const nNotDone = Object.values(wus).filter(v => v === false).length;
-
-                        // In-progress states from Slurm
-                        const nRunning = slurmStates.RUNNING || 0;
-                        const nPending = slurmStates.PENDING || 0;
-                        const nHold = slurmStates.REQUEUE_HOLD || 0;
-                        const nCompleting = slurmStates.COMPLETING || 0;
-                        const nInProgress = nRunning + nPending + nHold + nCompleting;
-
-                        // Done-ish = DONE file exists but Slurm still shows running
-                        // This happens when job is finishing up but Slurm hasn't caught up
-                        const nDoneIsh = info.done_ish_count || 0;
-                        const nActualDone = info.actual_done_count || 0;
-                        const nActualRunning = nRunning - nDoneIsh;
-
-                        // Legacy payloads may include finished states from older server-side lookups.
-                        const nFinished = Object.values(finishedStates).reduce((a, b) => a + b, 0);
-                        // Failed = remaining WUs without DONE file that aren't in-progress or finished
-                        const nFail = Math.max(0, nNotDone - nInProgress - nFinished);
-                        const nUnknown = Math.max(0, wuCount - nDone - nNotDone - nInProgress);
-
-                        // Build states object for display
-                        states = {};
-                        if (nFail > 0) states[false] = nFail;
-                        // Add legacy finished states (CANCELLED, FAILED, TIMEOUT, etc.).
-                        for (const [state, count] of Object.entries(finishedStates)) {
-                            if (count > 0) states[state] = count;
-                        }
-                        if (nActualDone > 0) states[true] = nActualDone;
-                        if (nDoneIsh > 0) states['DONE_ISH'] = nDoneIsh;
-                        if (nCompleting > 0) states.COMPLETING = nCompleting;
-                        if (nActualRunning > 0) states.RUNNING = nActualRunning;
-                        if (nPending > 0) states.PENDING = nPending;
-                        if (nHold > 0) states.REQUEUE_HOLD = nHold;
-                        if (nUnknown > 0) states.UNKNOWN = nUnknown;
-                    }
+                    const states = info.effective_states || {};
+                    const wuCount = info.total_wus || 0;
 
                     // Aggregate
                     for (const [k, v] of Object.entries(states)) {

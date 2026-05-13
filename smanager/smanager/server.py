@@ -44,6 +44,26 @@ class HealthCheckFilter(logging.Filter):
 logging.getLogger("uvicorn.access").addFilter(HealthCheckFilter())
 
 
+# Probe for every LEGACY - BACKFILLED - REMOVE SOON branch. Appends a line to
+# SMANAGER_LEGACY_LOG (default /checkpoint/rigi/bv2/smanager_legacy_used.log,
+# shared across users) and emits a WARNING. Use this to verify a fallback is
+# truly unreachable before deleting it. Small append writes are atomic under
+# POSIX so concurrent appends from multiple smanager servers won't interleave.
+LEGACY_LOG_PATH = Path(os.environ.get(
+    "SMANAGER_LEGACY_LOG", "/checkpoint/rigi/bv2/smanager_legacy_used.log"))
+
+
+def _legacy_used(tag, **ctx):
+    ctx["_user"] = getuser()
+    line = f"{datetime.now().isoformat(timespec='seconds')}\t{tag}\t{json.dumps(ctx, default=str)}\n"
+    try:
+        with open(LEGACY_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line)
+    except OSError:
+        pass
+    log.warning("LEGACY_USED: %s %s", tag, ctx)
+
+
 app = FastAPI(title="Slurm Manager API")
 
 SCRIPT_DIR = Path(__file__).parent
@@ -288,9 +308,14 @@ def _extra_info(xid_info):
                   and e.is_file(follow_symlinks=False)
                   and (m := re.match(r'launch_(\d+)\.sh', name))):
                 launch_wids_from_files.add(int(m.group(1)))
-    # LEGACY/BACKCOMPAT: experiments before launchids.json. Remove after
-    # every experiment has launch metadata.
-    launch_wids = {normalize_wid(wid) for wid in launchids} or launch_wids_from_files
+    # LEGACY - BACKFILLED - REMOVE SOON: every experiment now has launchids.json
+    # (backfilled by bv2/tools/backfill_launchids_json). launch_wids_from_files
+    # is unreachable in steady state.
+    if launchids:
+        launch_wids = {normalize_wid(wid) for wid in launchids}
+    else:
+        _legacy_used("extra_info.no_launchids", xid=xid)
+        launch_wids = launch_wids_from_files
     info["total_wus"] = len(launch_wids)
 
     launch_jid_by_wid = {
@@ -310,9 +335,11 @@ def _extra_info(xid_info):
     for wuwd_name, (_, wid, is_done, mtime) in zip(wuwd_names, done_results):
         wuwd = wd_path / wuwd_name
         if wid is None and not skip_config_loading:
-            # LEGACY/BACKCOMPAT: old/manual workdir names may not end in
-            # "-{wid}". Remove after all workdir dirs use the normal
-            # suffix convention or are indexed elsewhere.
+            # LEGACY - BACKFILLED - REMOVE SOON: workdir names now always end
+            # in "-{wid}" (backfilled by bv2/tools/backfill_wid_suffix; new
+            # runs always produce the suffix). Config-loading recovery is
+            # unreachable in steady state.
+            _legacy_used("extra_info.no_wid_suffix", xid=xid, wuwd=wuwd_name)
             config = load_config(wuwd)
             wid = normalize_wid(config.get("wid", wuwd_name))
             config_by_wid[wid] = config
@@ -325,9 +352,9 @@ def _extra_info(xid_info):
                 pass
         if wid is None:
             continue
-        # LEGACY/BACKCOMPAT: DONE predates exit_status. Hot overview uses
-        # it only when exit_status is missing; inactive overview still uses
-        # it as the cheap broad-scan signal until statuses are indexed.
+        # DONE mtime is the broad-scan signal for finish_time -- cheaper than
+        # loading config.exit_status_at, and is the only available signal for
+        # the inactive overview which skips config loading entirely.
         if is_done and mtime > info.get("finish_time", 0):
             info["finish_time"] = mtime
         workdir_names.append(wuwd_name)
@@ -343,11 +370,6 @@ def _extra_info(xid_info):
     except (OSError, StopIteration):
         info["config"] = "?"
 
-    # Calculate Done-ish count if jobs are available.
-    # A job might write DONE but get stuck running in Slurm without quitting.
-    info["done_ish_count"] = 0
-    info["actual_done_count"] = 0
-
     if "jobs" in info:
         active_by_wid = {}
         active_jid_by_wid = {}
@@ -355,8 +377,10 @@ def _extra_info(xid_info):
             wid = extract_wid(job.get("COMMENT", ""))
             jid = normalize_jid(job.get("JOBID"))
             if wid is None and jid:
-                # LEGACY/BACKCOMPAT: older Slurm jobs may not have xid/wid
-                # comments. Remove after all live jobs have comment metadata.
+                # LEGACY - BACKFILLED - REMOVE SOON: live jobs now always have
+                # xid/wid in COMMENT (set by _launch.py; gaps patched by
+                # bv2/tools/backfill_slurm_comments).
+                _legacy_used("extra_info.no_comment", xid=xid, jid=jid)
                 wid = wid_by_launch_jid.get(jid)
             if wid is not None and jid:
                 active_by_wid[wid] = job.get("STATE", "UNKNOWN")
@@ -385,19 +409,20 @@ def _extra_info(xid_info):
                 if state is not None:
                     finished_by_wid[wid] = state
                 elif workdir_done_by_wid.get(wid):
-                    # LEGACY/BACKCOMPAT: DONE predates exit_status. Remove
-                    # after exit_status has been backfilled into existing
-                    # configs.
+                    # LEGACY - BACKFILLED - REMOVE SOON: exit_status backfilled
+                    # via bv2/tools/backfill_exit_status; DONE-only path is
+                    # unreachable in steady state.
+                    _legacy_used("extra_info.done_no_exit_status", xid=xid, wid=wid)
                     finished_by_wid[wid] = True
                 elif jid := normalize_jid(config.get("jid")):
-                    # LEGACY/BACKCOMPAT: exit_status is the intended source of
-                    # terminal state. Remove sacct fallback after exit_status
-                    # has been backfilled into existing configs.
+                    # Live sacct fallback for in-flight WUs that have no DONE
+                    # file and no exit_status -- typically jobs that were hard-
+                    # killed mid-step or were restarted (train.py rewrites
+                    # config.json on startup, wiping any previously-written
+                    # exit_status). Backfill can't eliminate this path.
                     sacct_jids[jid] = wid
             for jid, sacct in load_sacct_many(sacct_jids).items():
                 finished_by_wid[sacct_jids[jid]] = state_from_sacct(sacct)
-        if finished_by_wid:
-            info["finished_states"] = dict(Counter(finished_by_wid.values()))
 
         if active_by_wid or workdir_done_by_wid or launch_wids:
             states = Counter()
@@ -543,11 +568,14 @@ def get_overview():
     active_xids = set(active_xids)
     missing_xids = active_xids - set(wd_by_xid)
     if missing_xids:
-        # LEGACY/BACKCOMPAT: older/renamed workdir folders may contain the XID
-        # without being exactly /workdirs/{xid}. Remove after backfill.
+        # LEGACY - BACKFILLED - REMOVE SOON: all workdirs now live exactly at
+        # /workdirs/{xid} (bv2/tools/backfill_xid_dirname). The scan below is
+        # unreachable in steady state; missing_xids without a hit just means
+        # the workdir doesn't exist yet on this server.
         with os.scandir(BASEDIR) as it:
             for e in it:
                 if (xid := extract_xid(e.name)) in missing_xids and e.is_dir(follow_symlinks=False):
+                    _legacy_used("overview.missing_xids", xid=xid, found=e.name)
                     wd_by_xid[xid] = e.name
     log.info("  - workdir lookup took %.2fs (%d workdirs matched)", time.time() - t2, len(wd_by_xid))
 
@@ -592,9 +620,9 @@ def get_overview():
             info["gpus_per_job"] = 0
             info["total_gpus"] = 0
             info["max_restarts"] = 0
-        # Remove raw jobs from response
-        if "jobs" in info:
-            del info["jobs"]
+        # Strip server-internal fields from the response payload.
+        info.pop("jobs", None)
+        info.pop("states", None)
 
     # Compute misc stats (non-XID jobs)
     misc = None
@@ -686,10 +714,12 @@ def last_metric(wd_path, metric_name="train/loss"):
         except Exception as e:
             log.debug("plattli read failed for %s: %s", wd_path, e)
 
-    # Fallback to jsonl
+    # LEGACY - BACKFILLED - REMOVE SOON: every workdir is now plattli (old
+    # metrics.jsonl files were converted in place). This fallback is dead.
     fname = wd_path / "metrics.jsonl"
     if not fname.exists():
         return {}
+    _legacy_used("metric.jsonl_fallback", wd=str(wd_path))
     try:
         res = subprocess.run(["tail", "-n", "1", str(fname)], capture_output=True, text=True)
         if res.returncode == 0 and res.stdout.strip():
@@ -883,12 +913,15 @@ def _find_xid_path(xid):
     wd_path = BASEDIR / xid
     if wd_path.exists():
         return wd_path
-    # LEGACY/BACKCOMPAT: old/renamed experiments may not live exactly at
-    # /workdirs/{xid}. Remove after all experiments are backfilled there.
+    # LEGACY - BACKFILLED - REMOVE SOON: all workdirs now live exactly at
+    # /workdirs/{xid} (bv2/tools/backfill_xid_dirname). The scan below is
+    # unreachable in steady state; the bare `return None` is the normal
+    # multi-server "this server doesn't have that XID" path.
     t0 = time.time()
     with os.scandir(BASEDIR) as it:
         for e in it:
             if xid in e.name and e.is_dir(follow_symlinks=False):
+                _legacy_used("find_xid_path.containment_scan", xid=xid, found=e.name)
                 log.info("  - _find_xid_path fallback took %.2fs", time.time() - t0)
                 return Path(e.path)
     log.info("  - _find_xid_path fallback took %.2fs (not found)", time.time() - t0)
@@ -919,12 +952,16 @@ def _jobs_by_wid(jobs_by_jid, launchids):
         jid = normalize_jid(jid_str)
         wid = extract_wid(job.get("COMMENT", ""))
         if wid is None and jid:
-            # LEGACY/BACKCOMPAT: older Slurm jobs may not have xid/wid
-            # comments. Remove after all live jobs have comment metadata.
+            # LEGACY - BACKFILLED - REMOVE SOON: live jobs now always have
+            # xid/wid in COMMENT (set by _launch.py; gaps patched by
+            # bv2/tools/backfill_slurm_comments).
+            _legacy_used("jobs_by_wid.no_comment", jid=jid)
             wid = launch_wid_by_jid.get(jid)
         if wid is None:
-            # LEGACY/BACKCOMPAT: keep no-comment jobs visible rather than
-            # dropping them. Remove after all live jobs have comment metadata.
+            # LEGACY - BACKFILLED - REMOVE SOON: the no-comment "??N" bucket
+            # is unreachable in steady state; kept as a safety net so a
+            # corrupted live job stays visible rather than vanishing.
+            _legacy_used("jobs_by_wid.unknown_bucket", jid=jid)
             unknown.append(job)
             continue
         old = jobs.get(wid)
@@ -1017,9 +1054,10 @@ def _get_xid_info_from_launchids(xid, wd_path, launchids, t0):
             status = detail_status_from_exit_status(config.get("exit_status"))
             if status is None:
                 if done_by_wid.get(wid, False):
-                    # LEGACY/BACKCOMPAT: DONE predates exit_status. Remove
-                    # after exit_status has been backfilled into existing
-                    # configs.
+                    # LEGACY - BACKFILLED - REMOVE SOON: exit_status backfilled
+                    # via bv2/tools/backfill_exit_status; DONE-only path is
+                    # unreachable in steady state.
+                    _legacy_used("xid_info.done_no_exit_status", xid=xid, wid=wid)
                     status = "DONE"
                 else:
                     status = "UNKNOWN"
@@ -1085,8 +1123,11 @@ def get_xid_info(xid: str):
     if launchids:
         return _get_xid_info_from_launchids(xid, wd_path, launchids, t0)
 
-    # LEGACY/BACKCOMPAT: full reconstruction for experiments without
-    # launchids.json. Remove after launch metadata is backfilled.
+    # LEGACY - BACKFILLED - REMOVE SOON: full reconstruction for experiments
+    # without launchids.json. Backfilled by bv2/tools/backfill_launchids_json;
+    # this whole branch (and the comment-recovery fallback below) is dead in
+    # steady state.
+    _legacy_used("xid_info.no_launchids", xid=xid)
 
     # Fire squeue + small NFS reads up front so they overlap with the scandir/config work.
     t1 = time.time()
@@ -1199,11 +1240,12 @@ def get_xid_info(xid: str):
         if jid_str in existing_jids:
             continue  # Already have this job from workdirs
         jid = int(jid_str) if jid_str.isdigit() else None
-        # LEGACY/BACKCOMPAT: old current jobs may be missing Slurm comments,
-        # so sacct.submit_line is used to recover WID. Remove after comments
-        # and launch metadata are backfilled.
+        # LEGACY - BACKFILLED - REMOVE SOON: inside the launchids-missing
+        # branch. Comments + launchids are both backfilled, so this
+        # sacct.submit_line recovery is unreachable.
         wid = extract_wid(job_info.get("COMMENT", ""))
         if wid is None and jid and jid in saccts:
+            _legacy_used("xid_info.sacct_submit_line", xid=xid, jid=jid)
             wid = extract_wid(saccts[jid].get("submit_line", ""))
         # If we couldn't extract wid, use "??" placeholder
         if wid is None:
@@ -1313,8 +1355,9 @@ def get_xid_metrics(xid: str, metric: str = "train/loss"):
         log.info("GET /api/xid/%s/metrics - done: %d launch-indexed WUs (%.2fs)", xid, len(result), time.time() - t0)
         return result
 
-    # LEGACY/BACKCOMPAT: config scan for experiments without launchids.json.
-    # Remove after launch metadata is backfilled.
+    # LEGACY - BACKFILLED - REMOVE SOON: config scan for experiments without
+    # launchids.json. Backfilled by bv2/tools/backfill_launchids_json.
+    _legacy_used("xid_metrics.no_launchids", xid=xid)
 
     # Get workdirs
     workdirs = dir_names(wd_path)
@@ -1354,11 +1397,14 @@ def get_wu_config(xid: str, wid: int):
     """Get full config.json for a specific work unit."""
     wd_path = BASEDIR / xid
     if not wd_path.exists():
-        # LEGACY/BACKCOMPAT: old/renamed experiments may not live exactly at
-        # /workdirs/{xid}. Remove after all experiments are backfilled there.
+        # LEGACY - BACKFILLED - REMOVE SOON: all workdirs now live exactly at
+        # /workdirs/{xid} (bv2/tools/backfill_xid_dirname). The scan below is
+        # unreachable in steady state; the bare 404 is the normal
+        # "no such XID on this server" path.
         with os.scandir(BASEDIR) as it:
             for e in it:
                 if xid in e.name and e.is_dir(follow_symlinks=False):
+                    _legacy_used("wu_config.containment_scan", xid=xid, wid=wid, found=e.name)
                     wd_path = Path(e.path)
                     break
             else:
@@ -1378,9 +1424,10 @@ def get_wu_config(xid: str, wid: int):
                 media_type="application/json",
             )
 
-    # LEGACY/BACKCOMPAT: old/manual workdir names may not end in "-{wid}".
-    # Remove after all workdir dirs use the normal suffix convention or are
-    # indexed elsewhere.
+    # LEGACY - BACKFILLED - REMOVE SOON: workdir names now always end in
+    # "-{wid}" (bv2/tools/backfill_wid_suffix). The scan below is
+    # unreachable in steady state; falling through to the 404 below is
+    # the normal "no such WID on this server" path.
     for name in sub_dirs:
         config_path = wd_path / name / "config.json"
         if not config_path.exists():
@@ -1388,6 +1435,7 @@ def get_wu_config(xid: str, wid: int):
         try:
             config = json.loads(config_path.read_text())
             if config.get("wid") == wid:
+                _legacy_used("wu_config.config_scan_suffix", xid=xid, wid=wid, found=name)
                 return Response(
                     content=json.dumps(config, indent=2),
                     media_type="application/json",
@@ -1704,15 +1752,17 @@ def _resolve_wu_dir(xid: str, wid) -> str:
         if name.endswith(suffix):
             return name
 
-    # LEGACY/BACKCOMPAT: old/manual workdir names may not end in "-{wid}".
-    # Remove after all workdir dirs use the normal suffix convention or are
-    # indexed elsewhere.
+    # LEGACY - BACKFILLED - REMOVE SOON: workdir names now always end in
+    # "-{wid}" (bv2/tools/backfill_wid_suffix). The scan below is
+    # unreachable in steady state; falling through to the XID-root return
+    # is the normal "no such WID on this server" path.
     for name in sub_dirs:
         config_file = wd_path / name / "config.json"
         if config_file.exists():
             try:
                 config = json.loads(config_file.read_text())
                 if str(config.get("wid")) == wid_str:
+                    _legacy_used("resolve_wu_dir.config_scan_suffix", xid=xid, wid=wid_str, found=name)
                     return name
             except:
                 pass
