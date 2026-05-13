@@ -397,9 +397,22 @@ class MemoryTracker:
                 continue
 
             # Invariant: if a node uses a storage, it must be live
-            assert storage_key in self.current_live_storages, (
-                "all input storages should be currently allocated"
-            )
+            if storage_key not in self.current_live_storages:
+                allocator = self.alias_tracker.storage_to_allocator.get(storage_key)
+                all_uses = self.alias_tracker.storage_to_uses.get(
+                    storage_key, OrderedSet()
+                )
+                scheduled_uses = [u.name for u in all_uses if u in self.scheduled]
+                unscheduled_uses = [u.name for u in all_uses if u not in self.scheduled]
+                raise AssertionError(
+                    f"Storage allocated by {allocator.name if allocator else '?'} "
+                    f"(op={allocator.op if allocator else '?'}) "
+                    f"is not live when scheduling {node.name} (op={node.op}). "
+                    f"scheduled_uses={scheduled_uses}, "
+                    f"unscheduled_uses={unscheduled_uses}, "
+                    f"total_scheduled={len(self.scheduled)}, "
+                    f"live_storages={len(self.current_live_storages)}"
+                )
 
             if not self.is_releasable(
                 self.alias_tracker.storage_to_allocator[storage_key]
