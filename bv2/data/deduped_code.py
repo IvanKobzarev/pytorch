@@ -37,8 +37,9 @@ class Dataset:
         self.seed = seed
         self.bpe_drop_p = bpe_drop_p
         self.bpe_drop_frac = bpe_drop_frac
-        self.ranks = self.tt.mergeable_ranks
-        self._pat = regex.compile(self.tt.pat_str)
+        if bpe_drop_frac > 0:
+            self.ranks = self.tt.mergeable_ranks
+            self._pat = regex.compile(self.tt.pat_str)
 
     def _encode_with_dropout(self, text, rng):
         # Per pretoken drop here. To explore per merge drop and per sequence drop variants.

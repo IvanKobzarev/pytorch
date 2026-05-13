@@ -1,6 +1,6 @@
-# bv2/tools/launch_local bv2.train bv2/config/x/code_bpe_drop.py nsteps:=20
-# bv2/tools/launch_slurm bv2.train bv2/config/x/code_bpe_drop.py --qos h100_rigi_high --gpus-per-node 8 --nodes 1 'name:=f"zhai-code_bpe_drop-{c.xid}-{c.wid}"'
-# bv2/tools/launch_slurm bv2.train bv2/config/x/code_bpe_drop.py --qos lowest --account fair_amaia_cw_explore --gpus-per-node 8 --nodes 1 'name:=f"zhai-code_bpe_drop-{c.xid}-{c.wid}"'
+# bv2/tools/launch_local bv2.train x/zhai/config/code_bpe_drop.py nsteps:=20
+# bv2/tools/launch_slurm bv2.train x/zhai/config/code_bpe_drop.py --qos h100_rigi_high --gpus-per-node 8 --nodes 1 'name:=f"zhai-code_bpe_drop-{c.xid}-{c.wid}"'
+# bv2/tools/launch_slurm bv2.train x/zhai/config/code_bpe_drop.py --qos lowest --account fair_amaia_cw_explore --gpus-per-node 8 --nodes 1 'name:=f"zhai-code_bpe_drop-{c.xid}-{c.wid}"'
 
 import sws
 
