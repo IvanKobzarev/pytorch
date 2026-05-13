@@ -432,10 +432,16 @@ class MemoryTracker:
         if node.op in ("placeholder", "get_attr", "output"):
             return
 
-        # Add fresh allocations
-        fresh_allocations = self.alias_tracker.get_fresh_allocations(node)
+        # Mark all output storages as live. Using output storages (not just
+        # fresh allocations) handles shared storages between forward and
+        # recomputed nodes: both output the same storage but only the first
+        # is the "allocator". When recomputed is scheduled before forward,
+        # fresh allocations alone would miss the storage.
+        output_storages = self.alias_tracker.node_to_output_storages.get(
+            node, OrderedSet()
+        )
         alloc_bytes = 0
-        for storage_key in fresh_allocations:
+        for storage_key in output_storages:
             if (
                 self.device_filter(storage_key.device)
                 and storage_key not in self.current_live_storages
@@ -460,7 +466,7 @@ class MemoryTracker:
         log.debug(
             "Scheduled %s: memory change %d allocs, %d frees, current memory: %d MB",
             node.name,
-            len(fresh_allocations),
+            len(output_storages),
             len(storages_to_free),
             self.current_memory_bytes // (1024 * 1024),
         )
