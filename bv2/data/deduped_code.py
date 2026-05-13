@@ -30,7 +30,8 @@ class Dataset:
                  bpe_drop_p=0.0, bpe_drop_frac=0.0):
         # Idea: here or in pp: randomize sub-seqlen, because many are >32k!
         self.reader = get_sackli_reader(PATH[split], cache)
-        self.tt = get_tiktoken(**(tokenizer or {}), extras=("bos_drop",))
+        extras = ("bos_drop",) if bpe_drop_frac > 0 else ()
+        self.tt = get_tiktoken(**(tokenizer or {}), extras=extras)
         self.first_N = first_N
         self.epochs = epochs
         self.seed = seed
