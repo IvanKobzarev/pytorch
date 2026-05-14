@@ -544,8 +544,18 @@
 
         async function loadTree() {
             try {
-                // If we have a basePath (work-unit folder), load only that subtree
-                const resp = await fetch(getTreeUrl());
+                // If we have a basePath (work-unit folder), load only that subtree.
+                let resp = await fetch(getTreeUrl());
+                if (!resp.ok && basePath) {
+                    // basePath may actually be a file at the XID root (e.g.
+                    // /files/{xid}/something.html). Fall back to the XID root
+                    // tree and treat the whole path as the initial file path.
+                    initialFilePath = initialFilePath ? `${basePath}/${initialFilePath}` : basePath;
+                    basePath = '';
+                    document.getElementById('xidDisplay').textContent = xid;
+                    document.title = `Workdir: ${xid}`;
+                    resp = await fetch(getTreeUrl());
+                }
                 if (!resp.ok) throw new Error('Failed to load tree');
                 const data = await resp.json();
                 treeData = data.tree;
@@ -676,7 +686,19 @@
                 const resp = await fetch(`/api/xid/${xid}/files/content/${encodeURIComponent(fullPath)}`);
                 if (resp.ok) {
                     const content = await resp.text();
-                    panel.innerHTML = `<div class="file-view">${escapeHtml(content)}</div>`;
+                    if (path.toLowerCase().endsWith('.html')) {
+                        // Render HTML inline in a sandboxed iframe. srcdoc keeps
+                        // it same-origin-isolated; allow-scripts lets analysis
+                        // notebooks (plotly, bokeh, etc.) actually run.
+                        panel.innerHTML = '';
+                        const iframe = document.createElement('iframe');
+                        iframe.srcdoc = content;
+                        iframe.sandbox = 'allow-scripts';
+                        iframe.style.cssText = 'width:100%; height:100%; border:0; display:block; background:#fff;';
+                        panel.appendChild(iframe);
+                    } else {
+                        panel.innerHTML = `<div class="file-view">${escapeHtml(content)}</div>`;
+                    }
                     downloadBtn.style.display = 'block';
                 } else {
                     const err = await resp.json();
