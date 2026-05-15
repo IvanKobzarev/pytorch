@@ -100,11 +100,11 @@ def sweep():
                 yield f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", f"c.nsteps={nsteps}", f"c.data.bpe_drop_p={p}", f"c.data.bpe_drop_frac={frac}"
 
             # baselines (no BPE dropout)
-            yield f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", "c.nsteps=7341", "c.data.bpe_drop_p=0.0", "c.data.bpe_drop_frac=0.0"
+            yield f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", "c.nsteps=7341", "c.data.bpe_drop_p=0.0", "c.data.bpe_drop_frac=0.0", "c.evals.pplx_byte=None"
 
             # byte tokenizer baselines
             for first_N, nsteps in [(256, 29766),]:
-                yield f"c.data.tokenizer.first_N={first_N}", f"c.nsteps={nsteps}", f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", "c.data.bpe_drop_p=0.0", "c.data.bpe_drop_frac=0.0"
+                yield f"c.data.tokenizer.first_N={first_N}", f"c.nsteps={nsteps}", f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", "c.data.bpe_drop_p=0.0", "c.data.bpe_drop_frac=0.0", "c.evals.pplx_byte=None"
 
     # Same sweep but on 1M data (4x more data -> 4x more steps).
     for depth, dim in [(12, 3072), (12, 2048), (8, 2048), (8, 1024)]:
@@ -113,7 +113,7 @@ def sweep():
                                     (0.50, 0.063, 7835*4), (0.50, 0.117, 8309*4), (0.50, 0.1803, 8903*4), (0.50, 0.3407, 10597*4), (0.50, 0.5266, 12808*4), (0.50, 1.0, 18444*4)]:
                 yield 'c.data.split="codewall_train_1M"', f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", f"c.nsteps={nsteps}", f"c.data.bpe_drop_p={p}", f"c.data.bpe_drop_frac={frac}"
 
-            yield 'c.data.split="codewall_train_1M"', f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", f"c.nsteps={7341*4}", "c.data.bpe_drop_p=0.0", "c.data.bpe_drop_frac=0.0"
+            yield 'c.data.split="codewall_train_1M"', f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", f"c.nsteps={7341*4}", "c.data.bpe_drop_p=0.0", "c.data.bpe_drop_frac=0.0", "c.evals.pplx_byte=None"
 
             for first_N, nsteps in [(256, 29766*4),]:
-                yield 'c.data.split="codewall_train_1M"', f"c.data.tokenizer.first_N={first_N}", f"c.nsteps={nsteps}", f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", "c.data.bpe_drop_p=0.0", "c.data.bpe_drop_frac=0.0"
+                yield 'c.data.split="codewall_train_1M"', f"c.data.tokenizer.first_N={first_N}", f"c.nsteps={nsteps}", f"{depth=}", f"c.lr_muon={lr_muon}", f"{dim=}", "c.data.bpe_drop_p=0.0", "c.data.bpe_drop_frac=0.0", "c.evals.pplx_byte=None"

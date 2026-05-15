@@ -233,6 +233,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         teval0, ran_eval = perf_counter(), False
         for ev_name in c.get("evals") or {}:
             ev = c.evals[ev_name]
+            if ev is None:
+                continue
             is_step = (step == 2 or (step > 2 and step % ev.steps == 0)) if isinstance(ev.steps, int) else step in ev.steps
             if u.about_to_get_killed() or not (is_step or step == c.nsteps):  # Always run on last step.
                 continue
