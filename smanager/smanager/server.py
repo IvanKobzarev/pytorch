@@ -370,6 +370,7 @@ def _extra_info(xid_info):
     except (OSError, StopIteration):
         info["config"] = "?"
 
+    active_jobs_by_wid = {}
     if "jobs" in info:
         active_by_wid = {}
         active_jid_by_wid = {}
@@ -383,8 +384,10 @@ def _extra_info(xid_info):
                 _legacy_used("extra_info.no_comment", xid=xid, jid=jid)
                 wid = wid_by_launch_jid.get(jid)
             if wid is not None and jid:
-                active_by_wid[wid] = job.get("STATE", "UNKNOWN")
-                active_jid_by_wid[wid] = jid
+                active_jobs_by_wid.setdefault(wid, []).append(job)
+                if wid not in active_jid_by_wid or jid > active_jid_by_wid[wid]:
+                    active_by_wid[wid] = job.get("STATE", "UNKNOWN")
+                    active_jid_by_wid[wid] = jid
 
         finished_by_wid = {}
         if not skip_config_loading:
@@ -451,8 +454,9 @@ def _extra_info(xid_info):
             info["effective_states"] = dict(states)
 
     info["name"] = extract_common_name(workdir_names, xid)
-    # Count WUs with duplicate workdirs (warning_count)
-    info["warning_count"] = sum(1 for c in wid_counts.values() if c > 1)
+    warning_wids = {wid for wid, count in wid_counts.items() if count > 1}
+    warning_wids.update(_active_duplicate_warnings(active_jobs_by_wid))
+    info["warning_count"] = len(warning_wids)
     try:
         info["note"] = note_fut.result().strip()
     except FileNotFoundError:
@@ -949,6 +953,20 @@ def _load_current_xid_jobs(xid):
     return {row[0]: dict(zip(headers, row)) for row in job_rows}
 
 
+def _active_duplicate_warnings(active_jobs_by_wid):
+    warnings = {}
+    for wid, jobs in active_jobs_by_wid.items():
+        if len(jobs) <= 1:
+            continue
+        parts = []
+        for job in sorted(jobs, key=lambda j: normalize_jid(j.get("JOBID")) or 0):
+            jid = normalize_jid(job.get("JOBID"))
+            state = job.get("STATE", "UNKNOWN")
+            parts.append(f"{jid} {state}" if jid else state)
+        warnings[wid] = [f"Multiple active Slurm jobs for this WID: {', '.join(parts)}"]
+    return warnings
+
+
 def _jobs_by_wid(jobs_by_jid, launchids):
     launch_wid_by_jid = {
         normalize_jid(meta.get("launchjid")): normalize_wid(wid)
@@ -956,6 +974,7 @@ def _jobs_by_wid(jobs_by_jid, launchids):
         if isinstance(meta, dict) and normalize_jid(meta.get("launchjid"))
     }
     jobs = {}
+    active_jobs_by_wid = {}
     unknown = []
     for jid_str, job in jobs_by_jid.items():
         jid = normalize_jid(jid_str)
@@ -973,12 +992,13 @@ def _jobs_by_wid(jobs_by_jid, launchids):
             _legacy_used("jobs_by_wid.unknown_bucket", jid=jid)
             unknown.append(job)
             continue
+        active_jobs_by_wid.setdefault(wid, []).append(job)
         old = jobs.get(wid)
         if old is None or (jid or 0) > (normalize_jid(old.get("JOBID")) or 0):
             jobs[wid] = job
     for i, job in enumerate(unknown):
         jobs[f"??{i}"] = job
-    return jobs
+    return jobs, _active_duplicate_warnings(active_jobs_by_wid)
 
 
 def _workdirs_by_suffix(wd_path):
@@ -1027,7 +1047,9 @@ def _get_xid_info_from_launchids(xid, wd_path, launchids, t0):
 
     jobs_by_jid = squeue_fut.result()
     log.info("  - squeue took %.2fs", time.time() - t1)
-    jobs_by_wid = _jobs_by_wid(jobs_by_jid, launchids)
+    jobs_by_wid, active_warnings = _jobs_by_wid(jobs_by_jid, launchids)
+    for wid, messages in active_warnings.items():
+        warnings.setdefault(wid, []).extend(messages)
     launch_wids = {normalize_wid(wid) for wid in launchids}
     all_wids = launch_wids | set(jobs_by_wid)
 
@@ -1169,6 +1191,13 @@ def get_xid_info(xid: str):
 
     configs = {}
     warnings = {}  # wid -> list of warning strings
+    active_jobs_by_wid = {}
+    for job in jobs_by_jid.values():
+        if (wid := extract_wid(job.get("COMMENT", ""))) is not None:
+            active_jobs_by_wid.setdefault(wid, []).append(job)
+    for wid, messages in _active_duplicate_warnings(active_jobs_by_wid).items():
+        warnings.setdefault(wid, []).extend(messages)
+
     for wuwd_name, config in config_results:
         wid = normalize_wid(config.get("wid", wuwd_name))
         new_jid = config.get("jid")
