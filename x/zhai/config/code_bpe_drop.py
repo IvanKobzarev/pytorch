@@ -13,6 +13,7 @@ def get_config():
 
     c.data.name = "deduped_code"
     c.data.split = "codewall_train_0.25M"
+    c.data.cache = True
     c.data.bpe_drop_p = 0.063
     c.data.bpe_drop_frac = 0.25
     c.data.tokenizer.first_N = None
@@ -42,6 +43,7 @@ def get_config():
     c.evals.pplx.steps = 500
     c.evals.pplx.data.epochs = 1
     c.evals.pplx.data.name = "deduped_code"
+    c.evals.pplx.data.cache = lambda: c.data.cache
     c.evals.pplx.data.split = "codewall_val"
     c.evals.pplx.data.bpe_drop_p = 0.0
     c.evals.pplx.data.bpe_drop_frac = 0.0
@@ -53,6 +55,7 @@ def get_config():
     c.evals.pplx_byte.steps = 5000  # infrequent byte-level evals
     c.evals.pplx_byte.data.epochs = 1
     c.evals.pplx_byte.data.name = "deduped_code"
+    c.evals.pplx_byte.data.cache = lambda: c.data.cache
     c.evals.pplx_byte.data.split = "codewall_val"
     c.evals.pplx_byte.data.bpe_drop_p = 1.0
     c.evals.pplx_byte.data.bpe_drop_frac = 1.0
