@@ -643,6 +643,9 @@
         let currentXidData = null;
         let currentMetric = '';
         let regexFilterMode = false;
+        let avgProgressExcludeCancelled = false;  // Toggle for average progress: false = include all, true = exclude CANCELLED
+        let currentProgressData = null;  // Store progress data for recalculation when toggling modes
+        let currentStatusDataLoaded = false;
 
         async function loadPrefsFromServers() {
             // Clear existing favorites before reloading
@@ -1670,6 +1673,11 @@
             document.getElementById('xid-detail').classList.add('active');
 
             const content = document.getElementById('xidContent');
+            currentXidData = null;
+            currentProgressData = null;
+            currentStatusDataLoaded = false;
+            document.getElementById('xidDisplay').textContent = xid;
+            document.getElementById('xidActions').innerHTML = '';
             content.innerHTML = '<p class="loading">Auto-discovering server...</p>';
             const metric = document.getElementById('metricInput').value.trim();
 
@@ -1683,11 +1691,13 @@
                         document.getElementById('xidServer').value = i;
                         const data = await resp.json();
                         currentXidData = data;
+                        currentProgressData = null;
+                        currentStatusDataLoaded = false;
                         currentMetric = metric;
                         renderXidDetail(data, metric);
                         // Fetch metrics separately
                         fetchAndPopulateMetrics(servers[i].url, xid, metric);
-                        fetchAndPopulateSacct(servers[i].url);
+                        fetchAndPopulateSacct(servers[i].url, xid);
                         return;
                     }
                 } catch (e) {
@@ -1710,6 +1720,11 @@
                 return;
             }
 
+            currentXidData = null;
+            currentProgressData = null;
+            currentStatusDataLoaded = false;
+            document.getElementById('xidDisplay').textContent = xid;
+            document.getElementById('xidActions').innerHTML = '';
             content.innerHTML = '<p class="loading">Loading...</p>';
 
             try {
@@ -1720,12 +1735,14 @@
                 renderServers();
                 const data = await resp.json();
                 currentXidData = data;
+                currentProgressData = null;
+                currentStatusDataLoaded = false;
                 currentMetric = metric;
                 renderXidDetail(data, metric);
 
                 // Then fetch metrics separately (lazy load)
                 fetchAndPopulateMetrics(servers[serverIdx].url, xid, metric);
-                fetchAndPopulateSacct(servers[serverIdx].url);
+                fetchAndPopulateSacct(servers[serverIdx].url, xid);
             } catch (e) {
                 servers[serverIdx].status = 'error';
                 renderServers();
@@ -1738,22 +1755,31 @@
                 const resp = await fetch(`${serverUrl}/api/xid/${xid}/metrics?metric=${encodeURIComponent(metric)}`, { signal: AbortSignal.timeout(60000) });
                 if (!resp.ok) return;
                 const metricsData = await resp.json();
+                if (currentXidData?.xid !== xid) return;
                 populateMetrics(metricsData, metric);
             } catch (e) {
                 console.log('Failed to fetch metrics:', e);
             }
         }
 
-        async function fetchAndPopulateSacct(serverUrl) {
+        async function fetchAndPopulateSacct(serverUrl, xid) {
             const activeStatuses = ['RUNNING', 'PENDING', 'REQUEUE_HOLD', 'COMPLETING'];
+            if (currentXidData?.xid !== xid) return;
             const jids = [...new Set((currentXidData?.wus || [])
                 .filter(wu => wu.jid && !activeStatuses.includes(wu.status))
                 .map(wu => wu.jid))];
-            if (jids.length === 0) return;
+            if (jids.length === 0) {
+                currentStatusDataLoaded = true;
+                updateAverageProgress();
+                return;
+            }
             try {
                 const resp = await fetch(`${serverUrl}/api/sacct?jids=${encodeURIComponent(jids.join(','))}`, { signal: AbortSignal.timeout(60000) });
                 if (!resp.ok) return;
-                populateSacct(await resp.json());
+                const sacctData = await resp.json();
+                if (currentXidData?.xid !== xid) return;
+                currentStatusDataLoaded = true;
+                populateSacct(sacctData);
             } catch (e) {
                 console.log('Failed to fetch sacct:', e);
             }
@@ -1791,10 +1817,14 @@
                     statusCell.innerHTML = `<span class="status-emoji status-${String(effectiveStatus).toLowerCase()}">${statusEmoji}</span>`;
                 }
             }
+            // Update average progress after status updates
+            updateAverageProgress();
         }
 
         function populateMetrics(metricsData, metricName) {
             // Update each row's step, metric, and progress cells
+            // Store progress data for average calculation
+            currentProgressData = {};
             for (const [wid, metrics] of Object.entries(metricsData)) {
                 const stepCell = document.querySelector(`td[data-wid="${wid}"][data-field="step"]`);
                 const metricCell = document.querySelector(`td[data-wid="${wid}"][data-field="metric"]`);
@@ -1814,11 +1844,57 @@
                 if (progressCell && nsteps) {
                     const step = metrics.step;
                     if (step) {
-                        const pct = (step / nsteps * 100).toFixed(1);
-                        progressCell.innerHTML = `<div class="progress-bar"><span class="fill" style="width:${pct}%"></span>${pct}%</div>`;
+                        const pct = step / nsteps * 100;
+                        currentProgressData[wid] = pct;
+                        progressCell.innerHTML = `<div class="progress-bar"><span class="fill" style="width:${pct}%"></span>${pct.toFixed(1)}%</div>`;
+                    } else {
+                        currentProgressData[wid] = 0;
                     }
+                } else {
+                    currentProgressData[wid] = 0;
                 }
             }
+            updateAverageProgress();
+        }
+
+        function updateAverageProgress() {
+            // Update average progress bar in header if it exists
+            // Only populate when we have both metrics and status data
+            const avgProgressEl = document.getElementById('xidAvgProgress');
+            if (!avgProgressEl) return;
+            avgProgressEl.innerHTML = '';
+            if (!currentXidData || !currentProgressData || !currentStatusDataLoaded) return;
+
+            let totalPct = 0;
+            let count = 0;
+            let excludedCount = 0;
+
+            for (const wu of currentXidData.wus) {
+                const wid = String(wu.wid);
+                const pct = currentProgressData[wid] || 0;
+                const isCancelled = wu.status === 'CANCELLED';
+
+                if (avgProgressExcludeCancelled && isCancelled) {
+                    excludedCount++;
+                    continue;
+                }
+
+                totalPct += pct;
+                count++;
+            }
+
+            if (count > 0) {
+                const avgPct = totalPct / count;
+                const modeText = avgProgressExcludeCancelled ? 'excluding CANCELLED' : 'all work-units';
+                const modeIndicator = avgProgressExcludeCancelled ? 'Live' : 'All';
+                const excludedText = excludedCount > 0 ? ` (${excludedCount} CANCELLED excluded)` : '';
+                avgProgressEl.innerHTML = `<div class="progress-bar" style="width:120px;display:inline-block;font-size:13px;cursor:pointer;" onclick="toggleAvgProgressMode()" title="Average progress across ${count} work-units (${modeText})${excludedText}. Click to toggle mode."><span class="fill" style="width:${avgPct}%"></span>${avgPct.toFixed(1)}% (${modeIndicator})</div>`;
+            }
+        }
+
+        function toggleAvgProgressMode() {
+            avgProgressExcludeCancelled = !avgProgressExcludeCancelled;
+            updateAverageProgress();
         }
 
         function renderXidDetail(data, metricToShow) {
@@ -1837,11 +1913,14 @@
 
             // Update XID display and actions in the header bar
             document.getElementById('xidDisplay').textContent = xid;
+            // Show average progress bar when there's more than 1 work-unit
+            const avgProgressHtml = wus.length > 1 ? `<span id="xidAvgProgress" class="mono" style="display:inline-flex;align-items:center;font-size:13px;"></span>` : '';
             document.getElementById('xidActions').innerHTML = `
                 <span class="server-badge" title="Server hosting this XID">${esc(serverName)}</span>
                 <span class="xid-btn ${favorites.has(xid) ? 'active' : ''}" onclick="toggleFavoriteDetail('${xid}')" title="Favorite">${favorites.has(xid) ? '❤︎' : '♡'}</span>
                 <span class="xid-btn fa-icon" onclick="window.open('${serverUrl}/code/${xid}', '_blank')" title="Browse source code">🗎</span>
                 <span class="xid-btn fa-icon" onclick="window.open('${serverUrl}/files/${xid}', '_blank')" title="Browse workdir">🗁</span>
+                ${avgProgressHtml}
                 ${!hasActiveJobs ? `<span class="xid-btn" onclick="deleteXidDetail('${serverUrl}', ${serverIdx}, '${xid}')" title="Delete ${xid}">🗑</span>` : ''}
                 <span class="xid-note ${note ? 'has-note' : ''}" onclick="editXidNote(this, ${serverIdx}, '${xid}', '${escapedNote}')">${esc(displayText) || '<span style="opacity:0.3">click to add note</span>'}</span>
             `;
