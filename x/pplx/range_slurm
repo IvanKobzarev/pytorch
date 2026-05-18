@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "usage:" >&2
+  echo "  range_slurm stop <xid> <lo> <hi>" >&2
+  echo "  range_slurm start <xid> <lo> <hi>" >&2
+  exit 2
+}
+
+delay=0.05
+action=${1:-}
+
+if [[ $action == stop && $# == 4 ]]; then
+  xid=$2
+  lo=$3
+  hi=$4
+  mapfile -t rows < <(
+    squeue -h -u "$USER" -n "$xid" -O JobId:30,Comment:100 |
+    awk -v lo="$lo" -v hi="$hi" '
+      $2 ~ /wid=/ {
+        wid = $2
+        sub(/^.*wid=/, "", wid)
+        sub(/,.*/, "", wid)
+        if (wid >= lo && wid <= hi) print wid, $1
+      }' | sort -n
+  )
+  ((${#rows[@]})) || {
+    echo "No jobs found for xid=$xid in wid range [$lo, $hi]."
+    exit 0
+  }
+  echo "Stopping ${#rows[@]} jobs for xid=$xid in wid range [$lo, $hi]."
+  for row in "${rows[@]}"; do
+    set -- $row
+    echo "scancel jid=$2 wid=$1"
+    scancel "$2"
+    sleep "$delay"
+  done
+elif [[ $action == start && $# == 4 ]]; then
+  xid=$2
+  lo=$3
+  hi=$4
+  echo "Starting xid=$xid for wid range [$lo, $hi]."
+  for ((wid=lo; wid<=hi; wid++)); do
+    script=/checkpoint/rigi/bv2/workdirs/$xid/launch_$wid.sh
+    [[ -f $script ]] || {
+      echo "missing $script"
+      continue
+    }
+    echo "$script"
+    "$script"
+    sleep "$delay"
+  done
+else
+  usage
+fi
