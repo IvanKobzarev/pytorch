@@ -264,6 +264,16 @@ def state_from_sacct(sacct):
     return state or 'UNKNOWN'
 
 
+def state_from_sacct_compact(state, exit_code):
+    state = (state or "").split()[0].rstrip("+")
+    return_code = 0
+    if exit_code:
+        return_code = int(exit_code.split(":", 1)[0]) if exit_code.split(":", 1)[0].isdigit() else 0
+    if state == "CANCELLED":
+        return "CANCELLED" if return_code == 0 else "CANCELLED_FAIL"
+    return state or "UNKNOWN"
+
+
 def detail_status_from_exit_status(status):
     state = state_from_exit_status(status)
     if state is True:
@@ -277,15 +287,22 @@ def _extra_info(xid_info):
     """Get extra info for an XID.
 
     Args:
-        xid_info: Tuple of (xid, info) or (xid, info, skip_config_loading)
+        xid_info: Tuple of (xid, info), (xid, info, skip_config_loading), or
+            (xid, info, skip_config_loading, skip_active_done_loading).
             Config loading is only a fallback/backcompat path for legacy
             workdirs that cannot be mapped to WIDs from launch metadata/name.
+            Active DONE loading is skipped for hot overview rows where squeue
+            is already the authoritative current-state source.
     """
-    if len(xid_info) == 3:
+    if len(xid_info) == 4:
+        xid, info, skip_config_loading, skip_active_done_loading = xid_info
+    elif len(xid_info) == 3:
         xid, info, skip_config_loading = xid_info
+        skip_active_done_loading = False
     else:
         xid, info = xid_info
         skip_config_loading = False
+        skip_active_done_loading = False
 
     wd_path = BASEDIR / info["wd"]
 
@@ -324,6 +341,25 @@ def _extra_info(xid_info):
         if isinstance(meta, dict)
     }
     wid_by_launch_jid = {jid: wid for wid, jid in launch_jid_by_wid.items() if jid}
+    active_jobs_by_wid = {}
+    active_by_wid = {}
+    active_jid_by_wid = {}
+    if "jobs" in info:
+        for job in info["jobs"]:
+            wid = extract_wid(job.get("COMMENT", ""))
+            jid = normalize_jid(job.get("JOBID"))
+            if wid is None and jid:
+                # LEGACY - BACKFILLED - REMOVE SOON: live jobs now always have
+                # xid/wid in COMMENT (set by _launch.py; gaps patched by
+                # bv2/tools/backfill_slurm_comments).
+                _legacy_used("extra_info.no_comment", xid=xid, jid=jid)
+                wid = wid_by_launch_jid.get(jid)
+            if wid is not None and jid:
+                active_jobs_by_wid.setdefault(wid, []).append(job)
+                if wid not in active_jid_by_wid or jid > active_jid_by_wid[wid]:
+                    active_by_wid[wid] = job.get("STATE", "UNKNOWN")
+                    active_jid_by_wid[wid] = jid
+
     workdir_names = []
     wid_counts = {}  # wid -> count (for duplicate detection)
     workdir_by_wid = {}
@@ -331,8 +367,19 @@ def _extra_info(xid_info):
     workdir_jid_by_wid = {}
     config_by_wid = {}
     info["wus"] = {}
-    done_results = fs_executor.map(_load_done_only, [(wd_path, wuwd_name) for wuwd_name in wuwd_names])
-    for wuwd_name, (_, wid, is_done, mtime) in zip(wuwd_names, done_results):
+    done_names = []
+    done_by_name = {}
+    for wuwd_name in wuwd_names:
+        wid = wid_from_workdir_name(wuwd_name)
+        if skip_active_done_loading and wid in active_by_wid:
+            done_by_name[wuwd_name] = (wid, False, None)
+        else:
+            done_names.append(wuwd_name)
+    done_results = fs_executor.map(_load_done_only, [(wd_path, wuwd_name) for wuwd_name in done_names])
+    for wuwd_name, (_, wid, is_done, mtime) in zip(done_names, done_results):
+        done_by_name[wuwd_name] = (wid, is_done, mtime)
+    for wuwd_name in wuwd_names:
+        wid, is_done, mtime = done_by_name[wuwd_name]
         wuwd = wd_path / wuwd_name
         if wid is None and not skip_config_loading:
             # LEGACY - BACKFILLED - REMOVE SOON: workdir names now always end
@@ -370,26 +417,9 @@ def _extra_info(xid_info):
     except (OSError, StopIteration):
         info["config"] = "?"
 
-    active_jobs_by_wid = {}
     if "jobs" in info:
-        active_by_wid = {}
-        active_jid_by_wid = {}
-        for job in info["jobs"]:
-            wid = extract_wid(job.get("COMMENT", ""))
-            jid = normalize_jid(job.get("JOBID"))
-            if wid is None and jid:
-                # LEGACY - BACKFILLED - REMOVE SOON: live jobs now always have
-                # xid/wid in COMMENT (set by _launch.py; gaps patched by
-                # bv2/tools/backfill_slurm_comments).
-                _legacy_used("extra_info.no_comment", xid=xid, jid=jid)
-                wid = wid_by_launch_jid.get(jid)
-            if wid is not None and jid:
-                active_jobs_by_wid.setdefault(wid, []).append(job)
-                if wid not in active_jid_by_wid or jid > active_jid_by_wid[wid]:
-                    active_by_wid[wid] = job.get("STATE", "UNKNOWN")
-                    active_jid_by_wid[wid] = jid
-
         finished_by_wid = {}
+        launch_only_wids = launch_wids - set(workdir_done_by_wid) - set(active_by_wid)
         if not skip_config_loading:
             missing_config_wids = [
                 wid for wid in set(workdir_done_by_wid) - set(active_by_wid)
@@ -429,12 +459,20 @@ def _extra_info(xid_info):
             # submitted, queued, or cancelled-before-running). Without this
             # they fall into the "UNKNOWN" bucket in the overview even though
             # sacct knows their state. Same batched sacct call covers them.
-            for wid in launch_wids - set(workdir_done_by_wid) - set(active_by_wid):
+            for wid in launch_only_wids:
                 if (jid := launch_jid_by_wid.get(wid)) is not None:
                     sacct_jids[jid] = wid
 
             for jid, sacct in load_sacct_many(sacct_jids).items():
                 finished_by_wid[sacct_jids[jid]] = state_from_sacct(sacct)
+        elif launch_only_wids:
+            # Keep hot overview fast: return launch-only WUs as UNKNOWN and let
+            # the browser resolve them via /api/sacct/states after first paint.
+            info["pending_sacct_jids"] = {
+                str(jid): str(wid)
+                for wid in launch_only_wids
+                if (jid := launch_jid_by_wid.get(wid)) is not None
+            }
 
         if active_by_wid or workdir_done_by_wid or launch_wids:
             states = Counter()
@@ -602,7 +640,10 @@ def get_overview():
 
     # Add extra info with threading
     t3 = time.time()
-    hot_items = [(xid, {"states": info["states"], "wd": info["wd"], "jobs": info["jobs"]}) for xid, info in hot_xids.items()]
+    hot_items = [
+        (xid, {"states": info["states"], "wd": info["wd"], "jobs": info["jobs"]}, True, True)
+        for xid, info in hot_xids.items()
+    ]
     hot_results = list(executor.map(_extra_info, hot_items))
     hot_xids = {}
     for xid, info in hot_results:
@@ -779,6 +820,51 @@ def load_sacct_many(jids):
     except Exception as e:
         log.debug("load_sacct_many failed for %s jobs: %s", len(jids), e)
     return {}
+
+
+def _xid_start_time(xid):
+    dt = datetime.strptime(xid, "%y%m%d_%H%M%S").replace(hour=0, minute=0, second=0)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _load_sacct_compact(cmd):
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            log.debug("compact sacct nonzero: rc=%s stderr=%s", result.returncode, result.stderr.strip())
+            return {}
+        states = {}
+        for line in result.stdout.splitlines():
+            if not line.strip():
+                continue
+            jid, state, exit_code = (line.split("|", 2) + ["", ""])[:3]
+            if jid := normalize_jid(jid):
+                states[jid] = state_from_sacct_compact(state, exit_code)
+        return states
+    except Exception as e:
+        log.debug("compact sacct failed: %s", e)
+    return {}
+
+
+def load_sacct_states_xid(xid):
+    return _load_sacct_compact([
+        "sacct", "-S", _xid_start_time(xid), "-X", "-n", "-P",
+        "--format=JobIDRaw,State,ExitCode", f"--name={xid}",
+    ])
+
+
+def load_sacct_states_many(jids, start_time=None):
+    jids = sorted({normalize_jid(jid) for jid in jids if normalize_jid(jid)})
+    if not jids:
+        return {}
+    cmd = ["sacct", "-X", "-n", "-P"]
+    if start_time:
+        cmd += ["-S", start_time]
+    cmd += [
+        f"--jobs={','.join(map(str, jids))}",
+        "--format=JobIDRaw,State,ExitCode",
+    ]
+    return _load_sacct_compact(cmd)
 
 
 def get_sacct_end_time(xid, user):
@@ -1137,6 +1223,67 @@ def get_sacct_info(jids=""):
     """Get accounting info for known job IDs."""
     saccts = load_sacct_many(jid.strip() for jid in jids.split(","))
     return {str(jid): format_sacct(sacct) for jid, sacct in saccts.items()}
+
+
+@app.post("/api/sacct/states")
+def get_sacct_states(payload=Body(...)):
+    """Get canonical overview states for known job IDs."""
+    t0 = time.time()
+    if isinstance(payload, list):
+        states = load_sacct_states_many(payload)
+        log.info("POST /api/sacct/states - done: %d jids legacy payload (%.2fs)",
+                 len(payload), time.time() - t0)
+        return {str(jid): state for jid, state in states.items()}
+
+    states = {}
+    missing_by_xid = {}
+    n_jids = 0
+    t_xids = time.time()
+    for xid, jids in payload.items():
+        wanted = {normalize_jid(jid) for jid in jids}
+        wanted.discard(None)
+        n_jids += len(wanted)
+        t_xid = time.time()
+        xid_states = load_sacct_states_xid(xid) if _xid_re.fullmatch(xid) else {}
+        xid_hits = 0
+        xid_missing = set()
+        for jid in wanted:
+            if jid in xid_states:
+                states[jid] = xid_states[jid]
+                xid_hits += 1
+            else:
+                xid_missing.add(jid)
+        if xid_missing:
+            missing_by_xid[xid] = xid_missing
+        log.info(
+            "  - sacct states %s: requested %d, name hits %d, fallback %d (%.2fs)%s",
+            xid, len(wanted), xid_hits, len(xid_missing), time.time() - t_xid,
+            f", misses {sorted(xid_missing)[:5]}" if xid_missing else "",
+        )
+    xid_time = time.time() - t_xids
+
+    t_fallback = time.time()
+    fallback_requested = 0
+    fallback_resolved = 0
+    for xid, missing_jids in missing_by_xid.items():
+        t_xid = time.time()
+        fallback_requested += len(missing_jids)
+        start_time = _xid_start_time(xid) if _xid_re.fullmatch(xid) else None
+        fallback_states = load_sacct_states_many(missing_jids, start_time=start_time)
+        fallback_resolved += len(fallback_states)
+        for jid, state in fallback_states.items():
+            states[jid] = state
+        log.info(
+            "  - sacct fallback %s: requested %d, resolved %d (%.2fs)",
+            xid, len(missing_jids), len(fallback_states), time.time() - t_xid,
+        )
+    fallback_time = time.time() - t_fallback
+    log.info(
+        "POST /api/sacct/states - done: %d xids, %d jids, %d resolved, %d fallback requested, %d fallback resolved (xids %.2fs, fallback %.2fs, total %.2fs)",
+        len(payload), n_jids, len(states), fallback_requested, fallback_resolved,
+        xid_time, fallback_time, time.time() - t0,
+    )
+    return {str(jid): state for jid, state in states.items()}
 
 
 @app.get("/api/xid/{xid}")

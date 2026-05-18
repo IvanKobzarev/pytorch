@@ -1016,11 +1016,60 @@
                 const data = await resp.json();
                 overviewData[serverIndex] = data;  // Only has "hot" key
                 server.status = 'ok';
+                resolvePendingSacctStates(serverIndex, data);
             } catch (e) {
                 server.status = 'error';
                 overviewData[serverIndex] = null;
             }
             renderServers();
+        }
+
+        function moveUnknownToState(info, state) {
+            if (!state || state === 'UNKNOWN') return false;
+            const states = info.effective_states || {};
+            if ((states.UNKNOWN || 0) <= 0) return false;
+            states.UNKNOWN--;
+            if (states.UNKNOWN === 0) delete states.UNKNOWN;
+            states[state] = (states[state] || 0) + 1;
+            info.effective_states = states;
+            return true;
+        }
+
+        async function resolvePendingSacctStates(serverIndex, data) {
+            const infoByJid = {};
+            const jidsByXid = {};
+            for (const [xid, info] of Object.entries(data.hot || {})) {
+                for (const jid of Object.keys(info.pending_sacct_jids || {})) {
+                    infoByJid[jid] = info;
+                    if (!jidsByXid[xid]) jidsByXid[xid] = [];
+                    jidsByXid[xid].push(jid);
+                }
+            }
+            const jids = Object.keys(infoByJid);
+            if (jids.length === 0) return;
+
+            try {
+                const resp = await fetch(`${servers[serverIndex].url}/api/sacct/states`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(jidsByXid),
+                    signal: AbortSignal.timeout(30000),
+                });
+                if (!resp.ok || overviewData[serverIndex] !== data) return;
+                const states = await resp.json();
+                let changed = false;
+                for (const [jid, state] of Object.entries(states)) {
+                    const info = infoByJid[jid];
+                    if (!info) continue;
+                    if (moveUnknownToState(info, state)) {
+                        delete info.pending_sacct_jids[jid];
+                        changed = true;
+                    }
+                }
+                if (changed) renderOverview();
+            } catch (e) {
+                console.error('Failed to resolve sacct states for server', serverIndex, e);
+            }
         }
 
         async function fetchInactiveOverview(serverIndex) {
@@ -1119,6 +1168,7 @@
                 { key: 'TIMEOUT', cls: 'bg-fail', label: 'Timeout' },
                 { key: 'CANCELLED_FAIL', cls: 'bg-fail', label: 'Cancelled' },
                 { key: 'CANCELLED', cls: 'bg-cancel-clean', label: 'Stopped' },
+                { key: 'UNKNOWN', cls: 'bg-unknown', label: 'Unknown' },
                 { key: true, cls: 'bg-done', label: 'Done' },
                 { key: 'COMPLETED', cls: 'bg-done', label: 'Completed' },
                 { key: 'COMPLETING', cls: 'bg-end', label: 'Completing' },
@@ -1126,7 +1176,6 @@
                 { key: 'RUNNING', cls: 'bg-run', label: 'Running' },
                 { key: 'PENDING', cls: 'bg-pend', label: 'Pending' },
                 { key: 'REQUEUE_HOLD', cls: 'bg-hold', label: 'Hold' },
-                { key: 'UNKNOWN', cls: 'bg-unknown', label: 'Unknown' },
             ];
 
             // Calculate total
