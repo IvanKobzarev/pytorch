@@ -265,7 +265,8 @@ def state_from_sacct(sacct):
 
 
 def state_from_sacct_compact(state, exit_code):
-    state = (state or "").split()[0].rstrip("+")
+    parts = (state or "").split()
+    state = parts[0].rstrip("+") if parts else ""
     return_code = 0
     if exit_code:
         return_code = int(exit_code.split(":", 1)[0]) if exit_code.split(":", 1)[0].isdigit() else 0
@@ -420,6 +421,10 @@ def _extra_info(xid_info):
     if "jobs" in info:
         finished_by_wid = {}
         launch_only_wids = launch_wids - set(workdir_done_by_wid) - set(active_by_wid)
+        no_done_workdir_wids = {
+            wid for wid, is_done in workdir_done_by_wid.items()
+            if not is_done and wid not in active_by_wid
+        }
         if not skip_config_loading:
             missing_config_wids = [
                 wid for wid in set(workdir_done_by_wid) - set(active_by_wid)
@@ -465,12 +470,12 @@ def _extra_info(xid_info):
 
             for jid, sacct in load_sacct_many(sacct_jids).items():
                 finished_by_wid[sacct_jids[jid]] = state_from_sacct(sacct)
-        elif launch_only_wids:
-            # Keep hot overview fast: return launch-only WUs as UNKNOWN and let
+        elif launch_only_wids or no_done_workdir_wids:
+            # Keep hot overview fast: return unresolved WUs as UNKNOWN and let
             # the browser resolve them via /api/sacct/states after first paint.
             info["pending_sacct_jids"] = {
                 str(jid): str(wid)
-                for wid in launch_only_wids
+                for wid in launch_only_wids | no_done_workdir_wids
                 if (jid := launch_jid_by_wid.get(wid)) is not None
             }
 
@@ -486,7 +491,12 @@ def _extra_info(xid_info):
                 elif wid in finished_by_wid:
                     states[finished_by_wid[wid]] += 1
                 elif wid in workdir_done_by_wid:
-                    states[workdir_done_by_wid[wid]] += 1
+                    if workdir_done_by_wid[wid]:
+                        states[True] += 1
+                    elif skip_config_loading:
+                        states["UNKNOWN"] += 1
+                    else:
+                        states[False] += 1
                 else:
                     states["UNKNOWN"] += 1
             info["effective_states"] = dict(states)
@@ -823,8 +833,11 @@ def load_sacct_many(jids):
 
 
 def _xid_start_time(xid):
-    dt = datetime.strptime(xid, "%y%m%d_%H%M%S").replace(hour=0, minute=0, second=0)
-    return dt.strftime("%Y-%m-%dT%H:%M:%S")
+    try:
+        dt = datetime.strptime(xid, "%y%m%d_%H%M%S").replace(hour=0, minute=0, second=0)
+        return dt.strftime("%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return None
 
 
 def _load_sacct_compact(cmd):
@@ -847,10 +860,11 @@ def _load_sacct_compact(cmd):
 
 
 def load_sacct_states_xid(xid):
-    return _load_sacct_compact([
-        "sacct", "-S", _xid_start_time(xid), "-X", "-n", "-P",
-        "--format=JobIDRaw,State,ExitCode", f"--name={xid}",
-    ])
+    cmd = ["sacct", "-X", "-n", "-P"]
+    if start_time := _xid_start_time(xid):
+        cmd += ["-S", start_time]
+    cmd += ["--format=JobIDRaw,State,ExitCode", f"--name={xid}"]
+    return _load_sacct_compact(cmd)
 
 
 def load_sacct_states_many(jids, start_time=None):
@@ -1005,6 +1019,80 @@ def format_sacct(sacct):
         "qwait": "never" if start in [0, SLURM_NO_START_TIME] else hms(start - eligible),
         "runtime": hms(time_info.get("elapsed", 0)),
     }
+
+
+def _parse_sacct_time(value):
+    if not value or value in {"Unknown", "None"}:
+        return None
+    try:
+        return int(datetime.strptime(value.split(".", 1)[0], "%Y-%m-%dT%H:%M:%S").timestamp())
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_sacct_int(value):
+    return int(value) if str(value).isdigit() else None
+
+
+def _parse_sacct_exit_code(value):
+    if not value:
+        return None
+    code = value.split(":", 1)[0]
+    return int(code) if code.isdigit() else None
+
+
+def load_sacct_detail_compact(jids, start_time=None):
+    jids = sorted({normalize_jid(jid) for jid in jids if normalize_jid(jid)})
+    if not jids:
+        return {}
+    cmd = ["sacct", "-X", "-n", "-P"]
+    if start_time:
+        cmd += ["-S", start_time]
+    try:
+        base_cmd = cmd + [
+            f"--jobs={','.join(map(str, jids))}",
+        ]
+        result = subprocess.run(
+            base_cmd + ["--format=JobIDRaw,State,ExitCode,ElapsedRaw,Eligible,Start,RestartCnt"],
+            capture_output=True, text=True,
+        )
+        has_restarts = True
+        if result.returncode != 0:
+            result = subprocess.run(
+                base_cmd + ["--format=JobIDRaw,State,ExitCode,ElapsedRaw,Eligible,Start"],
+                capture_output=True, text=True,
+            )
+            has_restarts = False
+        if result.returncode != 0:
+            log.debug("load_sacct_detail_compact nonzero for %s jobs: rc=%s stderr=%s",
+                      len(jids), result.returncode, result.stderr.strip())
+            return {}
+        detail = {}
+        for line in result.stdout.splitlines():
+            if not line.strip():
+                continue
+            if has_restarts:
+                jid, state, exit_code, elapsed, eligible, start, restarts = (line.split("|", 6) + [""] * 6)[:7]
+            else:
+                jid, state, exit_code, elapsed, eligible, start = (line.split("|", 5) + [""] * 5)[:6]
+                restarts = 0
+            jid = normalize_jid(jid)
+            if not jid:
+                continue
+            start_ts = _parse_sacct_time(start)
+            eligible_ts = _parse_sacct_time(eligible)
+            qwait = "never" if not start_ts else (hms(max(0, start_ts - eligible_ts)) if eligible_ts else "n/a")
+            detail[jid] = {
+                "restarts": _parse_sacct_int(restarts) or 0,
+                "exit_code": _parse_sacct_exit_code(exit_code),
+                "status": state_from_sacct_compact(state, exit_code),
+                "qwait": qwait,
+                "runtime": hms(_parse_sacct_int(elapsed) or 0),
+            }
+        return detail
+    except Exception as e:
+        log.debug("load_sacct_detail_compact failed for %s jobs: %s", len(jids), e)
+    return {}
 
 
 def _find_xid_path(xid):
@@ -1218,11 +1306,21 @@ def _get_xid_info_from_launchids(xid, wd_path, launchids, t0):
     return result
 
 
-@app.get("/api/sacct")
-def get_sacct_info(jids=""):
+@app.post("/api/sacct")
+def get_sacct_info(payload=Body(...)):
     """Get accounting info for known job IDs."""
-    saccts = load_sacct_many(jid.strip() for jid in jids.split(","))
-    return {str(jid): format_sacct(sacct) for jid, sacct in saccts.items()}
+    t0 = time.time()
+    if isinstance(payload, dict):
+        jids = payload.get("jids", [])
+        xid = payload.get("xid")
+        start_time = _xid_start_time(xid) if xid and _xid_re.fullmatch(xid) else None
+    else:
+        jids = payload
+        start_time = None
+    detail = load_sacct_detail_compact(jids, start_time=start_time)
+    log.info("POST /api/sacct - done: %d requested, %d resolved (%.2fs)",
+             len(jids), len(detail), time.time() - t0)
+    return {str(jid): info for jid, info in detail.items()}
 
 
 @app.post("/api/sacct/states")
@@ -1255,7 +1353,7 @@ def get_sacct_states(payload=Body(...)):
                 xid_missing.add(jid)
         if xid_missing:
             missing_by_xid[xid] = xid_missing
-        log.info(
+        log.debug(
             "  - sacct states %s: requested %d, name hits %d, fallback %d (%.2fs)%s",
             xid, len(wanted), xid_hits, len(xid_missing), time.time() - t_xid,
             f", misses {sorted(xid_missing)[:5]}" if xid_missing else "",
@@ -1273,7 +1371,7 @@ def get_sacct_states(payload=Body(...)):
         fallback_resolved += len(fallback_states)
         for jid, state in fallback_states.items():
             states[jid] = state
-        log.info(
+        log.debug(
             "  - sacct fallback %s: requested %d, resolved %d (%.2fs)",
             xid, len(missing_jids), len(fallback_states), time.time() - t_xid,
         )

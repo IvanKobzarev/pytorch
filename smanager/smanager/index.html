@@ -1823,7 +1823,12 @@
                 return;
             }
             try {
-                const resp = await fetch(`${serverUrl}/api/sacct?jids=${encodeURIComponent(jids.join(','))}`, { signal: AbortSignal.timeout(60000) });
+                const resp = await fetch(`${serverUrl}/api/sacct`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ xid, jids }),
+                    signal: AbortSignal.timeout(60000),
+                });
                 if (!resp.ok) return;
                 const sacctData = await resp.json();
                 if (currentXidData?.xid !== xid) return;
@@ -1892,7 +1897,7 @@
                 }
                 if (progressCell && nsteps) {
                     const step = metrics.step;
-                    if (step) {
+                    if (step !== null && step !== undefined) {
                         const pct = step / nsteps * 100;
                         currentProgressData[wid] = pct;
                         progressCell.innerHTML = `<div class="progress-bar"><span class="fill" style="width:${pct}%"></span>${pct.toFixed(1)}%</div>`;
