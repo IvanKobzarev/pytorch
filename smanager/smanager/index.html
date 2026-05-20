@@ -178,6 +178,8 @@
         .status-done { color: #22c55e; }
         .status-fail { color: #ef4444; }
         .status-end { color: #22c55e; }
+        .status-cancel-clean { color: #4b5563; }
+        .status-unknown { color: #9ca3af; }
         .warning-text { color: #ef4444; cursor: help; }
         tr.outdated { opacity: 0.4; pointer-events: none; }
         .state-bar {
@@ -471,7 +473,7 @@
                         <th style="width:1.6em" title="Open run in Flättlibrettli">📉︎</th>
                         <th class="col-xid">XID</th>
                         <th class="col-usr">User</th>
-                        <th style="width:5em">WUs</th>
+                        <th style="width:7em">WUs</th>
                         <th style="width:33%">Config</th>
                         <th>Name / <span style="color:var(--accent)">Note</span></th>
                         <th style="width:6em">Finished</th>
@@ -1161,13 +1163,14 @@
         function formatStates(states) {
             if (!states) return '';
             // Order: finished states first, then running, then pending
-            // false = failed WU, true = done WU, CANCELLED, TIMEOUT, FAILED, DONE, COMPLETING, RUNNING, PENDING, REQUEUE_HOLD
+            // false = failed WU, true = done WU, plus Slurm/config state strings.
             const order = [
                 { key: false, cls: 'bg-fail', label: 'Fail' },
                 { key: 'FAILED', cls: 'bg-fail', label: 'Failed' },
                 { key: 'TIMEOUT', cls: 'bg-fail', label: 'Timeout' },
                 { key: 'CANCELLED_FAIL', cls: 'bg-fail', label: 'Cancelled' },
                 { key: 'CANCELLED', cls: 'bg-cancel-clean', label: 'Stopped' },
+                { key: 'PREEMPTED', cls: 'bg-cancel', label: 'Preempted' },
                 { key: 'UNKNOWN', cls: 'bg-unknown', label: 'Unknown' },
                 { key: true, cls: 'bg-done', label: 'Done' },
                 { key: 'COMPLETED', cls: 'bg-done', label: 'Completed' },
@@ -1219,6 +1222,19 @@
             return `<div class="state-bar" title="${tooltip}">${barParts.join('')}</div>`;
         }
 
+        function statesFromOverviewInfo(info) {
+            if (info.effective_states) return info.effective_states;
+            const states = {};
+            for (const v of Object.values(info.wus || {})) {
+                states[v] = (states[v] || 0) + 1;
+            }
+            return states;
+        }
+
+        function countStates(states, keys) {
+            return keys.reduce((n, k) => n + (states[k] || states[String(k)] || 0), 0);
+        }
+
         let allColdRows = [];  // Global for filtering
 
         function overviewSearchText(r) {
@@ -1232,6 +1248,10 @@
                 r.done ? 'done' : '',
                 r.fail,
                 r.fail ? 'fail failed' : '',
+                r.stopped,
+                r.stopped ? 'stopped cancelled preempted' : '',
+                r.unknown,
+                r.unknown ? 'unknown' : '',
                 r.config,
                 r.name,
                 r.note,
@@ -1300,9 +1320,11 @@
 
                 // Add cold (recent) experiments with full info
                 for (const [xid, info] of Object.entries(data.cold || {})) {
-                    const wus = info.wus || {};
-                    const nDone = Object.values(wus).filter(v => v === true).length;
-                    const nFail = Object.values(wus).filter(v => v === false).length;
+                    const states = statesFromOverviewInfo(info);
+                    const nDone = countStates(states, [true, 'DONE', 'DONE_ISH', 'COMPLETED']);
+                    const nFail = countStates(states, [false, 'FAILED', 'TIMEOUT', 'CANCELLED_FAIL', 'NODE_FAIL', 'OUT_OF_MEMORY']);
+                    const nStopped = countStates(states, ['CANCELLED', 'PREEMPTED']);
+                    const nUnknown = countStates(states, ['UNKNOWN']);
                     allColdRows.push({
                         server: serverName,
                         serverIdx: sIdx,
@@ -1310,6 +1332,8 @@
                         user: info.user || '',
                         done: nDone,
                         fail: nFail,
+                        stopped: nStopped,
+                        unknown: nUnknown,
                         finishTime: info.finish_time || null,
                         config: info.config || '',
                         name: info.name || '',
@@ -1320,9 +1344,11 @@
 
                 // Add frozen (old) experiments - also has full info from _extra_info
                 for (const [xid, info] of Object.entries(data.frozen || {})) {
-                    const wus = info.wus || {};
-                    const nDone = Object.values(wus).filter(v => v === true).length;
-                    const nFail = Object.values(wus).filter(v => v === false).length;
+                    const states = statesFromOverviewInfo(info);
+                    const nDone = countStates(states, [true, 'DONE', 'DONE_ISH', 'COMPLETED']);
+                    const nFail = countStates(states, [false, 'FAILED', 'TIMEOUT', 'CANCELLED_FAIL', 'NODE_FAIL', 'OUT_OF_MEMORY']);
+                    const nStopped = countStates(states, ['CANCELLED', 'PREEMPTED']);
+                    const nUnknown = countStates(states, ['UNKNOWN']);
                     allColdRows.push({
                         server: serverName,
                         serverIdx: sIdx,
@@ -1330,6 +1356,8 @@
                         user: info.user || '',
                         done: nDone,
                         fail: nFail,
+                        stopped: nStopped,
+                        unknown: nUnknown,
                         finishTime: info.finish_time || null,
                         config: info.config || '',
                         name: info.name || '',
@@ -1488,6 +1516,12 @@
                 const warningIndicator = r.warningCount > 0
                     ? ` <span class="warning-text" title="${r.warningCount} WU(s) have warnings, go to detail view for more.">⚠</span>`
                     : '';
+                const wuParts = [
+                    r.fail ? `<span class="status-fail">${r.fail}</span>` : '',
+                    r.stopped ? `<span class="status-cancel-clean">${r.stopped}</span>` : '',
+                    r.unknown ? `<span class="status-unknown">${r.unknown}</span>` : '',
+                    r.done ? `<span class="status-done">${r.done}</span>` : '',
+                ].filter(Boolean);
                 const finishedTitle = r.finishTime
                     ? new Date(r.finishTime * 1000).toLocaleString() + ' (local time)'
                     : '';
@@ -1507,7 +1541,7 @@
                     <td class="mono"><a class="clickable" href="#${r.xid}" onclick="viewXid('${r.xid}', ${r.serverIdx}); return false">${r.xid}</a><span class="code-btn fa-icon" onclick="window.open('${serverUrl}/code/${r.xid}', '_blank')" title="Browse source code">🗎</span><span class="code-btn fa-icon" onclick="window.open('${serverUrl}/files/${r.xid}', '_blank')" title="Browse workdir">🗁</span><span class="copy-btn" onclick="navigator.clipboard.writeText('${r.xid}')" title="Copy">⎘</span></td>
                     <td class="${userClass}">${r.user}</td>
                     <td class="mono">
-                        ${r.fail ? `<span class="status-fail">${r.fail}</span>` : ''}${r.fail && r.done ? '+' : ''}${r.done ? `<span class="status-done">${r.done}</span>` : ''}${warningIndicator}
+                        ${wuParts.join('+')}${warningIndicator}
                     </td>
                     <td class="col-config" title="${esc(r.config)}">${esc(r.config)}</td>
                     <td class="name-note-cell ${textClass}" onclick="editNote(this, ${r.serverIdx}, '${r.xid}', '${escapedNote}')">${esc(displayText) || '<span style="opacity:0.3">click to add note</span>'}</td>

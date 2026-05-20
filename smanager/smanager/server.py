@@ -290,20 +290,17 @@ def _extra_info(xid_info):
     Args:
         xid_info: Tuple of (xid, info), (xid, info, skip_config_loading), or
             (xid, info, skip_config_loading, skip_active_done_loading).
-            Config loading is only a fallback/backcompat path for legacy
-            workdirs that cannot be mapped to WIDs from launch metadata/name.
-            Active DONE loading is skipped for hot overview rows where squeue
-            is already the authoritative current-state source.
+            Inactive overview loads config.json for status and finish_time.
+            Hot overview can skip config loading where squeue is already the
+            authoritative current-state source.
     """
     if len(xid_info) == 4:
-        xid, info, skip_config_loading, skip_active_done_loading = xid_info
+        xid, info, skip_config_loading, _skip_active_done_loading = xid_info
     elif len(xid_info) == 3:
         xid, info, skip_config_loading = xid_info
-        skip_active_done_loading = False
     else:
         xid, info = xid_info
         skip_config_loading = False
-        skip_active_done_loading = False
 
     wd_path = BASEDIR / info["wd"]
 
@@ -364,23 +361,11 @@ def _extra_info(xid_info):
     workdir_names = []
     wid_counts = {}  # wid -> count (for duplicate detection)
     workdir_by_wid = {}
-    workdir_done_by_wid = {}
     workdir_jid_by_wid = {}
     config_by_wid = {}
     info["wus"] = {}
-    done_names = []
-    done_by_name = {}
     for wuwd_name in wuwd_names:
         wid = wid_from_workdir_name(wuwd_name)
-        if skip_active_done_loading and wid in active_by_wid:
-            done_by_name[wuwd_name] = (wid, False, None)
-        else:
-            done_names.append(wuwd_name)
-    done_results = fs_executor.map(_load_done_only, [(wd_path, wuwd_name) for wuwd_name in done_names])
-    for wuwd_name, (_, wid, is_done, mtime) in zip(done_names, done_results):
-        done_by_name[wuwd_name] = (wid, is_done, mtime)
-    for wuwd_name in wuwd_names:
-        wid, is_done, mtime = done_by_name[wuwd_name]
         wuwd = wd_path / wuwd_name
         if wid is None and not skip_config_loading:
             # LEGACY - BACKFILLED - REMOVE SOON: workdir names now always end
@@ -393,73 +378,50 @@ def _extra_info(xid_info):
             config_by_wid[wid] = config
             if config.get("jid"):
                 workdir_jid_by_wid[wid] = normalize_jid(config.get("jid"))
-            try:
-                mtime = (wuwd / "DONE").stat().st_mtime
-                is_done = True
-            except FileNotFoundError:
-                pass
         if wid is None:
             continue
-        # DONE mtime is the broad-scan signal for finish_time -- cheaper than
-        # loading config.exit_status_at, and is the only available signal for
-        # the inactive overview which skips config loading entirely.
-        if is_done and mtime > info.get("finish_time", 0):
-            info["finish_time"] = mtime
         workdir_names.append(wuwd_name)
         workdir_by_wid[wid] = wuwd_name
         wid_counts[wid] = wid_counts.get(wid, 0) + 1
-        workdir_done_by_wid[wid] = workdir_done_by_wid.get(wid, False) or is_done
-
-    for wid in launch_wids | set(workdir_done_by_wid):
-        info["wus"][str(wid)] = workdir_done_by_wid.get(wid, False)
 
     try:
         info["config"] = next(re.finditer(r"bv2/config/(.*?) ", launchinfo_fut.result())).group(1)
     except (OSError, StopIteration):
         info["config"] = "?"
 
+    finished_by_wid = {}
+    workdir_wids = set(workdir_by_wid)
+    launch_only_wids = launch_wids - workdir_wids - set(active_by_wid)
+    inactive_workdir_wids = workdir_wids - set(active_by_wid)
+    config_status_wids = inactive_workdir_wids if "jobs" not in info or not skip_config_loading else set()
+    missing_config_wids = [
+        wid for wid in config_status_wids
+        if wid in workdir_by_wid and wid not in config_by_wid
+    ]
+    config_results = fs_executor.map(
+        _load_config_only,
+        [(wd_path, workdir_by_wid[wid]) for wid in missing_config_wids],
+    )
+    for wid, (_, config) in zip(missing_config_wids, config_results):
+        config_by_wid[wid] = config
+        if config.get("jid"):
+            workdir_jid_by_wid[wid] = normalize_jid(config.get("jid"))
+    for wid in config_status_wids:
+        config = config_by_wid.get(wid, {})
+        state = state_from_exit_status(config.get("exit_status"))
+        finished_by_wid[wid] = state if state is not None else False
+        if config.get("exit_status_at"):
+            try:
+                info["finish_time"] = max(
+                    info.get("finish_time", 0),
+                    datetime.fromisoformat(config["exit_status_at"]).timestamp(),
+                )
+            except (TypeError, ValueError):
+                pass
+
     if "jobs" in info:
-        finished_by_wid = {}
-        launch_only_wids = launch_wids - set(workdir_done_by_wid) - set(active_by_wid)
-        no_done_workdir_wids = {
-            wid for wid, is_done in workdir_done_by_wid.items()
-            if not is_done and wid not in active_by_wid
-        }
         if not skip_config_loading:
-            missing_config_wids = [
-                wid for wid in set(workdir_done_by_wid) - set(active_by_wid)
-                if wid in workdir_by_wid and wid not in config_by_wid
-            ]
-            config_results = fs_executor.map(
-                _load_config_only,
-                [(wd_path, workdir_by_wid[wid]) for wid in missing_config_wids],
-            )
-            for wid, (_, config) in zip(missing_config_wids, config_results):
-                config_by_wid[wid] = config
-
             sacct_jids = {}
-            for wid in (set(workdir_done_by_wid) - set(active_by_wid)):
-                wuwd_name = workdir_by_wid.get(wid)
-                if not wuwd_name:
-                    continue
-                config = config_by_wid.get(wid)
-                state = state_from_exit_status(config.get("exit_status"))
-                if state is not None:
-                    finished_by_wid[wid] = state
-                elif workdir_done_by_wid.get(wid):
-                    # LEGACY - BACKFILLED - REMOVE SOON: exit_status backfilled
-                    # via bv2/tools/backfill_exit_status; DONE-only path is
-                    # unreachable in steady state.
-                    _legacy_used("extra_info.done_no_exit_status", xid=xid, wid=wid)
-                    finished_by_wid[wid] = True
-                elif jid := normalize_jid(config.get("jid")):
-                    # Live sacct fallback for in-flight WUs that have no DONE
-                    # file and no exit_status -- typically jobs that were hard-
-                    # killed mid-step or were restarted (train.py rewrites
-                    # config.json on startup, wiping any previously-written
-                    # exit_status). Backfill can't eliminate this path.
-                    sacct_jids[jid] = wid
-
             # WUs in launchids that haven't created a workdir yet (just
             # submitted, queued, or cancelled-before-running). Without this
             # they fall into the "UNKNOWN" bucket in the overview even though
@@ -470,36 +432,33 @@ def _extra_info(xid_info):
 
             for jid, sacct in load_sacct_many(sacct_jids).items():
                 finished_by_wid[sacct_jids[jid]] = state_from_sacct(sacct)
-        elif launch_only_wids or no_done_workdir_wids:
+        elif launch_only_wids or inactive_workdir_wids:
             # Keep hot overview fast: return unresolved WUs as UNKNOWN and let
             # the browser resolve them via /api/sacct/states after first paint.
             info["pending_sacct_jids"] = {
                 str(jid): str(wid)
-                for wid in launch_only_wids | no_done_workdir_wids
+                for wid in launch_only_wids | inactive_workdir_wids
                 if (jid := launch_jid_by_wid.get(wid)) is not None
             }
 
-        if active_by_wid or workdir_done_by_wid or launch_wids:
-            states = Counter()
-            for wid in launch_wids | set(workdir_done_by_wid) | set(active_by_wid):
-                if wid in active_by_wid:
-                    if (workdir_done_by_wid.get(wid) and active_by_wid[wid] == "RUNNING"
-                            and active_jid_by_wid.get(wid) == (workdir_jid_by_wid.get(wid) or launch_jid_by_wid.get(wid))):
-                        states["DONE_ISH"] += 1
-                    else:
-                        states[active_by_wid[wid]] += 1
-                elif wid in finished_by_wid:
-                    states[finished_by_wid[wid]] += 1
-                elif wid in workdir_done_by_wid:
-                    if workdir_done_by_wid[wid]:
-                        states[True] += 1
-                    elif skip_config_loading:
-                        states["UNKNOWN"] += 1
-                    else:
-                        states[False] += 1
+    if active_by_wid or workdir_wids or launch_wids:
+        states = Counter()
+        for wid in launch_wids | workdir_wids | set(active_by_wid):
+            if wid in active_by_wid:
+                if (finished_by_wid.get(wid) is True and active_by_wid[wid] == "RUNNING"
+                        and active_jid_by_wid.get(wid) == (workdir_jid_by_wid.get(wid) or launch_jid_by_wid.get(wid))):
+                    state = "DONE_ISH"
                 else:
-                    states["UNKNOWN"] += 1
-            info["effective_states"] = dict(states)
+                    state = active_by_wid[wid]
+            elif wid in finished_by_wid:
+                state = finished_by_wid[wid]
+            elif wid in workdir_wids:
+                state = "UNKNOWN" if skip_config_loading else False
+            else:
+                state = "UNKNOWN"
+            info["wus"][str(wid)] = state
+            states[state] += 1
+        info["effective_states"] = dict(states)
 
     info["name"] = extract_common_name(workdir_names, xid)
     warning_wids = {wid for wid, count in wid_counts.items() if count > 1}
@@ -731,8 +690,8 @@ def get_overview_inactive():
     cold_xids = {xid: all_xids[xid] for xid in all_list[:NUM_RECENT]}
     frozen_xids = {xid: all_xids[xid] for xid in all_list[NUM_RECENT:]}
 
-    # Add extra info with threading. Config reads are disabled here because they
-    # are only fallback/backcompat for legacy workdir names.
+    # Add extra info with threading. Inactive WU status and finish_time come
+    # from config.json, avoiding separate DONE stats.
     cold_items = [(xid, info, True) for xid, info in cold_xids.items()]
     cold_results = list(executor.map(_extra_info, cold_items))
     cold_xids = dict(cold_results)
@@ -902,17 +861,6 @@ def get_sacct_end_time(xid, user):
 def _load_config_only(args):
     wd_path, wuwd_name = args
     return wuwd_name, load_config(wd_path / wuwd_name)
-
-
-def _load_done_only(args):
-    wd_path, wuwd_name = args
-    wid = wid_from_workdir_name(wuwd_name)
-    if wid is None:
-        return wuwd_name, None, False, None
-    try:
-        return wuwd_name, wid, True, (wd_path / wuwd_name / "DONE").stat().st_mtime
-    except FileNotFoundError:
-        return wuwd_name, wid, False, None
 
 
 def _load_metric_only(args):
@@ -1233,13 +1181,6 @@ def _get_xid_info_from_launchids(xid, wd_path, launchids, t0):
     configs = {wid: config for wid, (_, config) in zip(inactive_wids, config_results)}
     log.info("  - loaded %d inactive configs in %.2fs", len(configs), time.time() - t3)
 
-    # Pre-stat DONE files in parallel for inactive WUs whose exit_status is missing —
-    # avoids serializing N NFS roundtrips inside the wus loop below.
-    done_by_wid = dict(zip(inactive_wids, fs_executor.map(
-        lambda wid: (wd_path / workdirs[wid] / "DONE").is_file(),
-        inactive_wids,
-    )))
-
     wus = []
     for wid in sorted(all_wids, key=lambda x: (0, int(x)) if str(x).isdigit() else (1, str(x))):
         meta = launchids.get(str(wid), {})
@@ -1258,14 +1199,7 @@ def _get_xid_info_from_launchids(xid, wd_path, launchids, t0):
             jid = normalize_jid(config.get("jid")) or normalize_jid(meta.get("launchjid") if isinstance(meta, dict) else None)
             status = detail_status_from_exit_status(config.get("exit_status"))
             if status is None:
-                if done_by_wid.get(wid, False):
-                    # LEGACY - BACKFILLED - REMOVE SOON: exit_status backfilled
-                    # via bv2/tools/backfill_exit_status; DONE-only path is
-                    # unreachable in steady state.
-                    _legacy_used("xid_info.done_no_exit_status", xid=xid, wid=wid)
-                    status = "DONE"
-                else:
-                    status = "UNKNOWN"
+                status = "FAILED" if wuwd_name else "UNKNOWN"
             reason = ""
             restarts = 0
             runtime = "n/a"
@@ -1446,7 +1380,7 @@ def get_xid_info(xid: str):
     for wuwd_name, config in config_results:
         wid = normalize_wid(config.get("wid", wuwd_name))
         new_jid = config.get("jid")
-        config["_wuwd_name"] = wuwd_name  # Store actual workdir name for DONE check
+        config["_wuwd_name"] = wuwd_name
 
         # If wid already exists, prefer the "better" config
         if wid in configs:
@@ -1487,34 +1421,23 @@ def get_xid_info(xid: str):
     saccts = load_sacct_many(list(jids))
     log.info("  - loaded sacct in %.2fs", time.time() - t2)
 
-    # Parallelize DONE stats — one NFS roundtrip per WU would otherwise serialize.
-    t_done = time.time()
-    done_wids = [wid for wid, config in configs.items() if config.get("_wuwd_name")]
-    done_results = fs_executor.map(
-        lambda wid: (wd_path / configs[wid]["_wuwd_name"] / "DONE").is_file(),
-        done_wids,
-    )
-    done_by_wid = dict(zip(done_wids, done_results))
-    log.info("  - DONE stats in %.2fs (%d WUs)", time.time() - t_done, len(done_wids))
-
     # Determine status for each wid
     status = {}
     for wid, config in configs.items():
-        has_done = done_by_wid.get(wid, False)
         jid = config.get("jid")
         slurm_state = jobs_by_jid.get(str(jid), {}).get("STATE") if jid else None
+        config_state = detail_status_from_exit_status(config.get("exit_status"))
 
-        if has_done and slurm_state == "RUNNING":
-            # DONE file exists but Slurm still shows RUNNING (laggy teardown)
+        if config_state == "DONE" and slurm_state == "RUNNING":
             status[wid] = "DONE_ISH"
-        elif has_done:
-            status[wid] = "DONE"
+        elif config_state is not None:
+            status[wid] = config_state
         elif jid and str(jid) in jobs_by_jid:
             status[wid] = slurm_state or "UNKNOWN"
         elif jid and jid in saccts and saccts[jid].get('state', {}).get('current'):
             status[wid] = saccts[jid]['state']['current'][-1]
         else:
-            status[wid] = "UNKNOWN"
+            status[wid] = "FAILED"
 
     # Add pending jobs from squeue that don't have workdirs yet
     existing_jids = {str(c.get("jid")) for c in configs.values() if c.get("jid")}
