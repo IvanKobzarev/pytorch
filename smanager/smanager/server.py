@@ -257,22 +257,100 @@ def state_from_exit_status(status):
 
 
 def state_from_sacct(sacct):
-    state = sacct.get('state', {}).get('current', [None])[-1]
-    exit_code = sacct.get('exit_code', {}).get('return_code', {}).get('number', 0)
-    if state == 'CANCELLED':
-        return 'CANCELLED' if exit_code == 0 else 'CANCELLED_FAIL'
-    return state or 'UNKNOWN'
+    if failed_step := _failed_sacct_json_step(sacct):
+        return state_from_sacct_compact(
+            _sacct_json_state(failed_step),
+            _sacct_json_exit_code(failed_step),
+        )
+    state = _sacct_json_state(sacct)
+    exit_code = _sacct_json_exit_code(sacct)
+    return state_from_sacct_compact(state, exit_code)
+
+
+def _sacct_return_code(exit_code):
+    if isinstance(exit_code, dict):
+        ret = exit_code.get("return_code", {}) or {}
+        code = ret.get("number", 0) if ret.get("set") else 0
+        return int(code) if str(code).isdigit() else 0
+    code = str(exit_code or "").split(":", 1)[0]
+    return int(code) if code.isdigit() else 0
+
+
+def _sacct_state(state):
+    parts = str(state or "").split()
+    return parts[0].rstrip("+") if parts else ""
 
 
 def state_from_sacct_compact(state, exit_code):
-    parts = (state or "").split()
-    state = parts[0].rstrip("+") if parts else ""
-    return_code = 0
-    if exit_code:
-        return_code = int(exit_code.split(":", 1)[0]) if exit_code.split(":", 1)[0].isdigit() else 0
-    if state == "CANCELLED":
-        return "CANCELLED" if return_code == 0 else "CANCELLED_FAIL"
-    return state or "UNKNOWN"
+    state = _sacct_state(state)
+    exit_code = _sacct_return_code(exit_code)
+    if state == 'CANCELLED':
+        return 'CANCELLED' if exit_code == 0 else 'CANCELLED_FAIL'
+    if state == "COMPLETED" and exit_code:
+        return "FAILED"
+    return state or 'UNKNOWN'
+
+
+def _failed_sacct_status(status):
+    return status in {"FAILED", "TIMEOUT", "CANCELLED_FAIL", "NODE_FAIL", "OUT_OF_MEMORY", "BOOT_FAIL", "DEADLINE"}
+
+
+def _sacct_step_name(job_id):
+    parts = str(job_id or "").split(".", 1)
+    return parts[1] if len(parts) > 1 else ""
+
+
+def _failed_sacct_row(rows):
+    # Slurm can show the allocation as CANCELLED 0:0 while the batch/srun step failed.
+    for row in rows:
+        step = _sacct_step_name(row[0])
+        if step and step != "extern" and _failed_sacct_status(state_from_sacct_compact(row[1], row[2])):
+            return row
+    return None
+
+
+def _state_from_sacct_rows(rows):
+    if not rows:
+        return "UNKNOWN"
+    if row := _failed_sacct_row(rows):
+        return state_from_sacct_compact(row[1], row[2])
+    row = next((r for r in rows if not _sacct_step_name(r[0])), rows[0])
+    return state_from_sacct_compact(row[1], row[2])
+
+
+def _sacct_json_state(sacct):
+    state = sacct.get("state")
+    if isinstance(state, dict):
+        current = state.get("current") or []
+        return current[-1] if current else None
+    if isinstance(state, list):
+        return state[-1] if state else None
+    return state
+
+
+def _sacct_json_exit_code(sacct):
+    return sacct.get("exit_code")
+
+
+def _sacct_json_step_name(step):
+    for key in ("name", "step", "step_id", "job_id"):
+        value = step.get(key)
+        if isinstance(value, dict):
+            value = value.get("name") or value.get("id") or value.get("number")
+        if value is not None:
+            return _sacct_step_name(value) or str(value)
+    return ""
+
+
+def _failed_sacct_json_step(sacct):
+    for step in sacct.get("steps") or []:
+        name = _sacct_json_step_name(step)
+        if name != "extern" and _failed_sacct_status(state_from_sacct_compact(
+            _sacct_json_state(step),
+            _sacct_json_exit_code(step),
+        )):
+            return step
+    return None
 
 
 def detail_status_from_exit_status(status):
@@ -805,21 +883,21 @@ def _load_sacct_compact(cmd):
         if result.returncode != 0:
             log.debug("compact sacct nonzero: rc=%s stderr=%s", result.returncode, result.stderr.strip())
             return {}
-        states = {}
+        rows = {}
         for line in result.stdout.splitlines():
             if not line.strip():
                 continue
             jid, state, exit_code = (line.split("|", 2) + ["", ""])[:3]
-            if jid := normalize_jid(jid):
-                states[jid] = state_from_sacct_compact(state, exit_code)
-        return states
+            if root_jid := normalize_jid(jid):
+                rows.setdefault(root_jid, []).append((jid, state, exit_code))
+        return {jid: _state_from_sacct_rows(job_rows) for jid, job_rows in rows.items()}
     except Exception as e:
         log.debug("compact sacct failed: %s", e)
     return {}
 
 
 def load_sacct_states_xid(xid):
-    cmd = ["sacct", "-X", "-n", "-P"]
+    cmd = ["sacct", "-n", "-P"]
     if start_time := _xid_start_time(xid):
         cmd += ["-S", start_time]
     cmd += ["--format=JobIDRaw,State,ExitCode", f"--name={xid}"]
@@ -830,7 +908,7 @@ def load_sacct_states_many(jids, start_time=None):
     jids = sorted({normalize_jid(jid) for jid in jids if normalize_jid(jid)})
     if not jids:
         return {}
-    cmd = ["sacct", "-X", "-n", "-P"]
+    cmd = ["sacct", "-n", "-P"]
     if start_time:
         cmd += ["-S", start_time]
     cmd += [
@@ -930,6 +1008,8 @@ def extract_sws_args(submit_line):
 
 
 def extract_exit_code(sacct):
+    if failed_step := _failed_sacct_json_step(sacct):
+        return _sacct_return_code(_sacct_json_exit_code(failed_step))
     ret = sacct.get("exit_code", {}).get("return_code", {})
     if not ret.get("set"):
         return None
@@ -959,11 +1039,10 @@ def format_sacct(sacct):
     time_info = sacct.get("time", {})
     start = time_info.get("start", 0)
     eligible = time_info.get("eligible", 0)
-    state = sacct.get("state", {}).get("current", [])
     return {
         "restarts": sacct.get("restart_cnt", 0),
         "exit_code": extract_exit_code(sacct),
-        "status": state[-1] if state else None,
+        "status": state_from_sacct(sacct),
         "qwait": "never" if start in [0, SLURM_NO_START_TIME] else hms(start - eligible),
         "runtime": hms(time_info.get("elapsed", 0)),
     }
@@ -993,7 +1072,7 @@ def load_sacct_detail_compact(jids, start_time=None):
     jids = sorted({normalize_jid(jid) for jid in jids if normalize_jid(jid)})
     if not jids:
         return {}
-    cmd = ["sacct", "-X", "-n", "-P"]
+    cmd = ["sacct", "-n", "-P"]
     if start_time:
         cmd += ["-S", start_time]
     try:
@@ -1001,7 +1080,7 @@ def load_sacct_detail_compact(jids, start_time=None):
             f"--jobs={','.join(map(str, jids))}",
         ]
         result = subprocess.run(
-            base_cmd + ["--format=JobIDRaw,State,ExitCode,ElapsedRaw,Eligible,Start,RestartCnt"],
+            base_cmd + ["--format=JobIDRaw,State,ExitCode,ElapsedRaw,Eligible,Start,Restarts"],
             capture_output=True, text=True,
         )
         has_restarts = True
@@ -1015,7 +1094,7 @@ def load_sacct_detail_compact(jids, start_time=None):
             log.debug("load_sacct_detail_compact nonzero for %s jobs: rc=%s stderr=%s",
                       len(jids), result.returncode, result.stderr.strip())
             return {}
-        detail = {}
+        rows = {}
         for line in result.stdout.splitlines():
             if not line.strip():
                 continue
@@ -1024,18 +1103,33 @@ def load_sacct_detail_compact(jids, start_time=None):
             else:
                 jid, state, exit_code, elapsed, eligible, start = (line.split("|", 5) + [""] * 5)[:6]
                 restarts = 0
-            jid = normalize_jid(jid)
-            if not jid:
+            root_jid = normalize_jid(jid)
+            if not root_jid:
                 continue
-            start_ts = _parse_sacct_time(start)
-            eligible_ts = _parse_sacct_time(eligible)
+            rows.setdefault(root_jid, []).append({
+                "job_id": jid,
+                "state": state,
+                "exit_code": exit_code,
+                "elapsed": elapsed,
+                "eligible": eligible,
+                "start": start,
+                "restarts": restarts,
+            })
+        detail = {}
+        for jid, job_rows in rows.items():
+            top = next((r for r in job_rows if not _sacct_step_name(r["job_id"])), job_rows[0])
+            compact_rows = [(r["job_id"], r["state"], r["exit_code"]) for r in job_rows]
+            failed = _failed_sacct_row(compact_rows)
+            exit_code = failed[2] if failed else top["exit_code"]
+            start_ts = _parse_sacct_time(top["start"])
+            eligible_ts = _parse_sacct_time(top["eligible"])
             qwait = "never" if not start_ts else (hms(max(0, start_ts - eligible_ts)) if eligible_ts else "n/a")
             detail[jid] = {
-                "restarts": _parse_sacct_int(restarts) or 0,
+                "restarts": _parse_sacct_int(top["restarts"]) or 0,
                 "exit_code": _parse_sacct_exit_code(exit_code),
-                "status": state_from_sacct_compact(state, exit_code),
+                "status": _state_from_sacct_rows(compact_rows),
                 "qwait": qwait,
-                "runtime": hms(_parse_sacct_int(elapsed) or 0),
+                "runtime": hms(_parse_sacct_int(top["elapsed"]) or 0),
             }
         return detail
     except Exception as e:
@@ -1424,7 +1518,7 @@ def get_xid_info(xid: str):
     # Determine status for each wid
     status = {}
     for wid, config in configs.items():
-        jid = config.get("jid")
+        jid = normalize_jid(config.get("jid"))
         slurm_state = jobs_by_jid.get(str(jid), {}).get("STATE") if jid else None
         config_state = detail_status_from_exit_status(config.get("exit_status"))
 
@@ -1434,8 +1528,8 @@ def get_xid_info(xid: str):
             status[wid] = config_state
         elif jid and str(jid) in jobs_by_jid:
             status[wid] = slurm_state or "UNKNOWN"
-        elif jid and jid in saccts and saccts[jid].get('state', {}).get('current'):
-            status[wid] = saccts[jid]['state']['current'][-1]
+        elif jid and jid in saccts:
+            status[wid] = state_from_sacct(saccts[jid])
         else:
             status[wid] = "FAILED"
 
@@ -1482,7 +1576,7 @@ def get_xid_info(xid: str):
     wus = []
     for wid in sorted(configs.keys(), key=lambda x: (0, int(x)) if str(x).isdigit() else (1, str(x))):
         config = configs[wid]
-        jid = config.get("jid") or None
+        jid = normalize_jid(config.get("jid")) or None
         sacct = saccts.get(jid, {})
 
         # Extract submit line args
