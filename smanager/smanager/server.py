@@ -12,6 +12,7 @@ import sys
 import os
 import stat
 import shutil
+import zipfile
 from datetime import datetime
 from getpass import getuser
 from pathlib import Path
@@ -1069,6 +1070,37 @@ def _parse_sacct_exit_code(value):
     return int(code) if code.isdigit() else None
 
 
+def _nfs_safe_overwrite(path, text):
+    with os.fdopen(os.open(path, os.O_RDWR | os.O_CREAT, 0o666), "r+", encoding="utf-8") as f:
+        f.seek(0)
+        f.write(text)
+        f.truncate()
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def _update_metrics_plattli_config(cfg_path, config):
+    zip_path = cfg_path.parent / "metrics.plattli"
+    if not zip_path.is_file():
+        return False
+    tmp_path = zip_path.with_name(zip_path.name + ".tmp")
+    config_text = json.dumps(config, ensure_ascii=False)
+    wrote_config = False
+    with zipfile.ZipFile(zip_path) as zin, zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_STORED) as zout:
+        for info in zin.infolist():
+            if info.filename == "config.json":
+                if wrote_config:
+                    continue
+                zout.writestr(info, config_text)
+                wrote_config = True
+            else:
+                zout.writestr(info, zin.read(info))
+        if not wrote_config:
+            zout.writestr("config.json", config_text)
+    tmp_path.replace(zip_path)
+    return True
+
+
 def load_sacct_detail_compact(jids, start_time=None):
     jids = sorted({normalize_jid(jid) for jid in jids if normalize_jid(jid)})
     if not jids:
@@ -1168,6 +1200,64 @@ def _load_current_xid_jobs(xid):
         return {}
     headers, job_rows = rows[0], rows[1:]
     return {row[0]: dict(zip(headers, row)) for row in job_rows}
+
+
+def _load_current_job(jid):
+    widths = [20, 20, 20, 100]
+    fmt = "JobId:20,Name:20,State:20,Comment:100"
+    result = subprocess.run(["squeue", "-j", str(jid), "-h", "-O", fmt], capture_output=True, text=True)
+    if result.returncode != 0:
+        log.debug("squeue -j %s failed: %s", jid, result.stderr.strip())
+        return {}
+    offsets = [sum(widths[:i]) for i in range(len(widths))]
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        values = [line[offsets[i]:offsets[i]+widths[i]].strip() for i in range(len(widths))]
+        return dict(zip(["JOBID", "NAME", "STATE", "COMMENT"], values))
+    return {}
+
+
+def _mark_stopped_config(wd_path, wid):
+    workdirs, _ = _workdirs_by_suffix(wd_path)
+    wuwd_name = workdirs.get(wid)
+    if not wuwd_name:
+        return False
+    cfg_path = wd_path / wuwd_name / "config.json"
+    config = load_config(cfg_path.parent)
+    if not config:
+        return False
+    if config.get("exit_status") == "stopped":
+        return False
+    config["exit_status"] = "stopped"
+    config["exit_status_at"] = datetime.now().isoformat(timespec="seconds")
+    _nfs_safe_overwrite(cfg_path, json.dumps(config, indent=0) + "\n")
+    _update_metrics_plattli_config(cfg_path, config)
+    return True
+
+
+def _mark_stopped_for_jobs(xid, jobs_by_jid):
+    wd_path = _find_xid_path(xid)
+    if not wd_path:
+        return []
+    jobs_by_wid, _ = _jobs_by_wid(jobs_by_jid, load_launchids(wd_path))
+    marked = []
+    for wid, job in jobs_by_wid.items():
+        if job.get("STATE") in {"RUNNING", "COMPLETING"}:
+            continue
+        if _mark_stopped_config(wd_path, wid):
+            marked.append(wid)
+    return marked
+
+
+def _mark_stopped_for_job(job):
+    if not job:
+        return []
+    xid = extract_xid(job.get("NAME", "")) or extract_xid(job.get("COMMENT", ""))
+    jid = normalize_jid(job.get("JOBID"))
+    if not xid or not jid:
+        return []
+    return _mark_stopped_for_jobs(xid, {str(jid): job})
 
 
 def _active_duplicate_warnings(active_jobs_by_wid):
@@ -2129,12 +2219,14 @@ def stop_job(jid: int):
     if not ACTIONS_ENABLED:
         raise HTTPException(status_code=403, detail="Actions are disabled (--no-actions)")
     log.info("POST /api/action/stop/%s", jid)
+    job = _load_current_job(jid)
     result = subprocess.run(["scancel", str(jid)], capture_output=True, text=True)
     if result.returncode != 0:
         log.error("scancel failed: %s", result.stderr)
         raise HTTPException(status_code=500, detail=f"scancel failed: {result.stderr}")
-    log.info("scancel %s succeeded", jid)
-    return {"status": "ok", "jid": jid}
+    marked = _mark_stopped_for_job(job)
+    log.info("scancel %s succeeded; marked %d non-running WU(s) stopped", jid, len(marked))
+    return {"status": "ok", "jid": jid, "marked_stopped": marked}
 
 
 @app.post("/api/action/stop_xid/{xid}")
@@ -2143,12 +2235,14 @@ def stop_xid(xid: str):
     if not ACTIONS_ENABLED:
         raise HTTPException(status_code=403, detail="Actions are disabled (--no-actions)")
     log.info("POST /api/action/stop_xid/%s", xid)
+    jobs = _load_current_xid_jobs(xid)
     result = subprocess.run(["scancel", "-n", xid], capture_output=True, text=True)
     if result.returncode != 0:
         log.error("scancel -n %s failed: %s", xid, result.stderr)
         raise HTTPException(status_code=500, detail=f"scancel failed: {result.stderr}")
-    log.info("scancel -n %s succeeded", xid)
-    return {"status": "ok", "xid": xid}
+    marked = _mark_stopped_for_jobs(xid, jobs)
+    log.info("scancel -n %s succeeded; marked %d non-running WU(s) stopped", xid, len(marked))
+    return {"status": "ok", "xid": xid, "marked_stopped": marked}
 
 
 @app.post("/api/action/requeue/{jid}")
