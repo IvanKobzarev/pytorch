@@ -1,65 +1,40 @@
 #!/usr/bin/env fish
 
-set PROMPT_Y 'Yes, proceed (y)'
-set PROMPT_ENTER_A 'Do you want to proceed?'
-set PROMPT_ENTER_B '❯ 1. Yes'
-set POLL 2.0    # seconds between checks
-set DELAY 0.5   # seconds before sending response
-set CAPTURE_BACK 30
-set CAPTURE_FORWARD 10
-set STATE_DIR (mktemp -d)
-
-function cleanup --on-event fish_exit
-    rm -rf "$STATE_DIR"
-end
+set CODEX_YES_RE '^\s*[›❯>]\s*1\.\s*Yes, proceed \(y\)\s*$'
+set CODEX_FOOTER_RE '^\s*Press enter to confirm or esc to cancel\s*$'
+set CLAUDE_Q_RE '^\s*Do you want to (proceed|create .+)\?\s*$'
+set CLAUDE_YES_RE '^\s*[›❯>]\s*1\.\s*Yes\s*$'
+set CLAUDE_FOOTER_RE '^\s*Esc to cancel\s*[·•]\s*Tab to amend.*$'
+set CAPTURE_LINES 300
+set PROMPT_LINES 16
+set POLL 0.5
+set POST_Y_SLEEP 1.0
+set POST_ENTER_SLEEP 1.0
 
 while true
     for pane_id in (tmux list-panes -a -F '#{pane_id}')
-        set -l state_file "$STATE_DIR/"(string replace -a '%' '_' -- "$pane_id")
-        set -l cursor_y (tmux display-message -p -t "$pane_id" '#{cursor_y}' 2>/dev/null)
-        set -l pane_height (tmux display-message -p -t "$pane_id" '#{pane_height}' 2>/dev/null)
-        set -l start_y (math "$cursor_y - $CAPTURE_BACK")
-        test "$start_y" -lt 0; and set start_y 0
-        set -l end_y (math "$cursor_y + $CAPTURE_FORWARD")
-        set -l max_y (math "$pane_height - 1")
-        test "$end_y" -gt "$max_y"; and set end_y "$max_y"
-        set -l lines (tmux capture-pane -t "$pane_id" -p -S "$start_y" -E "$end_y" 2>/dev/null | string match -rv '^[[:space:]]*$' | string collect)
-        set -l action ''
-        if string match -q -- "*$PROMPT_Y*" -- $lines
-            set action y
-        else if string match -q -- "*$PROMPT_ENTER_A*" -- $lines; and string match -q -- "*$PROMPT_ENTER_B*" -- $lines
-            set action enter
+        set -l lines (tmux capture-pane -J -t "$pane_id" -p -S "-$CAPTURE_LINES" 2>/dev/null)
+        test $status -ne 0; and continue
+        set -l prompt_lines
+        for i in (seq (count $lines) -1 1)
+            string match -rq -- '\S' "$lines[$i]"; or continue
+            set -a prompt_lines "$lines[$i]"
+            test (count $prompt_lines) -ge $PROMPT_LINES; and break
         end
-        if test -n "$action"
-            set -l prev ''
-            test -f "$state_file"; and set prev (cat "$state_file")
-            if test "$lines" != "$prev"
-                printf %s "$lines" > "$state_file"
-                begin
-                    sleep $DELAY
-                    set -l cursor_y (tmux display-message -p -t "$pane_id" '#{cursor_y}' 2>/dev/null)
-                    set -l pane_height (tmux display-message -p -t "$pane_id" '#{pane_height}' 2>/dev/null)
-                    set -l start_y (math "$cursor_y - $CAPTURE_BACK")
-                    test "$start_y" -lt 0; and set start_y 0
-                    set -l end_y (math "$cursor_y + $CAPTURE_FORWARD")
-                    set -l max_y (math "$pane_height - 1")
-                    test "$end_y" -gt "$max_y"; and set end_y "$max_y"
-                    set -l now (tmux capture-pane -t "$pane_id" -p -S "$start_y" -E "$end_y" 2>/dev/null | string match -rv '^[[:space:]]*$' | string collect)
-                    if test "$now" = "$lines"
-                        if test "$action" = y
-                            tmux send-keys -t "$pane_id" y
-                            echo "Said y in pane $pane_id at $(date)"
-                        else
-                            tmux send-keys -t "$pane_id" Enter
-                            echo "Hit Enter in pane $pane_id at $(date)"
-                        end
-                    end
-                end &
-            end
-        else
-            # Prompt not on screen, so arm the next appearance.
-            rm -f "$state_file"
+        test (count $prompt_lines) -eq 0; and continue
+        set -l bottom "$prompt_lines[1]"
+        if string match -rq -- $CODEX_FOOTER_RE "$bottom"; and printf '%s\n' $prompt_lines | string match -rq -- $CODEX_YES_RE
+            tmux send-keys -t "$pane_id" y
+            echo "Said y in pane $pane_id at $(date)"
+            sleep $POST_Y_SLEEP
+            continue
         end
+        string match -rq -- $CLAUDE_FOOTER_RE "$bottom"; or continue
+        printf '%s\n' $prompt_lines | string match -rq -- $CLAUDE_Q_RE; or continue
+        printf '%s\n' $prompt_lines | string match -rq -- $CLAUDE_YES_RE; or continue
+        tmux send-keys -t "$pane_id" Enter
+        echo "Hit Enter in pane $pane_id at $(date)"
+        sleep $POST_ENTER_SLEEP
     end
     sleep $POLL
 end
