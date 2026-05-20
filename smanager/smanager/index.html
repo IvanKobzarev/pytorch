@@ -175,17 +175,24 @@
         tbody tr.recent-bad-48h:nth-child(odd) { background: rgba(239, 68, 68, 0.10); }
         tbody tr.recent-bad-48h:nth-child(even) { background: rgba(239, 68, 68, 0.08); }
         tbody tr.recent-bad-48h:hover { background: rgba(239, 68, 68, 0.16); }
+        tbody tr.recent-warn-12h:nth-child(odd) { background: rgba(249, 115, 22, 0.15); }
+        tbody tr.recent-warn-12h:nth-child(even) { background: rgba(249, 115, 22, 0.13); }
+        tbody tr.recent-warn-12h:hover { background: rgba(249, 115, 22, 0.25); }
+        tbody tr.recent-warn-48h:nth-child(odd) { background: rgba(249, 115, 22, 0.10); }
+        tbody tr.recent-warn-48h:nth-child(even) { background: rgba(249, 115, 22, 0.08); }
+        tbody tr.recent-warn-48h:hover { background: rgba(249, 115, 22, 0.16); }
         input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; background: var(--input-bg); border: 1px solid var(--border); border-radius: 3px; }
         .text-right { text-align: right; }
         .text-center { text-align: center; }
         .status-run { color: #3b82f6; }
         .status-pend { color: #eab308; }
-        .status-hold { color: #ef4444; }
+        .status-hold { color: #f97316; }
         .status-done { color: #22c55e; }
         .status-fail { color: #ef4444; }
         .status-end { color: #22c55e; }
         .status-cancel-clean { color: #4b5563; }
         .status-unknown { color: #9ca3af; }
+        .status-preempted, .status-requeue_hold { color: #f97316; }
         .warning-text { color: #ef4444; cursor: help; }
         tr.outdated { opacity: 0.4; pointer-events: none; }
         .state-bar {
@@ -581,11 +588,12 @@
             RUNNING: { icon: 'Run', cls: 'status-run' },
             PENDING: { icon: 'Pend', cls: 'status-pend' },
             REQUEUE_HOLD: { icon: 'Hold', cls: 'status-hold' },
+            PREEMPTED: { icon: 'Pre', cls: 'status-hold' },
             COMPLETING: { icon: 'End', cls: 'status-end' },
             DONE: { icon: 'Done', cls: 'status-done' },
             FAILED: { icon: 'Fail', cls: 'status-fail' },
             TIMEOUT: { icon: 'Time', cls: 'status-fail' },
-            CANCELLED: { icon: 'Canc', cls: 'status-hold' },
+            CANCELLED: { icon: 'Canc', cls: 'status-cancel-clean' },
             CANCELLED_FAIL: { icon: 'Canc', cls: 'status-fail' },
             UNKNOWN: { icon: '???', cls: '' },
             true: { icon: 'Done', cls: 'status-done' },
@@ -595,6 +603,7 @@
         const STATE_EMOJIS = {
             RUNNING: '🏃', PENDING: '⏳', REQUEUE_HOLD: '🚫', COMPLETING: '🌇',
             DONE: '✅', DONE_ISH: '🌄', COMPLETED: '✓', FAILED: '❌', UNKNOWN: '😕', TIMEOUT: '⏰', CANCELLED: '■',
+            PREEMPTED: '⏸',
             CANCELLED_FAIL: '🛑'
         };
 
@@ -1176,7 +1185,7 @@
                 { key: 'TIMEOUT', cls: 'bg-fail', label: 'Timeout' },
                 { key: 'CANCELLED_FAIL', cls: 'bg-fail', label: 'Cancelled' },
                 { key: 'CANCELLED', cls: 'bg-cancel-clean', label: 'Stopped' },
-                { key: 'PREEMPTED', cls: 'bg-cancel', label: 'Preempted' },
+                { key: 'PREEMPTED', cls: 'bg-hold', label: 'Preempted' },
                 { key: 'UNKNOWN', cls: 'bg-unknown', label: 'Unknown' },
                 { key: true, cls: 'bg-done', label: 'Done' },
                 { key: 'COMPLETED', cls: 'bg-done', label: 'Completed' },
@@ -1241,6 +1250,15 @@
             return keys.reduce((n, k) => n + (states[k] || states[String(k)] || 0), 0);
         }
 
+        function cleanExitStatus(status) {
+            return String(status || '').toLowerCase().replace(/ \(wip\)$/, '');
+        }
+
+        function keepAppStatus(wu, sacctStatus) {
+            return ['preempted', 'stopped', 'error'].includes(cleanExitStatus(wu.exit_status))
+                && ['COMPLETED', 'CANCELLED'].includes(sacctStatus);
+        }
+
         let allColdRows = [];  // Global for filtering
 
         function overviewSearchText(r) {
@@ -1255,7 +1273,9 @@
                 r.fail,
                 r.fail ? 'fail failed' : '',
                 r.stopped,
-                r.stopped ? 'stopped cancelled preempted' : '',
+                r.stopped ? 'stopped cancelled' : '',
+                r.preempted,
+                r.preempted ? 'preempted needs resume intervention' : '',
                 r.unknown,
                 r.unknown ? 'unknown' : '',
                 r.config,
@@ -1329,7 +1349,8 @@
                     const states = statesFromOverviewInfo(info);
                     const nDone = countStates(states, [true, 'DONE', 'DONE_ISH', 'COMPLETED']);
                     const nFail = countStates(states, [false, 'FAILED', 'TIMEOUT', 'CANCELLED_FAIL', 'NODE_FAIL', 'OUT_OF_MEMORY']);
-                    const nStopped = countStates(states, ['CANCELLED', 'PREEMPTED']);
+                    const nStopped = countStates(states, ['CANCELLED']);
+                    const nPreempted = countStates(states, ['PREEMPTED']);
                     const nUnknown = countStates(states, ['UNKNOWN']);
                     const nWus = Object.values(states).reduce((n, v) => n + v, 0);
                     allColdRows.push({
@@ -1341,6 +1362,7 @@
                         done: nDone,
                         fail: nFail,
                         stopped: nStopped,
+                        preempted: nPreempted,
                         unknown: nUnknown,
                         finishTime: info.finish_time || null,
                         config: info.config || '',
@@ -1355,7 +1377,8 @@
                     const states = statesFromOverviewInfo(info);
                     const nDone = countStates(states, [true, 'DONE', 'DONE_ISH', 'COMPLETED']);
                     const nFail = countStates(states, [false, 'FAILED', 'TIMEOUT', 'CANCELLED_FAIL', 'NODE_FAIL', 'OUT_OF_MEMORY']);
-                    const nStopped = countStates(states, ['CANCELLED', 'PREEMPTED']);
+                    const nStopped = countStates(states, ['CANCELLED']);
+                    const nPreempted = countStates(states, ['PREEMPTED']);
                     const nUnknown = countStates(states, ['UNKNOWN']);
                     const nWus = Object.values(states).reduce((n, v) => n + v, 0);
                     allColdRows.push({
@@ -1367,6 +1390,7 @@
                         done: nDone,
                         fail: nFail,
                         stopped: nStopped,
+                        preempted: nPreempted,
                         unknown: nUnknown,
                         finishTime: info.finish_time || null,
                         config: info.config || '',
@@ -1528,6 +1552,7 @@
                     : '';
                 const wuParts = [
                     r.fail ? `<span class="status-fail">${r.fail}</span>` : '',
+                    r.preempted ? `<span class="status-hold">${r.preempted}</span>` : '',
                     r.stopped ? `<span class="status-cancel-clean">${r.stopped}</span>` : '',
                     r.unknown ? `<span class="status-unknown">${r.unknown}</span>` : '',
                     r.done ? `<span class="status-done">${r.done}</span>` : '',
@@ -1538,10 +1563,11 @@
                 const nowSec = Date.now() / 1000;
                 const ageHours = r.finishTime ? (nowSec - r.finishTime) / 3600 : Infinity;
                 const isSuccess = r.wus > 0 && r.done + r.stopped === r.wus;
+                const needsResume = r.preempted > 0 && r.done + r.stopped + r.preempted === r.wus;
                 const recencyClass = ageHours < 12
-                    ? (isSuccess ? 'recent-12h' : 'recent-bad-12h')
+                    ? (isSuccess ? 'recent-12h' : needsResume ? 'recent-warn-12h' : 'recent-bad-12h')
                     : ageHours < 48
-                        ? (isSuccess ? 'recent-48h' : 'recent-bad-48h')
+                        ? (isSuccess ? 'recent-48h' : needsResume ? 'recent-warn-48h' : 'recent-bad-48h')
                         : '';
                 const finishedDisplay = !r.finishTime ? '' : ageHours < 48
                     ? formatAgo(r.finishTime)
@@ -1897,7 +1923,7 @@
                 wu.exit_code = info.exit_code;
                 wu.qwait = info.qwait || wu.qwait;
                 wu.runtime = info.runtime || wu.runtime;
-                if (!activeStatuses.includes(wu.status) && wu.status !== 'DONE' && info.status) {
+                if (!activeStatuses.includes(wu.status) && wu.status !== 'DONE' && info.status && !keepAppStatus(wu, info.status)) {
                     wu.status = info.status;
                 }
 

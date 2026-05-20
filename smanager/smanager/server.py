@@ -370,7 +370,8 @@ def _extra_info(xid_info):
             (xid, info, skip_config_loading, skip_active_done_loading).
             Inactive overview loads config.json for status and finish_time.
             Hot overview can skip config loading where squeue is already the
-            authoritative current-state source.
+            authoritative current-state source, but inactive WUs still use
+            config exit_status so clean preemptions do not look completed.
     """
     if len(xid_info) == 4:
         xid, info, skip_config_loading, _skip_active_done_loading = xid_info
@@ -471,7 +472,7 @@ def _extra_info(xid_info):
     workdir_wids = set(workdir_by_wid)
     launch_only_wids = launch_wids - workdir_wids - set(active_by_wid)
     inactive_workdir_wids = workdir_wids - set(active_by_wid)
-    config_status_wids = inactive_workdir_wids if "jobs" not in info or not skip_config_loading else set()
+    config_status_wids = inactive_workdir_wids
     missing_config_wids = [
         wid for wid in config_status_wids
         if wid in workdir_by_wid and wid not in config_by_wid
@@ -510,12 +511,12 @@ def _extra_info(xid_info):
 
             for jid, sacct in load_sacct_many(sacct_jids).items():
                 finished_by_wid[sacct_jids[jid]] = state_from_sacct(sacct)
-        elif launch_only_wids or inactive_workdir_wids:
+        elif launch_only_wids:
             # Keep hot overview fast: return unresolved WUs as UNKNOWN and let
             # the browser resolve them via /api/sacct/states after first paint.
             info["pending_sacct_jids"] = {
                 str(jid): str(wid)
-                for wid in launch_only_wids | inactive_workdir_wids
+                for wid in launch_only_wids
                 if (jid := launch_jid_by_wid.get(wid)) is not None
             }
 
@@ -1304,6 +1305,7 @@ def _get_xid_info_from_launchids(xid, wd_path, launchids, t0):
             "restarts": restarts,
             "exit_code": None,
             "status": status,
+            "exit_status": config.get("exit_status"),
             "reason": reason,
             "nsteps": config.get("nsteps") or _nsteps_from_args(args),
             "config_args": args,
@@ -1522,12 +1524,10 @@ def get_xid_info(xid: str):
         slurm_state = jobs_by_jid.get(str(jid), {}).get("STATE") if jid else None
         config_state = detail_status_from_exit_status(config.get("exit_status"))
 
-        if config_state == "DONE" and slurm_state == "RUNNING":
-            status[wid] = "DONE_ISH"
+        if jid and str(jid) in jobs_by_jid:
+            status[wid] = "DONE_ISH" if config_state == "DONE" and slurm_state == "RUNNING" else slurm_state or "UNKNOWN"
         elif config_state is not None:
             status[wid] = config_state
-        elif jid and str(jid) in jobs_by_jid:
-            status[wid] = slurm_state or "UNKNOWN"
         elif jid and jid in saccts:
             status[wid] = state_from_sacct(saccts[jid])
         else:
@@ -1599,6 +1599,7 @@ def get_xid_info(xid: str):
             "restarts": sacct.get("restart_cnt", 0),
             "exit_code": extract_exit_code(sacct),
             "status": status.get(wid, "UNKNOWN"),
+            "exit_status": config.get("exit_status"),
             "reason": jobs_by_jid.get(str(jid), {}).get("REASON", ""),
             "nsteps": config.get("nsteps"),
             "config_args": sws_args,
