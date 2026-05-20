@@ -229,6 +229,43 @@ def extract_common_name(workdir_names, xid):
     return common.strip(" -_")
 
 
+def display_config_path(path):
+    path = path.replace("\\", "/").removeprefix("./")
+    for marker in ("bv2/configs/", "bv2/config/"):
+        if marker in path:
+            return path.split(marker, 1)[1]
+    if "/x/" in path:
+        return "x/" + path.split("/x/", 1)[1]
+    return path or "?"
+
+
+def extract_config_display(launch_command):
+    if not launch_command:
+        return "?"
+    try:
+        tokens = shlex.split(launch_command)
+    except ValueError:
+        tokens = launch_command.split()
+
+    for i, token in enumerate(tokens):
+        if token == "--config" and i + 1 < len(tokens):
+            return display_config_path(tokens[i + 1])
+        if token.startswith("--config="):
+            return display_config_path(token.split("=", 1)[1])
+
+    if len(tokens) > 2 and tokens[2].endswith(".py"):
+        return display_config_path(tokens[2])
+    if len(tokens) > 1 and Path(tokens[0]).name in {"launch.py", "launch_slurm"} and tokens[1].endswith(".py"):
+        return display_config_path(tokens[1])
+    if len(tokens) > 3 and tokens[1] == "-m" and tokens[3].endswith(".py"):
+        return display_config_path(tokens[3])
+
+    for token in tokens:
+        if token.endswith(".py") and Path(token).name not in {"_launch.py", "launch.py", "train.py"}:
+            return display_config_path(token)
+    return "?"
+
+
 def dir_names(path):
     with os.scandir(path) as it:
         return [e.name for e in it if e.is_dir(follow_symlinks=False)]
@@ -465,8 +502,8 @@ def _extra_info(xid_info):
         wid_counts[wid] = wid_counts.get(wid, 0) + 1
 
     try:
-        info["config"] = next(re.finditer(r"bv2/config/(.*?) ", launchinfo_fut.result())).group(1)
-    except (OSError, StopIteration):
+        info["config"] = extract_config_display(launchinfo_fut.result())
+    except OSError:
         info["config"] = "?"
 
     finished_by_wid = {}
