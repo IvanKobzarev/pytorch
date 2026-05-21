@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+kind=$1; shift
+tool=launch_$kind
+
+usage() {
+  cat <<EOF
+Usage: bv2/tools/remote_launch_$kind CLUSTER MODULE [CONFIG.py] [args...]
+       bv2/tools/remote_launch_$kind --server URL --ssh HOST MODULE [CONFIG.py] [args...]
+
+Clusters: fair-sc-3, fair-sc, dm1
+EOF
+}
+
+server=
+ssh_host=
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    fair-sc-3) server=http://localhost:2337; ssh_host=fair-sc-3; shift ;;
+    fair-sc) server=http://localhost:2338; ssh_host=fair-sc; shift ;;
+    dm1) server=http://localhost:2339; ssh_host=dm1; shift ;;
+    --server) server=${2:-}; [[ -n "$server" ]] || { usage >&2; exit 2; }; shift 2 ;;
+    --server=*) server=${1#--server=}; shift ;;
+    --ssh) ssh_host=${2:-}; [[ -n "$ssh_host" ]] || { usage >&2; exit 2; }; shift 2 ;;
+    --ssh=*) ssh_host=${1#--ssh=}; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) break ;;
+  esac
+done
+
+if [[ -z "$server" || -z "$ssh_host" || $# -eq 0 || ! -f "bv2/tools/$tool" ]]; then
+  usage >&2
+  exit 2
+fi
+
+response=$(mktemp)
+remote_tmp=
+remote_tmp_re='^/tmp/remote_launch_[A-Za-z0-9]+$'
+remote_owned_by_server=0
+
+cleanup_remote_tmp() {
+  if [[ ! "$remote_tmp" =~ $remote_tmp_re ]]; then
+    echo "Refusing to delete remote tmp: $remote_tmp" >&2
+    return 1
+  fi
+  ssh "$ssh_host" "bash -lc '[[ \"$remote_tmp\" =~ $remote_tmp_re ]] && rm -rf -- \"$remote_tmp\"'" >/dev/null 2>&1 || true
+}
+
+cleanup() {
+  rm -f "$response"
+  [[ "$remote_owned_by_server" = 1 || -z "$remote_tmp" ]] || cleanup_remote_tmp
+}
+trap cleanup EXIT
+
+encoded_args=()
+for arg in "$@"; do
+  encoded_args+=("$(printf '%s' "$arg" | base64 | tr -d '\n')")
+done
+args_header=$(IFS=,; echo "${encoded_args[*]}")
+
+remote_tmp=$(ssh "$ssh_host" 'mktemp -d /tmp/remote_launch_XXXXXX')
+if [[ ! "$remote_tmp" =~ $remote_tmp_re ]]; then
+  echo "Unexpected remote tmp path: $remote_tmp" >&2
+  exit 1
+fi
+remote_src="$remote_tmp/src"
+src_header=$(printf '%s' "$remote_src" | base64 | tr -d '\n')
+EXCLUDES=(
+  --exclude='.git/'
+  --exclude='__pycache__/'
+  --exclude='/venv*/'
+  --exclude='notebooks/'
+  --exclude='smanager/'
+)
+
+echo "Uploading source to $ssh_host:$remote_src ..." >&2
+ssh "$ssh_host" "mkdir -p '$remote_src'"
+rsync -az --delete --checksum "${EXCLUDES[@]}" ./ "$ssh_host:$remote_src/" >&2
+
+interrupt_remote() {
+  trap - INT
+  echo "Forwarding Ctrl-C to remote launch ..." >&2
+  curl -sS --connect-timeout 2 --max-time 5 -X POST \
+    -H "X-Launch-Src-B64: $src_header" \
+    "${server%/}/api/action/launch_interrupt" >/dev/null || true
+  exit 130
+}
+
+echo "Launching on ${server%/} ..." >&2
+remote_owned_by_server=1
+trap interrupt_remote INT
+if ! curl -sS --no-buffer --fail-with-body \
+  -X POST \
+  --connect-timeout 5 \
+  -H 'Accept: text/plain' \
+  -H "X-Launch-Args-B64: $args_header" \
+  -H "X-Launch-Src-B64: $src_header" \
+  "${server%/}/api/action/$tool" | tee "$response"; then
+  trap - INT
+  remote_owned_by_server=0
+  exit 1
+fi
+trap - INT
+
+ret=$(awk '/^Remote launch failed with return code [0-9]+$/ {code=$NF} END {print code}' "$response")
+[[ -z "$ret" ]] || exit "$ret"

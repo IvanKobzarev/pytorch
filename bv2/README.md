@@ -41,6 +41,17 @@ bv2/tools/launch_slurm bv2.train bv2/config/finevision.py --qos h100_rigi_high -
 Generally the syntax is `bv2/tools/launch_slurm MODULE CONFIG [slurm-flags] [sws-flags]`.
 There's also a command to "run a sweep locally" useful to bypass slurm or quicktest sweeps: `bv2/tools/launch_local MODULE CONFIG [sws-flags]`
 
+Remote launch from a laptop
+---------------------------
+
+If smanager is forwarded locally, use `remote_launch_slurm` from the repo root. The first argument is the cluster alias for the forwarded smanager server.
+
+```
+bv2/tools/remote_launch_slurm fair-sc-3 bv2.train bv2/config/synth_ocr.py --qos h100_dev nsteps=100 --time 1-0:0:0 --gpus-per-node 8
+```
+
+This uploads the current checkout to the cluster over SSH, then asks smanager to run `launch_slurm` from that uploaded source directory.
+
 TO DOcument
 -----------
 

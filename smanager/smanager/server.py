@@ -3,11 +3,13 @@
 
 import re
 import json
+import base64
 import subprocess
 import shlex
 import logging
 import time
 import signal
+import threading
 import sys
 import os
 import stat
@@ -23,9 +25,9 @@ from functools import partial
 import plattli
 import zstandard
 
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
@@ -2131,7 +2133,6 @@ def get_files_content(xid: str, file_path: str):
 @app.get("/api/xid/{xid}/files/download/{file_path:path}")
 def download_file(xid: str, file_path: str):
     """Force download a file regardless of type."""
-    from starlette.responses import StreamingResponse
     wd_path = _get_workdir(xid)
     full_path = _safe_path(wd_path, file_path)
     try:
@@ -2350,6 +2351,148 @@ def resume_job(script: str):
     return {"status": "ok", "output": result.stdout.strip()}
 
 
+_remote_launch_tmp_re = re.compile(r"^/tmp/remote_launch_[A-Za-z0-9]+$")
+
+
+def _remote_launch_tmp(src_text):
+    src = Path(src_text).resolve()
+    if src.name != "src" or not _remote_launch_tmp_re.fullmatch(str(src.parent)):
+        return None
+    return src.parent
+
+
+def _cleanup_launch_tmp(tmp):
+    tmp = Path(tmp).resolve()
+    if not _remote_launch_tmp_re.fullmatch(str(tmp)):
+        raise RuntimeError(f"Refusing to delete launch tmp {tmp}")
+    try:
+        shutil.rmtree(tmp)
+    except FileNotFoundError:
+        pass
+
+
+def _validate_launch_src(src_text, kind):
+    tmp = _remote_launch_tmp(src_text)
+    if tmp is None:
+        raise HTTPException(status_code=400, detail="Launch source must be /tmp/remote_launch_*/src")
+    src = tmp / "src"
+    script = src / f"bv2/tools/launch_{kind}"
+    if not script.is_file():
+        raise HTTPException(status_code=400, detail=f"Launch source does not contain bv2/tools/launch_{kind}")
+    script.chmod(0o755)
+    return src
+
+
+_launch_procs = {}
+_launch_lock = threading.Lock()
+
+
+def _signal_launch(proc, sig):
+    try:
+        os.killpg(proc.pid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def _stream_launch(tmp, src, kind, argv):
+    proc = None
+    key = str(tmp)
+    try:
+        with _launch_lock:
+            proc = subprocess.Popen(
+                [f"bv2/tools/launch_{kind}", *argv],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=src, bufsize=0, start_new_session=True)
+            _launch_procs[key] = proc
+        while chunk := proc.stdout.read(4096):
+            yield chunk
+        ret = proc.wait()
+        if ret:
+            code = 128 + abs(ret) if ret < 0 else ret
+            log.error("launch_%s failed with return code %s", kind, ret)
+            yield f"\nRemote launch failed with return code {code}\n".encode()
+        else:
+            log.info("launch_%s succeeded", kind)
+    finally:
+        if proc:
+            with _launch_lock:
+                if _launch_procs.get(key) is proc:
+                    del _launch_procs[key]
+            if proc.poll() is None:
+                _signal_launch(proc, signal.SIGINT)
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    _signal_launch(proc, signal.SIGKILL)
+                    proc.wait()
+        _cleanup_launch_tmp(tmp)
+
+
+async def _launch(request, kind):
+    if not ACTIONS_ENABLED:
+        raise HTTPException(status_code=403, detail="Actions are disabled (--no-actions)")
+    if request.headers.get("origin"):
+        raise HTTPException(status_code=403, detail="Launch actions are CLI-only")
+
+    encoded_args = request.headers.get("x-launch-args-b64", "")
+    if not encoded_args:
+        raise HTTPException(status_code=400, detail="Missing x-launch-args-b64 header")
+    encoded_src = request.headers.get("x-launch-src-b64", "")
+    if not encoded_src:
+        raise HTTPException(status_code=400, detail="Missing x-launch-src-b64 header")
+    try:
+        argv = [base64.b64decode(arg, validate=True).decode("utf-8") for arg in encoded_args.split(",") if arg]
+        src_text = base64.b64decode(encoded_src, validate=True).decode("utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid launch request: {e}")
+    if not argv:
+        raise HTTPException(status_code=400, detail="No launch arguments provided")
+
+    log.info("POST /api/action/launch_%s argv=%s", kind, shlex.join(argv))
+    try:
+        src = _validate_launch_src(src_text, kind)
+    except Exception:
+        if tmp := _remote_launch_tmp(src_text):
+            _cleanup_launch_tmp(tmp)
+        raise
+
+    return StreamingResponse(_stream_launch(src.parent, src, kind, argv), media_type="text/plain")
+
+
+@app.post("/api/action/launch_interrupt")
+async def launch_interrupt(request: Request):
+    if not ACTIONS_ENABLED:
+        raise HTTPException(status_code=403, detail="Actions are disabled (--no-actions)")
+    if request.headers.get("origin"):
+        raise HTTPException(status_code=403, detail="Launch actions are CLI-only")
+    try:
+        src_text = base64.b64decode(request.headers.get("x-launch-src-b64", ""), validate=True).decode("utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid launch request: {e}")
+    tmp = _remote_launch_tmp(src_text)
+    if tmp is None:
+        raise HTTPException(status_code=400, detail="Launch source must be /tmp/remote_launch_*/src")
+    with _launch_lock:
+        proc = _launch_procs.get(str(tmp))
+    if proc and proc.poll() is None:
+        log.info("POST /api/action/launch_interrupt tmp=%s", tmp)
+        _signal_launch(proc, signal.SIGINT)
+    else:
+        _cleanup_launch_tmp(tmp)
+    return {"status": "ok"}
+
+
+@app.post("/api/action/launch_slurm")
+async def launch_slurm(request: Request):
+    """Launch a new Slurm experiment from an existing source directory."""
+    return await _launch(request, "slurm")
+
+
+@app.post("/api/action/launch_local")
+async def launch_local(request: Request):
+    """Launch a local GPU run from an existing source directory."""
+    return await _launch(request, "local")
+
+
 @app.post("/api/action/delete/{xid}")
 def delete_xid(xid: str):
     """Delete an XID and all its associated directories."""
@@ -2408,7 +2551,6 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="sManager - Slurm job management web UI")
     parser.add_argument("--version", action="version", version=f"smanager {__version__}")
-    parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=2337)
     parser.add_argument("--prefs-dir", help=f"Directory for preferences files (default: /checkpoint/rigi/USER)")
     parser.add_argument("--no-actions", action="store_true", help="Disable all action endpoints (stop, resume, delete)")
@@ -2423,7 +2565,7 @@ def main():
     if args.archive_dir:
         ARCHIVE_DIR = Path(args.archive_dir)
         log.info("Archive directory: %s", ARCHIVE_DIR)
-    uvicorn.run(app, host=args.host, port=args.port)
+    uvicorn.run(app, host="127.0.0.1", port=args.port)
 
 
 if __name__ == "__main__":
