@@ -660,7 +660,7 @@
         let currentXidData = null;
         let currentMetric = '';
         let regexFilterMode = false;
-        let avgProgressExcludeCancelled = false;  // Toggle for average progress: false = include all, true = exclude CANCELLED
+        let avgProgressExcludeCancelled = true;  // Toggle for average progress: false = include all, true = exclude CANCELLED
         let currentProgressData = null;  // Store progress data for recalculation when toggling modes
         let currentStatusDataLoaded = false;
 
@@ -1800,6 +1800,7 @@
             currentXidData = null;
             currentProgressData = null;
             currentStatusDataLoaded = false;
+            avgProgressExcludeCancelled = true;
             document.getElementById('xidDisplay').textContent = xid;
             document.getElementById('xidActions').innerHTML = '';
             content.innerHTML = '<p class="loading">Auto-discovering server...</p>';
@@ -1847,6 +1848,7 @@
             currentXidData = null;
             currentProgressData = null;
             currentStatusDataLoaded = false;
+            avgProgressExcludeCancelled = true;
             document.getElementById('xidDisplay').textContent = xid;
             document.getElementById('xidActions').innerHTML = '';
             content.innerHTML = '<p class="loading">Loading...</p>';
@@ -1994,31 +1996,43 @@
             avgProgressEl.innerHTML = '';
             if (!currentXidData || !currentProgressData || !currentStatusDataLoaded) return;
 
-            let totalPct = 0;
-            let count = 0;
-            let excludedCount = 0;
+            let allTotalPct = 0;
+            let allCount = 0;
+            let liveTotalPct = 0;
+            let liveCount = 0;
 
             for (const wu of currentXidData.wus) {
                 const wid = String(wu.wid);
                 const pct = currentProgressData[wid] || 0;
                 const isCancelled = wu.status === 'CANCELLED';
 
-                if (avgProgressExcludeCancelled && isCancelled) {
-                    excludedCount++;
-                    continue;
+                allTotalPct += pct;
+                allCount++;
+                if (!isCancelled) {
+                    liveTotalPct += pct;
+                    liveCount++;
                 }
-
-                totalPct += pct;
-                count++;
             }
 
-            if (count > 0) {
-                const avgPct = totalPct / count;
-                const modeText = avgProgressExcludeCancelled ? 'excluding CANCELLED' : 'all work-units';
-                const modeIndicator = avgProgressExcludeCancelled ? 'Live' : 'All';
-                const excludedText = excludedCount > 0 ? ` (${excludedCount} CANCELLED excluded)` : '';
-                avgProgressEl.innerHTML = `<div class="progress-bar" style="width:120px;display:inline-block;font-size:13px;cursor:pointer;" onclick="toggleAvgProgressMode()" title="Average progress across ${count} work-units (${modeText})${excludedText}. Click to toggle mode."><span class="fill" style="width:${avgPct}%"></span>${avgPct.toFixed(1)}% (${modeIndicator})</div>`;
+            if (!allCount) return;
+
+            const allPct = allTotalPct / allCount;
+            const livePct = liveCount ? liveTotalPct / liveCount : allPct;
+            const sameProgress = allPct.toFixed(1) === livePct.toFixed(1);
+            const showLive = liveCount && avgProgressExcludeCancelled;
+            const avgPct = showLive ? livePct : allPct;
+            const count = showLive ? liveCount : allCount;
+            const cancelledCount = allCount - liveCount;
+
+            if (sameProgress) {
+                avgProgressEl.innerHTML = `<div class="progress-bar" style="width:120px;display:inline-block;font-size:13px;" title="Average progress across ${allCount} work-units."><span class="fill" style="width:${allPct}%"></span>${allPct.toFixed(1)}%</div>`;
+                return;
             }
+
+            const modeText = showLive ? 'excluding CANCELLED' : 'all work-units';
+            const modeIndicator = showLive ? 'Live' : 'All';
+            const excludedText = showLive && cancelledCount > 0 ? ` (${cancelledCount} CANCELLED excluded)` : '';
+            avgProgressEl.innerHTML = `<div class="progress-bar" style="width:120px;display:inline-block;font-size:13px;cursor:pointer;" onclick="toggleAvgProgressMode()" title="Average progress across ${count} work-units (${modeText})${excludedText}. Click to toggle mode."><span class="fill" style="width:${avgPct}%"></span>${avgPct.toFixed(1)}% (${modeIndicator})</div>`;
         }
 
         function toggleAvgProgressMode() {
