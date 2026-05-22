@@ -45,6 +45,33 @@ Most experiment-related data is stored in subfolders of `/checkpoint/rigi/bv2`:
 
 Short runs, less than 50 steps, do not write profiling info and land in `workdirs-dbg` folder instead.
 
+## smanager API from a laptop
+
+If `/checkpoint` doesn't exist, you are running on a laptop. In this case, use smanager as follows.
+
+With SSH forwards active, assume three independent local smanager backends always exist:
+- `fair-sc-3`: `http://localhost:2337`
+- `fair-sc`: `http://localhost:2338`
+- `dm1`: `http://localhost:2339`
+
+Query all three directly; there is no proxy server that fans out for you. Useful JSON GETs:
+- `/api/overview` for hot XIDs
+- `/api/overview/inactive` for past experiments
+- `/api/xid/{xid}` to get WUs for an experiment, including each `wus[].jid`
+- `/api/xid/{xid}/metrics?metric=train/loss`
+- `/api/xid/{xid}/{wid}/config` for the exact config that ran
+- `/api/xid/{xid}/code/tree` for the copied srcdir tree
+- `/api/xid/{xid}/code/file/{file_path}` for a file from the copied srcdir
+- `/api/log/{jid}`
+
+For actions, POST to the server that owns the row:
+- `/api/action/stop/{jid}`
+- `/api/action/stop_xid/{xid}`
+- `/api/action/requeue/{jid}`
+- `/api/action/requeue_xid/{xid}`
+- `/api/action/resume?script=...`
+- `/api/note/{xid}`
+
 ## Datasets
 
 To inspect raw data from any dataset here, we can either use the dataset class:
