@@ -53,6 +53,7 @@ With SSH forwards active, assume three independent local smanager backends alway
 - `fair-sc-3`: `http://localhost:2337`
 - `fair-sc`: `http://localhost:2338`
 - `dm1`: `http://localhost:2339`
+But you may need to use `curl --noproxy '*' http://127.0.0.1:2337/...` to avoid your sandbox's proxy.
 
 Query all three directly; there is no proxy server that fans out for you. Useful JSON GETs:
 - `/api/overview` for hot XIDs
