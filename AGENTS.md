@@ -1,4 +1,4 @@
-IMPORTANT: never delete or edit files in /checkpoint/rigi. Reading is fine though.
+IMPORTANT: never manually delete or edit files in /checkpoint/rigi. Reading is fine.
 
 ## General code style rules
 
@@ -10,15 +10,16 @@ IMPORTANT: never delete or edit files in /checkpoint/rigi. Reading is fine thoug
 
 ## Running the code
 
-To run the code, because of the sandbox, you may need to use `NCCL_SOCKET_IFNAME=lo` before any command.
-We use conda envs, where `python` is the current env, but `python3` is not, so always use `python`, not `python3`.
+Locally:
+    To run the code, because of the sandbox, you may need to use `NCCL_SOCKET_IFNAME=lo` and `NO_PROXY='*' no_proxy='*'` before any command.
+    We use conda envs, where `python` is the current env, but `python3` is not, so always use `python`, not `python3`.
 
-**Configuration** works using config files and the `sws` config library, the config file should be self-explaining,
-but in a run (or a sweep) any config can be overwritten by commandline arguments of the form `name=value` where:
-- `value` is a python expression, like `2*3` would be 6, but if it doesn't parse it's a string.
-- `name` is can be any suffix of a config option as long as it uniquely identifies a single option.
-- `..name` can be used to mean ALL options with `name` as suffix, and hence `...name` would be all leaves called `name`.
-- You can use the defining syntax `name:=value` to create a new `c.name` if it doesn't exist; not suffix, only exact name.
+Remotely if there are no GPUs locally:
+    If you don't have a GPU/CUDA (like on a laptop), you can launch a run on the fair-sc-3 GPU machine and stream its output via smanager using `bv2/tools/remote_launch_local fair-sc-3`.
+    For short development/testing runs, prefer this over manually SSHing or launching on slurm.
+
+If the config has a sweep, consider running only one entry for the test, either edit the config for early return or run a smoke-copy of the config that only imports get_config.
+Don't needlessly change unrelated settings (like making things smaller) for test runs!
 
 ## Experiment management
 
@@ -45,6 +46,15 @@ Most experiment-related data is stored in subfolders of `/checkpoint/rigi/bv2`:
 
 Short runs, less than 50 steps, do not write profiling info and land in `workdirs-dbg` folder instead.
 
+## Configuration
+
+Configuration works using config files and the `sws` config library, the config file should be self-explaining,
+but in a run (or a sweep) any config can be overwritten by commandline arguments of the form `name=value` where:
+- `value` is a python expression, like `2*3` would be 6, but if it doesn't parse it's a string.
+- `name` can be any suffix of a config option as long as it uniquely identifies a single option.
+- `..name` can be used to mean ALL options with `name` as suffix, and hence `...name` would be all leaves called `name`.
+- You can use the defining syntax `name:=value` to create a new `c.name` if it doesn't exist; not suffix, only exact name.
+
 ## smanager API from a laptop
 
 If `/checkpoint` doesn't exist, you are running on a laptop. In this case, use smanager as follows.
@@ -56,14 +66,15 @@ With SSH forwards active, assume three independent local smanager backends alway
 But you may need to use `curl --noproxy '*' http://127.0.0.1:2337/...` to avoid your sandbox's proxy.
 
 Query all three directly; there is no proxy server that fans out for you. Useful JSON GETs:
-- `/api/overview` for hot XIDs
-- `/api/overview/inactive` for past experiments
+- `/api/overview` to list currently active ("hot") XIDs
+- `/api/overview/inactive` to list past (inactive / "cold") XIDs
 - `/api/xid/{xid}` to get WUs for an experiment, including each `wus[].jid`
-- `/api/xid/{xid}/metrics?metric=train/loss`
+- `/api/xid/{xid}/metrics?metric=train/loss` to get the last value of the metric (`pplx/pplx` is another good one)
 - `/api/xid/{xid}/{wid}/config` for the exact config that ran
 - `/api/xid/{xid}/code/tree` for the copied srcdir tree
 - `/api/xid/{xid}/code/file/{file_path}` for a file from the copied srcdir
-- `/api/log/{jid}`
+- `/api/log/{jid}` see the logfile
+- `/api/health` to ping for life
 
 For actions, POST to the server that owns the row:
 - `/api/action/stop/{jid}`
