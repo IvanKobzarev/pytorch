@@ -1178,16 +1178,15 @@
         function formatStates(states) {
             if (!states) return '';
             // Order: finished states first, then running, then pending
-            // false = failed WU, true = done WU, plus Slurm/config state strings.
+            states = canonicalStates(states);
             const order = [
-                { key: false, cls: 'bg-fail', label: 'Fail' },
                 { key: 'FAILED', cls: 'bg-fail', label: 'Failed' },
                 { key: 'TIMEOUT', cls: 'bg-fail', label: 'Timeout' },
                 { key: 'CANCELLED_FAIL', cls: 'bg-fail', label: 'Cancelled' },
                 { key: 'CANCELLED', cls: 'bg-cancel-clean', label: 'Stopped' },
                 { key: 'PREEMPTED', cls: 'bg-hold', label: 'Preempted' },
                 { key: 'UNKNOWN', cls: 'bg-unknown', label: 'Unknown' },
-                { key: true, cls: 'bg-done', label: 'Done' },
+                { key: 'DONE', cls: 'bg-done', label: 'Done' },
                 { key: 'COMPLETED', cls: 'bg-done', label: 'Completed' },
                 { key: 'COMPLETING', cls: 'bg-end', label: 'Completing' },
                 { key: 'DONE_ISH', cls: 'bg-done-ish', label: 'Done-ish' },
@@ -1200,15 +1199,16 @@
             let total = 0;
             const segments = [];
             for (const { key, cls, label } of order) {
-                const val = states[key] || states[String(key)] || 0;
+                const val = states[key] || 0;
                 if (val > 0) {
                     total += val;
                     segments.push({ cls, label, val });
                 }
             }
             // Check for any states not in order
+            const orderedKeys = new Set(order.map(o => o.key));
             for (const [key, val] of Object.entries(states)) {
-                if (val > 0 && !order.some(o => String(o.key) === key)) {
+                if (val > 0 && !orderedKeys.has(key)) {
                     total += val;
                     segments.push({ cls: 'bg-hold', label: key, val });
                 }
@@ -1237,11 +1237,27 @@
             return `<div class="state-bar" title="${tooltip}">${barParts.join('')}</div>`;
         }
 
+        function canonicalStateKey(key) {
+            if (key === true || key === 'true') return 'DONE';
+            if (key === false || key === 'false') return 'FAILED';
+            return String(key);
+        }
+
+        function canonicalStates(states) {
+            const result = {};
+            for (const [key, val] of Object.entries(states || {})) {
+                const canonical = canonicalStateKey(key);
+                result[canonical] = (result[canonical] || 0) + val;
+            }
+            return result;
+        }
+
         function statesFromOverviewInfo(info) {
-            if (info.effective_states) return info.effective_states;
+            if (info.effective_states) return canonicalStates(info.effective_states);
             const states = {};
             for (const v of Object.values(info.wus || {})) {
-                states[v] = (states[v] || 0) + 1;
+                const state = canonicalStateKey(v);
+                states[state] = (states[state] || 0) + 1;
             }
             return states;
         }
@@ -1255,7 +1271,8 @@
         }
 
         function keepAppStatus(wu, sacctStatus) {
-            return ['preempted', 'stopped', 'error'].includes(cleanExitStatus(wu.exit_status))
+            return !String(wu.exit_status || '').toLowerCase().endsWith(' (wip)')
+                && ['preempted', 'stopped', 'error'].includes(cleanExitStatus(wu.exit_status))
                 && ['COMPLETED', 'CANCELLED'].includes(sacctStatus);
         }
 
@@ -1305,7 +1322,7 @@
                 const serverName = servers[sIdx].name;
 
                 for (const [xid, info] of Object.entries(data.hot || {})) {
-                    const states = info.effective_states || {};
+                    const states = canonicalStates(info.effective_states || {});
                     const wuCount = info.total_wus || 0;
 
                     // Aggregate
@@ -1336,7 +1353,7 @@
                 // Aggregate miscellaneous jobs (will add single row after loop)
                 const misc = data.misc;
                 if (misc && misc.count > 0) {
-                    const miscStates = misc.states || {};
+                    const miscStates = canonicalStates(misc.states || {});
                     for (const [k, v] of Object.entries(miscStates)) {
                         allStates[k] = (allStates[k] || 0) + v;
                     }
@@ -1347,8 +1364,8 @@
                 // Add cold (recent) experiments with full info
                 for (const [xid, info] of Object.entries(data.cold || {})) {
                     const states = statesFromOverviewInfo(info);
-                    const nDone = countStates(states, [true, 'DONE', 'DONE_ISH', 'COMPLETED']);
-                    const nFail = countStates(states, [false, 'FAILED', 'TIMEOUT', 'CANCELLED_FAIL', 'NODE_FAIL', 'OUT_OF_MEMORY']);
+                    const nDone = countStates(states, ['DONE', 'DONE_ISH', 'COMPLETED']);
+                    const nFail = countStates(states, ['FAILED', 'TIMEOUT', 'CANCELLED_FAIL', 'NODE_FAIL', 'OUT_OF_MEMORY']);
                     const nStopped = countStates(states, ['CANCELLED']);
                     const nPreempted = countStates(states, ['PREEMPTED']);
                     const nUnknown = countStates(states, ['UNKNOWN']);
@@ -1375,8 +1392,8 @@
                 // Add frozen (old) experiments - also has full info from _extra_info
                 for (const [xid, info] of Object.entries(data.frozen || {})) {
                     const states = statesFromOverviewInfo(info);
-                    const nDone = countStates(states, [true, 'DONE', 'DONE_ISH', 'COMPLETED']);
-                    const nFail = countStates(states, [false, 'FAILED', 'TIMEOUT', 'CANCELLED_FAIL', 'NODE_FAIL', 'OUT_OF_MEMORY']);
+                    const nDone = countStates(states, ['DONE', 'DONE_ISH', 'COMPLETED']);
+                    const nFail = countStates(states, ['FAILED', 'TIMEOUT', 'CANCELLED_FAIL', 'NODE_FAIL', 'OUT_OF_MEMORY']);
                     const nStopped = countStates(states, ['CANCELLED']);
                     const nPreempted = countStates(states, ['PREEMPTED']);
                     const nUnknown = countStates(states, ['UNKNOWN']);

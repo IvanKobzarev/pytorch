@@ -279,20 +279,24 @@ def wid_from_workdir_name(name):
     return None
 
 
+def exit_status_is_wip(status):
+    return str(status or "").lower().endswith(" (wip)")
+
+
 def state_from_exit_status(status):
     if not status:
         return None
     status = str(status).lower()
-    if status.endswith(" (wip)"):
-        status = status[:-6]
+    if exit_status_is_wip(status):
+        return None
     if status == "done":
-        return True
+        return "DONE"
     if status == "stopped":
         return "CANCELLED"
     if status == "preempted":
         return "PREEMPTED"
     if status == "error":
-        return False
+        return "FAILED"
     return status.upper()
 
 
@@ -394,12 +398,7 @@ def _failed_sacct_json_step(sacct):
 
 
 def detail_status_from_exit_status(status):
-    state = state_from_exit_status(status)
-    if state is True:
-        return "DONE"
-    if state is False:
-        return "FAILED"
-    return state
+    return state_from_exit_status(status)
 
 
 def _extra_info(xid_info):
@@ -525,10 +524,21 @@ def _extra_info(xid_info):
         config_by_wid[wid] = config
         if config.get("jid"):
             workdir_jid_by_wid[wid] = normalize_jid(config.get("jid"))
+    # WIP exit_status is only the signal handler's partial write; sacct owns
+    # the finished state if the trainer never finalized config.json.
+    ambiguous_sacct_jids = {}
     for wid in config_status_wids:
         config = config_by_wid.get(wid, {})
-        state = state_from_exit_status(config.get("exit_status"))
-        finished_by_wid[wid] = state if state is not None else False
+        exit_status = config.get("exit_status")
+        state = state_from_exit_status(exit_status)
+        if state is not None:
+            finished_by_wid[wid] = state
+        elif exit_status_is_wip(exit_status):
+            finished_by_wid[wid] = "UNKNOWN"
+            if jid := workdir_jid_by_wid.get(wid):
+                ambiguous_sacct_jids[jid] = wid
+        else:
+            finished_by_wid[wid] = "FAILED"
         if config.get("exit_status_at"):
             try:
                 info["finish_time"] = max(
@@ -537,6 +547,9 @@ def _extra_info(xid_info):
                 )
             except (TypeError, ValueError):
                 pass
+
+    for jid, sacct in load_sacct_many(ambiguous_sacct_jids).items():
+        finished_by_wid[ambiguous_sacct_jids[jid]] = state_from_sacct(sacct)
 
     if "jobs" in info:
         if not skip_config_loading:
@@ -564,7 +577,7 @@ def _extra_info(xid_info):
         states = Counter()
         for wid in launch_wids | workdir_wids | set(active_by_wid):
             if wid in active_by_wid:
-                if (finished_by_wid.get(wid) is True and active_by_wid[wid] == "RUNNING"
+                if (finished_by_wid.get(wid) == "DONE" and active_by_wid[wid] == "RUNNING"
                         and active_jid_by_wid.get(wid) == (workdir_jid_by_wid.get(wid) or launch_jid_by_wid.get(wid))):
                     state = "DONE_ISH"
                 else:
@@ -572,7 +585,7 @@ def _extra_info(xid_info):
             elif wid in finished_by_wid:
                 state = finished_by_wid[wid]
             elif wid in workdir_wids:
-                state = "UNKNOWN" if skip_config_loading else False
+                state = "UNKNOWN" if skip_config_loading else "FAILED"
             else:
                 state = "UNKNOWN"
             info["wus"][str(wid)] = state
@@ -1421,9 +1434,10 @@ def _get_xid_info_from_launchids(xid, wd_path, launchids, t0):
             runtime = job.get("TIME") or job.get("TIME_USED") or "n/a"
         else:
             jid = normalize_jid(config.get("jid")) or normalize_jid(meta.get("launchjid") if isinstance(meta, dict) else None)
-            status = detail_status_from_exit_status(config.get("exit_status"))
+            exit_status = config.get("exit_status")
+            status = detail_status_from_exit_status(exit_status)
             if status is None:
-                status = "FAILED" if wuwd_name else "UNKNOWN"
+                status = "UNKNOWN" if exit_status_is_wip(exit_status) else ("FAILED" if wuwd_name else "UNKNOWN")
             reason = ""
             restarts = 0
             runtime = "n/a"
@@ -1651,7 +1665,8 @@ def get_xid_info(xid: str):
     for wid, config in configs.items():
         jid = normalize_jid(config.get("jid"))
         slurm_state = jobs_by_jid.get(str(jid), {}).get("STATE") if jid else None
-        config_state = detail_status_from_exit_status(config.get("exit_status"))
+        exit_status = config.get("exit_status")
+        config_state = detail_status_from_exit_status(exit_status)
 
         if jid and str(jid) in jobs_by_jid:
             status[wid] = "DONE_ISH" if config_state == "DONE" and slurm_state == "RUNNING" else slurm_state or "UNKNOWN"
@@ -1659,6 +1674,8 @@ def get_xid_info(xid: str):
             status[wid] = config_state
         elif jid and jid in saccts:
             status[wid] = state_from_sacct(saccts[jid])
+        elif exit_status_is_wip(exit_status):
+            status[wid] = "UNKNOWN"
         else:
             status[wid] = "FAILED"
 
