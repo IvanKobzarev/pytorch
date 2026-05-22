@@ -9,7 +9,7 @@ pip install -r bv2/requirements-gpu-nightly.txt  # Or -stable, or -cpu-(nightly|
 bv2/tools/launch_local bv2.train
 
 # If you're not in `rigi`, then:
-bv2/tools/launch_local bv2.train ...tokenizer.path=$HOME/pci-wsf/tokenizers/tiktoken/l4_200k_base ckpt_steps:=999999 workdir_base:=/tmp/rigi_workdir
+bv2/tools/launch_local bv2.train ...tokenizer.path=$HOME/pci-wsf/tokenizers/tiktoken/l4_200k_base ckpt_at_steps:=999999 workdir_base:=/tmp/rigi_workdir
 ```
 
 A little bit more details in [bv2/README.md](bv2/README.md).

@@ -39,7 +39,7 @@ def get_config():
     c.model.img.tiptoi = lambda: c.data.tiptoi
 
     c.evals.pplx.type = "pplx"
-    c.evals.pplx.steps = 500
+    c.evals.pplx.at_steps = 500
     c.evals.pplx.iter.maxtok = lambda: c.maxtok
     c.evals.pplx.iter.seed = 31337  # Defines the "fixed val split".
     c.evals.pplx.data.name = "synth_ocr_detect"

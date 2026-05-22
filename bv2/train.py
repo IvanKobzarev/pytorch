@@ -64,10 +64,13 @@ except Exception:
 
 def main(c, rank, local_rank, world_size):  # noqa: C901
     prints0(f"Running with arguments:\n{c}")
+    trainsched = u.schedule(c, prefix="n", name="training schedule")
+    is_short_run = trainsched["unit"] == "nsteps" and trainsched["spec"] < 50
+    prints0(f"Training target: {u.BLUE}{trainsched['unit']}={trainsched['spec']}{u.RESET}")
 
     # start from the beginning to track every gpu memory allocation
     # otherwise we lost cpp tracestack for model initialization
-    if c.nsteps >= 50:
+    if not is_short_run:
         torch.cuda.memory._record_memory_history(max_entries=10000000)
 
     # In theory we only need `init_device_mesh`, but in practice, we need this
@@ -94,7 +97,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
     xid = c.get("xid", f"{datetime.now():%y%m%d_%H%M%S}")
     name = c.get("name", f"{getuser()}-{xid}") + (f"-{c.wid}" if "wid" in c else "")
     xid, name = u.broadcast_object_from(rank=0, obj=(xid, name))
-    workdir = "workdirs" if c.nsteps >= 50 else "workdirs-dbg"
+    workdir = "workdirs-dbg" if is_short_run else "workdirs"
     workdir = pjoin(c.get("workdir_base", "/checkpoint/rigi/bv2/"), workdir, xid, name)
     prints0(f"Workdir: {u.BLUE}{workdir}{u.RESET}")
 
@@ -179,8 +182,8 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         return loss, extras
 
     # Potentially resume/fork from a checkpoint, if not, init stuff.
-    first_step, past_proctime, resume_data = 0, 0, {}
-    data_tokens_seen, model_tokens_seen, loss_tokens_seen, examples_seen = 0, 0, 0, 0
+    progress = u.TrainingProgress()
+    past_proctime, resume_data = 0, {}
 
     # Checkpoint loading priority: resume > fork > init
     ckpt_path = c.get("fork") or c.get("init")
@@ -189,10 +192,12 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     if ckpt_path:
         if extras := load_ckpt(ckpt_path, model, optim, weights_only=bool(c.get("init"))):
-            first_step, resume_data, past_proctime = extras["step"], extras["data"], extras.get("proctime", 0)
-            data_tokens_seen, model_tokens_seen, loss_tokens_seen, examples_seen = \
-                extras["data_tokens_seen"], extras["model_tokens_seen"], extras["loss_tokens_seen"], extras["examples_seen"]
+            resume_data, past_proctime = extras["data"], extras.get("proctime", 0)
+            progress = u.TrainingProgress(
+                extras["step"], extras["examples_seen"], extras["data_tokens_seen"],
+                extras["model_tokens_seen"], extras["loss_tokens_seen"])
 
+    first_step = progress["nsteps"]
     mw = bv2.metrics.MultiWriter(
         bytes=bv2.metrics.BytesWriter(rank, workdir, first_step),
         plattli=bv2.metrics.PlattliWriter(rank, workdir, first_step),
@@ -203,7 +208,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     peak_mems, model_times, step_times = [], [], []
     t0 = t_step_start = t_prev_step_end = perf_counter()
-    prof = c.nsteps >= 50 and first_step == 0 and profile(
+    prof = not is_short_run and first_step == 0 and profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         record_shapes=True,
         profile_memory=False,  # Done with torch.cuda functions instead.
@@ -228,21 +233,21 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         return fn
 
     # Eval loop is reused, so we wrap it as a function
-    def run_evals(step):
+    def run_evals(step, progress, last_step=False):
         """Run evaluations for a given step if conditions are met."""
         teval0, ran_eval = perf_counter(), False
         for ev_name in c.get("evals") or {}:
-            ev = c.evals[ev_name]
-            if ev is None:
+            if (ev := c.evals[ev_name]) is None or not ev.type:
                 continue
-            is_step = (step == 2 or (step > 2 and step % ev.steps == 0)) if isinstance(ev.steps, int) else step in ev.steps
-            if u.about_to_get_killed() or not (is_step or step == c.nsteps):  # Always run on last step.
+            schedule = u.schedule(ev, prefix="at_", name=f"Evaluator {ev_name} schedule", delay_first=True)
+            should_run = progress.crossed(schedule)
+            if u.about_to_get_killed() or not (should_run or last_step):  # Always run on last step.
                 continue
             tev0, ran_eval = perf_counter(), True
             prints0(f"Running evaluator {u.BLUE}{ev_name}{u.RESET}", end="", flush=True)
             em = import_module(f"bv2.eval.{ev.type}")
             ds_ev = bv2.simple_data.from_config(ev.data.to_dict())
-            args = {k: v for k, v in ev.to_dict().items() if k not in {"type", "data", "steps"}}
+            args = {k: v for k, v in ev.to_dict().items() if k not in {"type", "data", "steps"} and not k.startswith("at_")}
             with torch.inference_mode():
                 if results := em.run(get_fwd(ev_name), ds_ev, **args, rank=rank, world_size=world_size, device=device):
                     mw.log({f"{ev_name}/{k}": v for k, v in results.items()}, flush=True)
@@ -254,6 +259,9 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         if ran_eval:
             mw.log({"chrono/evaltime": perf_counter() - teval0})
 
+    ckpt_schedule = u.schedule(c, prefix="ckpt_at_", name="checkpoint schedule", default=1000, required=False, none_disables=True)
+    ckpt_keep_schedule = u.schedule(c, prefix="ckpt_keep_at_", name="checkpoint keep schedule", required=False, none_disables=True)
+
     # Print status of GIL late, because any lazy import can flip it back on.
     if hasattr(sys, "_is_gil_enabled"):
         if sys._is_gil_enabled():
@@ -264,14 +272,16 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         prints0(f"{u.BLUE}Not a free-threaded build{u.RESET}")
 
     per_src_examples_seen, per_src_tokens_seen = Counter(), Counter()
-    for step, data in zip(
-        range(first_step, c.nsteps),
-        bv2.simple_data.data_iter(
-            ds, seed=(c.seed, "data_iter"),
-            device=device, rank=rank, world_size=world_size, resume=resume_data,
-            **c.iter.to_dict(),
-        ),
-    ):
+    step = first_step
+    train_iter = bv2.simple_data.data_iter(
+        ds, seed=(c.seed, "data_iter"),
+        device=device, rank=rank, world_size=world_size, resume=resume_data,
+        **c.iter.to_dict(),
+    )
+    while not progress.reached(trainsched):
+        if (data := next(train_iter, None)) is None:
+            break
+
         torch.cuda.reset_peak_memory_stats()
         u.global_gpu_barrier(device)  # For accurate global datawait timing.
         t_prev_step_start, t_step_start = t_step_start, perf_counter()
@@ -280,11 +290,28 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             torch.cuda.cudart().cudaProfilerStart()
             prof.start()
 
+        num_data_tokens, num_examples, num_model_tokens, num_loss_tokens = u.all_reduce_scalars(
+            sum(data["ndatatoks"]), len(data["ndatatoks"]), sum(data["ntok"]), (data["lowe"] > 0).sum())
+
+        progress.advance(
+            examples=num_examples, data_tokens=num_data_tokens,
+            model_tokens=num_model_tokens, loss_tokens=num_loss_tokens)
+        training_done = progress.crossed(trainsched)
+
+        mw.log({"chrono/examples_seen": progress["nexamples"]})
+        mw.log({"chrono/data_tokens_seen": progress["ndatatokens"]})
+        mw.log({"chrono/model_tokens_seen": progress["nmodeltokens"]})
+        mw.log({"chrono/num_data_tokens": num_data_tokens})
+        mw.log({"chrono/num_model_tokens": num_model_tokens})
+        mw.log({"chrono/num_examples": num_examples})
+
+        # To avoid wasteful lr=0 steps, warmup uses after and cooldown uses before.
         sched = global_schedule(
-            step=step,
-            total_steps=c.nsteps,
-            warmup_steps=c.get("warmup_nsteps") or 1,
-            cooldown_steps=c.get("cooldown_nsteps") or 0,
+            warmup_progress=progress[trainsched["unit"]],
+            cooldown_progress=progress.before[trainsched["unit"]],
+            total=trainsched["spec"],
+            warmup=c.get(f"warmup_{trainsched['unit']}") or 1,
+            cooldown=c.get(f"cooldown_{trainsched['unit']}") or 0,
         )
 
         set_lr_(optim, sched * c.lr_adam, "lr_adam")
@@ -292,19 +319,6 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         mw.log({"chrono/lr_adam": sched * c.lr_adam, "chrono/lr_muon": sched * c.lr_muon, "chrono/sched": sched})
 
         model.zero_grad(set_to_none=True)
-
-        num_data_tokens, num_examples, num_model_tokens = u.all_reduce_scalars(
-            sum(data["ndatatoks"]), len(data["ndatatoks"]), sum(data["ntok"]))
-        data_tokens_seen += num_data_tokens
-        model_tokens_seen += num_model_tokens
-        examples_seen += num_examples
-        mw.log({"chrono/examples_seen": examples_seen})
-        mw.log({"chrono/data_tokens_seen": data_tokens_seen})
-        mw.log({"chrono/model_tokens_seen": model_tokens_seen})
-        mw.log({"chrono/num_data_tokens": num_data_tokens})
-        mw.log({"chrono/num_model_tokens": num_model_tokens})
-        mw.log({"chrono/num_examples": num_examples})
-        mw.log({"chrono/percent": (step + 1) / c.nsteps})
 
         # Need to log param norms at this step before the update
         if step < 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
@@ -329,7 +343,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
         mw.log({"sys/gpu_peak_mem_gb": (peak_mem := torch.cuda.max_memory_allocated() / 1024**3)})
         if step % 10 == 0 and rank == 0:
             bv2.metrics.log_system_metrics(mw, gpu_index=0, prefix="sys")
-        if c.nsteps < 50:
+        if is_short_run:
             model_times.append(model_time)
             step_times.append(step_time)
             peak_mems.append(peak_mem * 1024)  # MiB
@@ -339,13 +353,12 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
         prints0(f"step {step}: loss {global_loss:.8f}")
 
-        loss_tokens_seen += (num_loss_tokens := extras["global_total_loss_toks"].item())
         mw.log({"chrono/num_loss_tokens": num_loss_tokens})
-        mw.log({"chrono/loss_tokens_seen": loss_tokens_seen})
+        mw.log({"chrono/loss_tokens_seen": progress["nlosstokens"]})
 
         mw.log({"train/pplx": global_pplx / num_examples})
         mw.log({"train/loss": global_loss})  # loss used for bwd, so already normalized by a global weight
-        mw.log({"train/tacc": global_ncorrect / num_loss_tokens})
+        mw.log({"train/tacc": global_ncorrect / max(num_loss_tokens, 1)})
         max_logits = u.all_reduce_scalars(*(blk["attn"]["max_logit"] for blk in extras["blk"].values()), op=distr.ReduceOp.MAX)
         mw.log({f"attn_max_logit/blk{i}": max_logits[i] for i in extras["blk"]})
 
@@ -383,24 +396,25 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             mw.log({f"gnorm/{k}": v for k, v in global_norms((n, p.grad) for n, p in model.named_parameters()).items()})
 
         # After the update is done, we are at the step+1
-        mw.end_step()
-        step += 1
+        mw.log({"chrono/percent": min(1.0, progress[trainsched["unit"]] / trainsched["spec"])})
+        step = progress["nsteps"]
 
         # Checkpoint, but note this is *after* `step`'s update, so +1.
         maybe_save_ckpt(
-            step, save_steps=c.get("ckpt_steps", 1000), keep_steps=c.get('ckpt_keep_steps', ()),
+            step, ckpt_schedule, ckpt_keep_schedule, progress, force=training_done,
             model=model, optim=optim, workdir=workdir, extras={
                 "data": data["state_after"],  # NOTE: This differs per process(!)
-                "data_tokens_seen": data_tokens_seen,
-                "model_tokens_seen": model_tokens_seen,
-                "loss_tokens_seen": loss_tokens_seen,
-                "examples_seen": examples_seen,
+                "data_tokens_seen": progress["ndatatokens"],
+                "model_tokens_seen": progress["nmodeltokens"],
+                "loss_tokens_seen": progress["nlosstokens"],
+                "examples_seen": progress["nexamples"],
                 "proctime": perf_counter() - t0 + past_proctime,
                 "metrics": mw.save_ckpt(),
                 "jid": c.get("jid", "n/a"),  # Just for future archeologs.
             })  # fmt: skip
 
         if u.about_to_get_killed():  # We checkpointed, yay, quick, byebye.
+            mw.end_step()
             break
 
         if prof and (step - first_step) == 2:
@@ -415,17 +429,21 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             prof.export_chrome_trace(pjoin(workdir, f"prof_trace_s{step}_r{rank}.json.gz"))
             prof.export_stacks(pjoin(workdir, f"prof_stacks_cpu_s{step}_r{rank}.txt"))
 
-        run_evals(step)
+        run_evals(step, progress, last_step=training_done)
 
         # visualize input tokens
-        if c.nsteps >= 50 and step == 8:
+        if not is_short_run and step == 8:
             with zstd.open(pjoin(workdir, f"data_r{rank}.pt.zst"), "wb") as f:
                 torch.save({k: v for k, v in data.items() if k != "flex_masks"}, f)
 
         u.global_gpu_barrier(device)  # Sync to get accurate datawait timing.
         t_prev_step_end = perf_counter()
+        mw.end_step()
 
-    if c.nsteps < 50:
+        if training_done:
+            break
+
+    if is_short_run:
         u.printR(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
         u.printR(f"Model times (med: {np.median(model_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in model_times)}")  # fmt: skip
         u.printR(f"Step times (med: {np.median(step_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in step_times)}")  # fmt: skip
@@ -450,10 +468,9 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 # UTILS BELOW #
 ###############
 
-
-def global_schedule(*, step, total_steps, warmup_steps=1, cooldown_steps=0):
+def global_schedule(*, warmup_progress, cooldown_progress, total, warmup=1, cooldown=0):
     """Implements constant schedule with warmup and cooldown. Tested."""
-    return min(1.0, step / warmup_steps, (total_steps - step) / (cooldown_steps + 1))
+    return min(1.0, warmup_progress / warmup, 1.0 if cooldown == 0 else (total - cooldown_progress) / cooldown)
 
 
 def set_lr_(optimizer, lr, name):
@@ -579,12 +596,12 @@ class OptimState(dcp.stateful.Stateful):
 
 @u.suppress_warnings("version 2.5 of PyTorch, `overwrite` will default to False")
 @u.suppress_warnings("TypedStorage is deprecated", UserWarning)
-def maybe_save_ckpt(step, save_steps, keep_steps, model, optim, workdir, extras=None):
-    if save_steps is None or workdir is None:
+def maybe_save_ckpt(step, save_schedule, keep_schedule, progress, model, optim, workdir, extras=None, force=False):
+    if not save_schedule or workdir is None:
         return
 
-    should_save = (step % save_steps == 0) if isinstance(save_steps, int) else step in save_steps
-    if not (u.about_to_get_killed() or should_save):
+    should_save = progress.crossed(save_schedule)
+    if not (force or u.about_to_get_killed() or should_save):
         return
 
     path = pjoin(workdir, f"ckpt-{step:06d}")
@@ -593,7 +610,12 @@ def maybe_save_ckpt(step, save_steps, keep_steps, model, optim, workdir, extras=
     # This is funny, but the `async_save` below interacts with `distr` in some way such
     # that if we do the `gather_object` after it, it would deadlock. Unless we barrier,
     # which defeats the point of async. So, gather_object first.
-    all_extras = u.gather_object_to(rank=0, obj={"step": step, **extras})
+    all_extras = u.gather_object_to(rank=0, obj={
+        "step": step,
+        "progress_before": progress.before,
+        "progress_after": progress.after,
+        **(extras or {}),
+    })
 
     # TODO: For some reason async checkpoint cases non-deterministic failures.
     #
@@ -626,9 +648,16 @@ def maybe_save_ckpt(step, save_steps, keep_steps, model, optim, workdir, extras=
         os.replace(pjoin(workdir, "ckpt-tmp"), pjoin(workdir, "ckpt-latest"))  # Atomic
 
         if prev_ckpt is not None:
-            prev_step = int(prev_ckpt.rsplit("-")[-1])
-            if (prev_step % keep_steps != 0) if isinstance(keep_steps, int) else prev_step not in keep_steps:
+            if not checkpoint_matches_schedule(prev_ckpt, keep_schedule):
                 shutil.rmtree(prev_ckpt)
+
+
+def checkpoint_matches_schedule(path, schedule):
+    if not schedule:
+        return False
+    with open(pjoin(path, "extras.json"), "r") as f:
+        extras = json.load(f)[0]
+    return u.TrainingProgress.from_dicts(extras["progress_before"], extras["progress_after"]).crossed(schedule)
 
 
 def load_ckpt(path, model, optim, weights_only=False):
@@ -695,7 +724,7 @@ def get_config():
     c.model.txt_unemb.chunksz = 4096
 
     c.evals.pplx_val.type = "pplx"
-    c.evals.pplx_val.steps = 10
+    c.evals.pplx_val.at_steps = 10
     c.evals.pplx_val.data.name = lambda: c.data.name
     c.evals.pplx_val.data.seed = 31337  # "val split" content
     c.evals.pplx_val.data.n = 150  # "val split" size

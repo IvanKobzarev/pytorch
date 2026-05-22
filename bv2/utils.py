@@ -59,6 +59,108 @@ def thread_local_cache(f):
     return g
 
 
+#  _   _       _ _
+# | | | |_ __ (_) |_ ___
+# | | | | '_ \| | __/ __|
+# | |_| | | | | | |_\__ \
+#  \___/|_| |_|_|\__|___/
+#
+
+
+UNIT_SUFFIXES = {
+    "steps": "nsteps",
+    "examples": "nexamples",
+    "modeltoks": "nmodeltokens",
+    "datatoks": "ndatatokens",
+    "losstoks": "nlosstokens",
+    "modeltokens": "nmodeltokens",
+    "datatokens": "ndatatokens",
+    "losstokens": "nlosstokens",
+}
+
+
+def schedule(c, prefix, name="schedule", default=None, required=True, none_disables=False, delay_first=False):
+    fields = [f"{prefix}{suffix}" for suffix in UNIT_SUFFIXES]
+    present = [field for field in fields if field in c]
+    values = [
+        (f"{prefix}{suffix}", unit, c.get(f"{prefix}{suffix}"))
+        for suffix, unit in UNIT_SUFFIXES.items()
+        if c.get(f"{prefix}{suffix}") is not None
+    ]
+    if not values:
+        if none_disables and present:
+            values = []
+        elif default is not None:
+            values = [(f"{prefix}steps", UNIT_SUFFIXES["steps"], default)]
+
+    if len(values) != 1:
+        if not values and not required:
+            return None
+        got = ", ".join(field for field, _, _ in values) or "none"
+        raise ValueError(f"{name} needs exactly one unit field; got {got}")
+
+    field, unit, spec = values[0]
+    if not isinstance(spec, int) or spec <= 0:
+        raise ValueError(f"{field} must be a positive integer frequency, got {spec}")
+    return {"field": field, "unit": unit, "spec": spec, "delay_first": delay_first}
+
+
+def crossed(spec, before, after):
+    """Check whether going from `before` to `after` crosses any point defined in `spec`,
+       an integer meaning a frequency (eg 500 means "every 500").
+    """
+    if not isinstance(spec, int) or spec <= 0:
+        raise ValueError(f"schedule frequency must be a positive integer, got {spec}")
+    return before // spec < after // spec
+
+
+class TrainingProgress:
+    def __init__(self, step=0, examples_seen=0, data_tokens_seen=0, model_tokens_seen=0, loss_tokens_seen=0):
+        self.initial = self.before = self.after = {
+            "nsteps": step,
+            "nexamples": examples_seen,
+            "nmodeltokens": model_tokens_seen,
+            "ndatatokens": data_tokens_seen,
+            "nlosstokens": loss_tokens_seen,
+        }
+
+    @classmethod
+    def from_dicts(cls, before, after):
+        progress = cls()
+        progress.initial = progress.before = before
+        progress.after = after
+        return progress
+
+    def advance(self, examples=0, data_tokens=0, model_tokens=0, loss_tokens=0):
+        self.before = self.after
+        self.after = {
+            "nsteps": self.before["nsteps"] + 1,
+            "nexamples": self.before["nexamples"] + examples,
+            "nmodeltokens": self.before["nmodeltokens"] + model_tokens,
+            "ndatatokens": self.before["ndatatokens"] + data_tokens,
+            "nlosstokens": self.before["nlosstokens"] + loss_tokens,
+        }
+        return self
+
+    def __getitem__(self, unit):
+        return self.after[unit]
+
+    def crossed(self, schedule):
+        if not schedule:
+            return False
+        did_cross = crossed(schedule["spec"], self.before[schedule["unit"]], self.after[schedule["unit"]])
+        if not schedule["delay_first"]:
+            return did_cross
+        # Let step 1 finish before running long side work, then replay that event at step 2.
+        if self.after["nsteps"] == 1:
+            return False
+        if self.after["nsteps"] == 2 and crossed(schedule["spec"], self.initial[schedule["unit"]], self.before[schedule["unit"]]):
+            return True
+        return did_cross
+
+    def reached(self, schedule):
+        return self[schedule["unit"]] >= schedule["spec"]
+
 #    ____
 #   / ___|___  _ __ ___  _ __ ___  ___
 #  | |   / _ \| '_ ` _ \| '_ ` _ \/ __|
@@ -76,7 +178,9 @@ def global_gpu_barrier(device):
 
 
 def all_reduce_scalars(*scalars, op=distr.ReduceOp.SUM):
-    scalars = torch.stack([torch.as_tensor(x) for x in scalars])  # Also clones, so none gets overwritten.
+    device = next((x.device for x in scalars if isinstance(x, torch.Tensor) and x.is_cuda), None)
+    device = device or next((x.device for x in scalars if isinstance(x, torch.Tensor)), None)
+    scalars = torch.stack([torch.as_tensor(x, device=device) for x in scalars])  # Also clones, so none gets overwritten.
     distr.all_reduce(scalars, op=op)
     return tuple(s.item() for s in scalars)
 

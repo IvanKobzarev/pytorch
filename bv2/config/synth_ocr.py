@@ -56,14 +56,14 @@ def get_config():
     c.model.img.tiptoi = lambda: c.data.tiptoi
 
     c.evals.pplx.type = "pplx"
-    c.evals.pplx.steps = 500
+    c.evals.pplx.at_steps = 500
     c.evals.pplx.iter.maxtok = lambda: c.maxtok
     c.evals.pplx.iter.seed = 31337  # Defines the "fixed val split".
     c.evals.pplx.data = get_data_config(n=128)
     c.evals.pplx.data.tokenizer = lambda: getattr(c.data, "tokenizer", None)
 
     c.evals.vqa.type = "vqa"
-    c.evals.vqa.steps = lambda: range(1000, c.nsteps, 2000)
+    c.evals.vqa.at_steps = 2000
     c.evals.vqa.data = get_data_config(seed=31337, n=128)
     c.evals.vqa.data.tokenizer = lambda: getattr(c.data, "tokenizer", None)
     c.evals.vqa.decode.max_prefix = 1024
@@ -73,7 +73,7 @@ def get_config():
     c.evals.vqa.decode.omit_eos = True
 
     c.evals.decode.type = "decode"
-    c.evals.decode.steps = lambda: range(1000, c.nsteps, 2000)
+    c.evals.decode.at_steps = 2000
     c.evals.decode.data = get_data_config(seed=31337, n=128)
     c.evals.decode.data.tokenizer = lambda: getattr(c.data, "tokenizer", None)
     c.evals.decode.decode.max_prefix = 1024
@@ -81,6 +81,6 @@ def get_config():
     c.evals.decode.decode.max_decode = 256
     c.evals.decode.decode.T = 1e-3
 
-    c.ckpt_steps = 1000
+    c.ckpt_at_steps = 1000
 
     return c

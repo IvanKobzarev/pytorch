@@ -1391,7 +1391,7 @@ def load_config(wd_path):
         return {}
 
 
-def last_metric(wd_path, metric_name="train/loss"):
+def last_metric(wd_path, metric_name="train/loss", extra_metrics=()):
     # Try plattli format first
     if plattli.is_run(wd_path):
         try:
@@ -1403,9 +1403,11 @@ def last_metric(wd_path, metric_name="train/loss"):
                     indices = r.metric_indices(metrics[0])
                     if len(indices) > 0:
                         result["step"] = int(indices[-1])
-                # Only fetch the requested metric
-                if metric_name in metrics:
-                    values = r.metric_values(metric_name)
+                # Only fetch the requested metrics
+                for name in dict.fromkeys([metric_name, *extra_metrics]):
+                    if name not in metrics:
+                        continue
+                    values = r.metric_values(name)
                     if len(values) > 0:
                         v = values[-1]
                         v = v.item() if hasattr(v, 'item') else v
@@ -1420,7 +1422,7 @@ def last_metric(wd_path, metric_name="train/loss"):
                                 v = "inf"
                             else:
                                 v = "-inf"
-                        result[metric_name] = v
+                        result[name] = v
                 return result
         except Exception as e:
             log.debug("plattli read failed for %s: %s", wd_path, e)
@@ -1552,8 +1554,8 @@ def _load_config_only(args):
 
 
 def _load_metric_only(args):
-    wd_path, wuwd_name, metric_name = args
-    return wuwd_name, last_metric(wd_path / wuwd_name, metric_name)
+    wd_path, wuwd_name, metric_name, extra_metrics = args
+    return wuwd_name, last_metric(wd_path / wuwd_name, metric_name, extra_metrics)
 
 
 def load_launchids(wd_path):
@@ -2132,13 +2134,44 @@ def _launch_args(meta):
     return [*meta.get("overrides", []), *meta.get("args", [])]
 
 
-def _nsteps_from_args(args):
+TRAIN_TARGET_METRICS = {
+    "nsteps": "step",
+    "nexamples": "chrono/examples_seen",
+    "nmodeltokens": "chrono/model_tokens_seen",
+    "ndatatokens": "chrono/data_tokens_seen",
+    "nlosstokens": "chrono/loss_tokens_seen",
+}
+
+
+def _int_arg(value):
+    value = str(value).strip().strip('"\'')
+    return int(value.replace("_", "")) if re.fullmatch(r'\d[\d_]*', value) else None
+
+
+def _target_from_args(args, name):
     for arg in reversed(args):
-        if not re.search(r'(^|[.])nsteps:?=', arg):
+        if not re.search(rf'(^|[.]){name}:?=', arg):
             continue
         value = re.split(r':?=', arg, 1)[1].strip('"\'')
-        return int(value) if value.isdigit() else None
+        return _int_arg(value)
     return None
+
+
+def _train_target(config, args=()):
+    targets = []
+    for name, metric in TRAIN_TARGET_METRICS.items():
+        value = config.get(name)
+        if value is None:
+            value = _target_from_args(args, name)
+        elif isinstance(value, str):
+            value = _int_arg(value)
+        if value is not None:
+            targets.append({"name": name, "value": value, "metric": metric})
+    return targets[0] if len(targets) == 1 else None
+
+
+def _nsteps_from_args(args):
+    return _target_from_args(args, "nsteps")
 
 
 def _get_xid_info_from_launchids(xid, wd_path, launchids, t0):
@@ -2192,6 +2225,7 @@ def _get_xid_info_from_launchids(xid, wd_path, launchids, t0):
             runtime = "n/a"
             start_estimate_raw = ""
 
+        target = _train_target(config, args)
         wus.append({
             "wid": wid,
             "jid": jid,
@@ -2201,6 +2235,7 @@ def _get_xid_info_from_launchids(xid, wd_path, launchids, t0):
             "exit_status": config.get("exit_status"),
             "reason": reason,
             "nsteps": config.get("nsteps") or _nsteps_from_args(args),
+            "target": target,
             "config_args": args,
             "name": config.get("name", meta.get("name", "") if isinstance(meta, dict) else ""),
             "qwait": "n/a",
@@ -2585,6 +2620,7 @@ def get_xid_info(xid: str):
         else:
             qwait = hms(start - eligible)
 
+        target = _train_target(config, sws_args)
         wus.append({
             "wid": wid,
             "jid": jid,
@@ -2594,6 +2630,7 @@ def get_xid_info(xid: str):
             "exit_status": config.get("exit_status"),
             "reason": jobs_by_jid.get(str(jid), {}).get("REASON", ""),
             "nsteps": config.get("nsteps"),
+            "target": target,
             "config_args": sws_args,
             "name": config.get("name", ""),
             "qwait": qwait,
@@ -2634,17 +2671,25 @@ def get_xid_metrics(xid: str, metric: str = "train/loss"):
     launchids = load_launchids(wd_path)
     if launchids:
         workdirs, _ = _workdirs_by_suffix(wd_path)
-        wd_names = list(workdirs.values())
-        metric_futs = [fs_executor.submit(_load_metric_only, (wd_path, wd, metric)) for wd in wd_names]
-        config_futs = [fs_executor.submit(_load_config_only, (wd_path, wd)) for wd in wd_names]
-        metric_by_wuwd = dict(f.result() for f in metric_futs)
+        config_futs = [fs_executor.submit(_load_config_only, (wd_path, wd)) for wd in workdirs.values()]
         config_by_wuwd = dict(f.result() for f in config_futs)
+        targets = {}
+        metric_futs = []
+        for wid, wuwd_name in workdirs.items():
+            target = _train_target(config_by_wuwd.get(wuwd_name, {}), _launch_args(launchids.get(str(wid), {})))
+            targets[wuwd_name] = target
+            extra_metrics = (target["metric"],) if target and target["metric"] != "step" else ()
+            metric_futs.append(fs_executor.submit(_load_metric_only, (wd_path, wuwd_name, metric, extra_metrics)))
+        metric_by_wuwd = dict(f.result() for f in metric_futs)
         result = {}
         for wid, wuwd_name in workdirs.items():
             result[wid] = metric_by_wuwd.get(wuwd_name, {})
-            nsteps = config_by_wuwd.get(wuwd_name, {}).get("nsteps") or _nsteps_from_args(_launch_args(launchids.get(str(wid), {})))
-            if nsteps:
-                result[wid]["_nsteps"] = nsteps
+            if target := targets.get(wuwd_name):
+                result[wid]["_target_name"] = target["name"]
+                result[wid]["_target_value"] = target["value"]
+                result[wid]["_target_metric"] = target["metric"]
+                if target["name"] == "nsteps":
+                    result[wid]["_nsteps"] = target["value"]
         log.info("GET /api/xid/%s/metrics - done: %d launch-indexed WUs (%.2fs)", xid, len(result), time.time() - t0)
         return result
 
@@ -2655,15 +2700,19 @@ def get_xid_metrics(xid: str, metric: str = "train/loss"):
     # Get workdirs
     workdirs = dir_names(wd_path)
 
-    # Load configs and metrics in parallel — submit both up front so they interleave I/O.
+    # Load configs first so we know which progress metric to include.
     config_futs = [fs_executor.submit(_load_config_only, (wd_path, wd)) for wd in workdirs]
-    metric_futs = [fs_executor.submit(_load_metric_only, (wd_path, wd, metric)) for wd in workdirs]
     config_results = [f.result() for f in config_futs]
+    targets = {wuwd_name: _train_target(config) for wuwd_name, config in config_results}
+    metric_futs = [
+        fs_executor.submit(_load_metric_only, (
+            wd_path, wd, metric, ((targets[wd]["metric"],) if targets[wd] and targets[wd]["metric"] != "step" else ())))
+        for wd in workdirs
+    ]
     metric_results = [f.result() for f in metric_futs]
 
     # Build wid -> metrics mapping (same duplicate resolution as main endpoint)
     metric_by_wuwd = {wuwd_name: metrics for wuwd_name, metrics in metric_results}
-    config_by_wuwd = {wuwd_name: config for wuwd_name, config in config_results}
     wid_to_wuwd = {}
     for wuwd_name, config in config_results:
         wid = normalize_wid(config.get("wid", wuwd_name))
@@ -2678,8 +2727,12 @@ def get_xid_metrics(xid: str, metric: str = "train/loss"):
     result = {}
     for wid, (wuwd_name, _) in wid_to_wuwd.items():
         result[wid] = metric_by_wuwd.get(wuwd_name, {})
-        if nsteps := config_by_wuwd.get(wuwd_name, {}).get("nsteps"):
-            result[wid]["_nsteps"] = nsteps
+        if target := targets.get(wuwd_name):
+            result[wid]["_target_name"] = target["name"]
+            result[wid]["_target_value"] = target["value"]
+            result[wid]["_target_metric"] = target["metric"]
+            if target["name"] == "nsteps":
+                result[wid]["_nsteps"] = target["value"]
 
     log.info("GET /api/xid/%s/metrics - done: %d WUs (%.2fs)", xid, len(result), time.time() - t0)
     return result

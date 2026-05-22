@@ -2401,8 +2401,16 @@
                 const metricCell = document.querySelector(`td[data-wid="${wid}"][data-field="metric"]`);
                 const progressCell = document.querySelector(`td[data-wid="${wid}"][data-field="progress"]`);
                 const row = document.querySelector(`tr[data-wid="${wid}"]`);
-                if (row && metrics._nsteps) row.dataset.nsteps = metrics._nsteps;
-                const nsteps = parseInt(row?.dataset?.nsteps) || 0;
+                if (row && metrics._target_value) {
+                    row.dataset.targetValue = metrics._target_value;
+                    row.dataset.targetMetric = metrics._target_metric || 'step';
+                }
+                if (row && metrics._nsteps && (!row.dataset.targetValue || row.dataset.targetValue === '0')) {
+                    row.dataset.targetValue = metrics._nsteps;
+                    row.dataset.targetMetric = 'step';
+                }
+                const targetValue = parseFloat(row?.dataset?.targetValue) || 0;
+                const targetMetric = row?.dataset?.targetMetric || 'step';
 
                 if (stepCell) {
                     const step = metrics.step;
@@ -2412,10 +2420,10 @@
                     const v = metrics[metricName];
                     metricCell.textContent = v !== undefined ? (typeof v === 'number' ? v.toPrecision(3) : v) : '-';
                 }
-                if (progressCell && nsteps) {
-                    const step = metrics.step;
-                    if (step !== null && step !== undefined) {
-                        const pct = step / nsteps * 100;
+                if (progressCell && targetValue) {
+                    const progress = targetMetric === 'step' ? metrics.step : metrics[targetMetric];
+                    if (progress !== undefined && progress !== null) {
+                        const pct = Math.min(100, progress / targetValue * 100);
                         currentProgressData[wid] = pct;
                         progressCell.innerHTML = `<div class="progress-bar"><span class="fill" style="width:${pct}%"></span>${pct.toFixed(1)}%</div>`;
                     } else {
@@ -2573,9 +2581,10 @@
                     ? `${wu.status} (${esc(wu.reason)})`
                     : `${wu.status} (exit: ${hasExitCode ? wu.exit_code : '?'})`;
                 const qwaitInfo = qwaitDisplay(wu);
+                const target = wu.target || (wu.nsteps ? {name: 'nsteps', value: wu.nsteps, metric: 'step'} : null);
 
                 html += `
-                    <tr data-jid="${wu.jid}" data-wid="${wu.wid}" data-nsteps="${wu.nsteps || 0}">
+                    <tr data-jid="${wu.jid}" data-wid="${wu.wid}" data-nsteps="${wu.nsteps || 0}" data-target-name="${target?.name || ''}" data-target-value="${target?.value || 0}" data-target-metric="${target?.metric || 'step'}">
                         <td class="text-center"><input type="checkbox" class="row-select" onchange="updateRowSelection(this)" /></td>
                         <td class="mono text-right">${widDisplay}</td>
                         <td class="mono">${wu.jid ? `<a href="${serverUrl}/log/${wu.jid}" target="_blank" title="View Slurm log">${wu.jid}</a><span class="copy-btn" onclick="navigator.clipboard.writeText('${wu.jid}')" title="Copy JID">⎘</span>` : ''}<span class="code-btn fa-icon" onclick="window.open('${serverUrl}/files/${data.xid}/wu/${wu.wid}', '_blank')" title="Browse workdir">🗁</span></td>

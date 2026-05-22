@@ -40,7 +40,7 @@ def get_config():
 
     # Eval with standard BPE (no dropout)
     c.evals.pplx.type = "pplx"
-    c.evals.pplx.steps = 500
+    c.evals.pplx.at_steps = 500
     c.evals.pplx.data.epochs = 1
     c.evals.pplx.data.name = "deduped_code"
     c.evals.pplx.data.cache = lambda: c.data.cache
@@ -52,7 +52,7 @@ def get_config():
 
     # Byte-level eval: force full BPE-dropout so every token is split to bytes.
     c.evals.pplx_byte.type = "pplx"
-    c.evals.pplx_byte.steps = 5000  # infrequent byte-level evals
+    c.evals.pplx_byte.at_steps = 5000  # infrequent byte-level evals
     c.evals.pplx_byte.data.epochs = 1
     c.evals.pplx_byte.data.name = "deduped_code"
     c.evals.pplx_byte.data.cache = lambda: c.data.cache

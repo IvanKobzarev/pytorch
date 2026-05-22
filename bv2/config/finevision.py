@@ -91,7 +91,7 @@ def get_config():
     def pplx_eval(name, max_p=None, blind=False, qfmt=None):
         k = sws.Config()
         k.type = "pplx"
-        k.steps = 5000 if not blind and qfmt else 20_000
+        k.at_steps = 5000 if not blind and qfmt else 20_000
         k.data = eval_data(name, max_p=max_p, blind=blind, qfmt=qfmt)
         k.iter.maxtok = lambda: c.maxtok
         return k
@@ -114,7 +114,7 @@ def get_config():
     def vqa_eval(name, max_q, max_a, max_p=None, bs=32, blind=False, qfmt=None):
         k = sws.Config()
         k.type = "vqa"
-        k.steps = lambda: range(5000, c.nsteps, 5000 if not blind and qfmt else 20_000)  # Skip first, then every 5k
+        k.at_steps = 5000 if not blind and qfmt else 20_000
         k.data = eval_data(name, max_p=max_p, blind=blind, qfmt=qfmt)
         k.lower_a = True
         k.decode.max_prefix = max_p + special_tokens + max_q if max_p else lambda: min(c.data.common.max_patches, 3136) + special_tokens + max_q
@@ -139,7 +139,7 @@ def get_config():
     # Nice to visualize predictions in W&B periodically. Very small/short decode for sanity-check only.
     # Single resolution to avoid bugginess.
     c.evals["decode_docvqa_fmt"].type = "decode"
-    c.evals["decode_docvqa_fmt"].steps = lambda: range(5000, c.nsteps, 20_000)
+    c.evals["decode_docvqa_fmt"].at_steps = 20_000
     c.evals["decode_docvqa_fmt"].data = eval_data("docvqa_flat/val", qfmt=CUSTOM_QFMT["docvqa"])
     c.evals["decode_docvqa_fmt"].max_prefix = lambda: min(c.data.common.max_patches, 3136) + special_tokens + 28
     c.evals["decode_docvqa_fmt"].max_decode = 8
@@ -147,4 +147,3 @@ def get_config():
     c.evals["decode_docvqa_fmt"].T = 0.01
 
     return c
-

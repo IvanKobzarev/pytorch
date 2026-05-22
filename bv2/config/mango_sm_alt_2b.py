@@ -49,7 +49,7 @@ def get_config():
 
     # Perplexity on val split.
     c.evals.pplx_val.type = "pplx"
-    c.evals.pplx_val.steps = 2000
+    c.evals.pplx_val.at_steps = 2000
     c.evals.pplx_val.data = eval_data("val")
     c.evals.pplx_val.iter.maxtok = lambda: c.maxtok
 
@@ -57,7 +57,7 @@ def get_config():
     def decode_eval(split="val_mini", T=0.01, max_p=None):
         k = sws.Config()
         k.type = "decode"
-        k.steps = 5000
+        k.at_steps = 5000
         k.data = eval_data(split, max_p=max_p)
         k.decode.max_prefix = lambda: c.data.max_patches + special_tokens + 1
         k.decode.batch_size = 32
