@@ -153,6 +153,9 @@
             cursor: pointer;
             text-decoration: none;
         }
+        .line-num::before {
+            content: attr(data-line);
+        }
         .line-num:hover {
             color: var(--accent);
         }
@@ -382,7 +385,7 @@
                 const html = lines.map((line, i) => {
                     const num = i + 1;
                     const colored = parseAnsi(line);
-                    return `<div class="log-line" id="L${num}"><a class="line-num" href="#L${num}">${num}</a><span class="line-content">${colored}</span></div>`;
+                    return `<div class="log-line" id="L${num}"><a class="line-num" href="#L${num}" data-line="${num}" aria-label="Line ${num}"></a><span class="line-content">${colored}</span></div>`;
                 }).join('');
 
                 content.innerHTML = `<div class="log-view">${html}</div>`;
@@ -483,6 +486,21 @@
 
         filterInput.addEventListener('blur', () => {
             if (regexMode) applyFilter();
+        });
+
+        document.addEventListener('keydown', e => {
+            if (!(e.ctrlKey || e.metaKey) || e.altKey || e.key.toLowerCase() !== 'a') return;
+            if (e.target instanceof HTMLElement && (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName) || e.target.isContentEditable)) return;
+
+            const logView = document.querySelector('.log-view');
+            if (!logView) return;
+
+            e.preventDefault();
+            const range = document.createRange();
+            range.selectNodeContents(logView);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
         });
     </script>
 </body>
