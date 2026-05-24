@@ -380,6 +380,8 @@
         .col-qos { width: 110px; }
         .col-config { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 0; }
         .col-server { width: 50px; }
+        .eta-cell { max-width: 62px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .qwait-cell { max-width: 8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .note-text { color: var(--accent); }
         .name-text { color: var(--text); }
         .name-note-cell { cursor: pointer; }
@@ -634,13 +636,47 @@
             return date.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC');
         }
 
+        function cleanPendingReason(reason) {
+            return String(reason || '').trim().replace(/^\((.*)\)$/, '$1');
+        }
+
+        function pendingReasonHint(reason) {
+            reason = cleanPendingReason(reason);
+            if (!reason) return { text: 'no eta', title: 'no pending reason reported' };
+            const shortReasons = [
+                ['QOSGrpCpuLimit', 'GrpCpu'],
+                ['QOSMaxCpuPerUserLimit', 'UsrCpu'],
+                ['QOSMaxCpuPerJobLimit', 'JobCpu'],
+                ['QOSGrpGRES', 'GrpGPU'],
+                ['QOSMaxGRESPerUser', 'UsrGPU'],
+                ['QOSMaxGRESPerJob', 'JobGPU'],
+                ['QOSGrpMemLimit', 'GrpMem'],
+                ['QOSMaxMemoryPerUser', 'UsrMem'],
+                ['Dependency', 'Dep'],
+                ['JobArrayTaskLimit', 'Array'],
+                ['JobHeldUser', 'Held'],
+                ['Priority', 'Prio'],
+            ];
+            const short = shortReasons.find(([full]) => full === reason || (reason.length > 8 && full.startsWith(reason)))?.[1] || reason;
+            let hint = '';
+            if (reason === 'QOSGrpGRES') hint = 'waiting for QOS GPU quota';
+            else if (reason.includes('QOS') && reason.includes('GRES')) hint = 'waiting for QOS GPU quota';
+            else if (reason.includes('QOSMax') || reason.includes('QOSGrp')) hint = 'waiting for a QOS/account limit';
+            else if (reason === 'Dependency') hint = 'waiting for a job dependency';
+            else if (reason === 'JobHeldUser') hint = 'job is held by user';
+            else if (reason === 'JobArrayTaskLimit') hint = 'waiting for array concurrency limit';
+            else if (reason === 'Priority') hint = 'waiting behind higher-priority jobs';
+            return { text: short, title: hint ? `${reason}: ${hint}` : reason };
+        }
+
         function qwaitDisplay(wu) {
             if (wu.status !== 'PENDING') return { text: wu.qwait || 'n/a', title: '' };
             const reason = wu.qwait_estimate_reason || wu.reason || '';
             if (!wu.qwait_estimate_ts) {
+                const reasonInfo = pendingReasonHint(reason);
                 return {
-                    text: '',
-                    title: reason ? `Slurm start estimate unavailable. Reason: ${reason}` : 'Slurm start estimate unavailable',
+                    text: reasonInfo.text,
+                    title: `Slurm start estimate unavailable. ${reasonInfo.title}`,
                 };
             }
 
@@ -656,9 +692,10 @@
         function overviewEtaDisplay(start) {
             if (!start || !start.total) return { text: '', title: '' };
             if (!start.ts) {
+                const reasonInfo = pendingReasonHint(start.reason);
                 return {
-                    text: '',
-                    title: `Slurm start estimate unavailable for ${start.total} pending job(s)`,
+                    text: reasonInfo.text,
+                    title: `Slurm start estimate unavailable for ${start.total} pending job(s). ${reasonInfo.title}`,
                 };
             }
 
@@ -1177,7 +1214,7 @@
             overviewData = {};
             inactiveLoaded = false;
             document.querySelector('#hotTable tbody').innerHTML = '<tr><td colspan="14" class="loading">Loading...</td></tr>';
-            document.querySelector('#coldTable tbody').innerHTML = '<tr><td colspan="11" class="loading">Loading inactive experiments...</td></tr>';
+            document.querySelector('#coldTable tbody').innerHTML = '<tr><td colspan="12" class="loading">Loading inactive experiments...</td></tr>';
 
             const numServers = servers.length;
             let hotCompleted = 0;
@@ -1567,7 +1604,7 @@
                     <td>${formatStates(r.states)}</td>
                     <td class="mono">${wusDisplay}</td>
                     <td class="mono text-right">${r.totalGpus}</td>
-                    <td class="mono text-right" title="${esc(eta.title)}">${esc(eta.text)}</td>
+                    <td class="mono text-right eta-cell" title="${esc(eta.title)}">${esc(eta.text)}</td>
                     <td class="mono text-right">${r.restarts}</td>
                     <td class="qos-cell" data-qos="${esc(r.qos)}" data-server="${r.server}" title="${esc(r.qos)}">${esc(r.qos)}</td>
                     <td class="col-config" title="${esc(r.config)}">${esc(r.config)}</td>
@@ -2237,7 +2274,7 @@
                         ${metricToShow ? `<td class="mono text-right" data-wid="${wu.wid}" data-field="metric">-</td>` : ''}
                         <td class="config-args">${configArgs}${constantToggle}<span class="config-view-btn" onclick="showFullConfig('${serverUrl}', '${data.xid}', ${wu.wid})" title="View full config">🔍︎</span></td>
                         <td>${esc(wu.name)}</td>
-                        <td class="mono text-right" data-wid="${wu.wid}" data-field="qwait" title="${esc(qwaitInfo.title)}">${esc(qwaitInfo.text)}</td>
+                        <td class="mono text-right qwait-cell" data-wid="${wu.wid}" data-field="qwait" title="${esc(qwaitInfo.title)}">${esc(qwaitInfo.text)}</td>
                         <td class="mono text-right" data-wid="${wu.wid}" data-field="runtime">${wu.runtime}</td>
                     </tr>`;
             }

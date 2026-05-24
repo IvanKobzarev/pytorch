@@ -195,8 +195,8 @@ def extract_xid(name):
 
 
 def get_jobs(group=GROUP, users=USERS):
-    widths = [20, 20, 20, 20, 20, 20, 40, 20, 20, 20, 25, 20, 20, 20, 100]
-    fmt = "JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:40,NumNodes:20,tres-per-node:20,RestartCnt:20,StartTime:25,Reason:20,Priority:20,PriorityLong:20,Comment:100"
+    widths = [20, 20, 20, 20, 20, 20, 40, 20, 20, 20, 25, 30, 20, 20, 100]
+    fmt = "JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:40,NumNodes:20,tres-per-node:20,RestartCnt:20,StartTime:25,Reason:30,Priority:20,PriorityLong:20,Comment:100"
     lines = run_cmd(f"squeue -A {group}" + (f" -u {users}" if users else "") + f" -O {fmt}")
     offsets = [sum(widths[:i]) for i in range(len(widths))]
     jobs = [[j[offsets[i]:offsets[i]+widths[i]].strip() for i in range(len(widths))] for j in lines if j.strip()]
@@ -769,21 +769,22 @@ def get_overview():
             info["gpus_per_job"] = gpus_per_job
             info["total_gpus"] = gpus_per_job * info.get("effective_states", {}).get("RUNNING", 0)
             info["max_restarts"] = max(int(j.get("RESTART_COUNT", 0)) for j in xid_jobs)
-            pending_estimates = [
-                (_parse_slurm_start_time(start_raw), start_raw, j.get("REASON", ""))
-                for j in xid_jobs
-                if j.get("STATE") == "PENDING" and (start_raw := _job_start_time_raw(j))
-            ]
-            pending_estimates = [e for e in pending_estimates if e[0]]
-            pending_total = sum(1 for j in xid_jobs if j.get("STATE") == "PENDING")
-            if pending_total:
+            pending_jobs = [j for j in xid_jobs if j.get("STATE") == "PENDING"]
+            pending_estimates = []
+            for j in pending_jobs:
+                start_raw = _job_start_time_raw(j)
+                if start_ts := _parse_slurm_start_time(start_raw):
+                    pending_estimates.append((start_ts, start_raw, j.get("REASON", "")))
+            if pending_jobs:
                 start_ts, start_raw, reason = min(pending_estimates) if pending_estimates else (None, "", "")
+                if not reason:
+                    reason = Counter(j.get("REASON", "") for j in pending_jobs).most_common(1)[0][0]
                 info["pending_start"] = {
                     "ts": start_ts,
                     "raw": start_raw,
                     "reason": reason,
                     "known": len(pending_estimates),
-                    "total": pending_total,
+                    "total": len(pending_jobs),
                 }
         else:
             info["qos"] = ""
@@ -1118,13 +1119,17 @@ def format_sacct(sacct):
     }
 
 
-def _parse_sacct_time(value):
-    if not value or value in {"Unknown", "None"}:
+def _parse_slurm_time(value, skip_values):
+    if not value or value in skip_values:
         return None
     try:
         return int(datetime.strptime(value.split(".", 1)[0], "%Y-%m-%dT%H:%M:%S").timestamp())
     except (ValueError, TypeError):
         return None
+
+
+def _parse_sacct_time(value):
+    return _parse_slurm_time(value, {"Unknown", "None"})
 
 
 def _parse_sacct_int(value):
@@ -1132,12 +1137,7 @@ def _parse_sacct_int(value):
 
 
 def _parse_slurm_start_time(value):
-    if not value or value == "N/A":
-        return None
-    try:
-        return int(datetime.strptime(value.split(".", 1)[0], "%Y-%m-%dT%H:%M:%S").timestamp())
-    except (ValueError, TypeError):
-        return None
+    return _parse_slurm_time(value, {"N/A"})
 
 
 def _job_start_time_raw(job):
@@ -1272,8 +1272,8 @@ def _find_xid_path(xid):
 
 
 def _load_current_xid_jobs(xid):
-    xid_widths = [20, 20, 20, 20, 20, 20, 40, 20, 20, 20, 25, 20, 100]
-    xid_fmt = "JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:40,NumNodes:20,GRES:20,RestartCnt:20,StartTime:25,Reason:20,Comment:100"
+    xid_widths = [20, 20, 20, 20, 20, 20, 40, 20, 20, 20, 25, 30, 100]
+    xid_fmt = "JobId:20,Name:20,UserName:20,State:20,TimeUsed:20,NumCPUs:20,QOS:40,NumNodes:20,GRES:20,RestartCnt:20,StartTime:25,Reason:30,Comment:100"
     lines = run_cmd(f"squeue -n {xid} -O {xid_fmt}")
     offsets = [sum(xid_widths[:i]) for i in range(len(xid_widths))]
     rows = [[j[offsets[i]:offsets[i]+xid_widths[i]].strip() for i in range(len(xid_widths))] for j in lines if j.strip()]

@@ -499,6 +499,7 @@
             const range = document.createRange();
             range.selectNodeContents(logView);
             const selection = window.getSelection();
+            if (!selection) return;
             selection.removeAllRanges();
             selection.addRange(range);
         });
