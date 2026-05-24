@@ -375,6 +375,7 @@
         .col-wus { width: 45px; }
         .col-gpu { width: 35px; }
         .col-gpus { width: 45px; }
+        .col-eta { width: 62px; }
         .col-r { width: 25px; }
         .col-qos { width: 110px; }
         .col-config { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 0; }
@@ -457,6 +458,7 @@
                         <th class="col-states">States</th>
                         <th class="col-wus">WUs</th>
                         <th class="col-gpus text-right">GPUs</th>
+                        <th class="col-eta text-right" title="Next pending Slurm start estimate">ETA</th>
                         <th class="col-r text-right">R</th>
                         <th class="col-qos">QoS</th>
                         <th style="width:33%">Config</th>
@@ -608,6 +610,66 @@
         };
 
         const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+        function formatDurationCompact(seconds) {
+            seconds = Math.max(0, Math.round(seconds));
+            const d = Math.floor(seconds / 86400);
+            const h = Math.floor(seconds / 3600) % 24;
+            const m = Math.floor(seconds / 60) % 60;
+            if (d) return `${d}d${h ? h + 'h' : ''}`;
+            if (h) return `${h}h${m ? m + 'm' : ''}`;
+            if (m) return `${m}m`;
+            return '<1m';
+        }
+
+        function formatEstimateLocal(date) {
+            return date.toLocaleString(undefined, {
+                year: 'numeric', month: 'short', day: 'numeric',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                timeZoneName: 'short',
+            });
+        }
+
+        function formatEstimateUtc(date) {
+            return date.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC');
+        }
+
+        function qwaitDisplay(wu) {
+            if (wu.status !== 'PENDING') return { text: wu.qwait || 'n/a', title: '' };
+            const reason = wu.qwait_estimate_reason || wu.reason || '';
+            if (!wu.qwait_estimate_ts) {
+                return {
+                    text: '',
+                    title: reason ? `Slurm start estimate unavailable. Reason: ${reason}` : 'Slurm start estimate unavailable',
+                };
+            }
+
+            const date = new Date(wu.qwait_estimate_ts * 1000);
+            const seconds = Math.round((date.getTime() - Date.now()) / 1000);
+            const raw = wu.qwait_estimate_raw ? ` Slurm reported ${wu.qwait_estimate_raw} in server time.` : '';
+            return {
+                text: seconds <= 0 ? 'est now' : seconds < 60 ? 'in <1m' : `in ~${formatDurationCompact(seconds)}`,
+                title: `Estimated Slurm start: ${formatEstimateLocal(date)} (viewer local); ${formatEstimateUtc(date)}.${raw}${reason ? ' Reason: ' + reason : ''}`,
+            };
+        }
+
+        function overviewEtaDisplay(start) {
+            if (!start || !start.total) return { text: '', title: '' };
+            if (!start.ts) {
+                return {
+                    text: '',
+                    title: `Slurm start estimate unavailable for ${start.total} pending job(s)`,
+                };
+            }
+
+            const date = new Date(start.ts * 1000);
+            const seconds = Math.round((date.getTime() - Date.now()) / 1000);
+            const raw = start.raw ? ` Slurm reported ${start.raw} in server time.` : '';
+            return {
+                text: seconds <= 0 ? 'now' : seconds < 60 ? '<1m' : `~${formatDurationCompact(seconds)}`,
+                title: `Next pending Slurm start: ${formatEstimateLocal(date)} (viewer local); ${formatEstimateUtc(date)}. Estimates available for ${start.known}/${start.total} pending job(s).${raw}${start.reason ? ' Reason: ' + start.reason : ''}`,
+            };
+        }
 
         function renderConfigArg(arg) {
             arg = String(arg ?? '');
@@ -1114,7 +1176,7 @@
         async function refreshAll() {
             overviewData = {};
             inactiveLoaded = false;
-            document.querySelector('#hotTable tbody').innerHTML = '<tr><td colspan="13" class="loading">Loading...</td></tr>';
+            document.querySelector('#hotTable tbody').innerHTML = '<tr><td colspan="14" class="loading">Loading...</td></tr>';
             document.querySelector('#coldTable tbody').innerHTML = '<tr><td colspan="11" class="loading">Loading inactive experiments...</td></tr>';
 
             const numServers = servers.length;
@@ -1343,6 +1405,7 @@
                         totalGpus: info.total_gpus || 0,
                         restarts: info.max_restarts || 0,
                         qos: info.qos || '',
+                        pendingStart: info.pending_start || null,
                         config: info.config || '',
                         name: info.name || '',
                         note: info.note || '',
@@ -1447,6 +1510,7 @@
                     name: '',
                     note: '',
                     warningCount: 0,
+                    pendingStart: null,
                     isMisc: true,
                 });
             }
@@ -1476,6 +1540,7 @@
                         <td class="mono">${r.wus}</td>
                         <td class="mono text-right">${r.totalGpus}</td>
                         <td class="mono text-right"></td>
+                        <td class="mono text-right"></td>
                         <td></td>
                         <td></td>
                         <td></td>
@@ -1491,6 +1556,7 @@
                 const wusDisplay = r.warningCount > 0
                     ? `<span class="warning-text" title="${r.warningCount} WU(s) have warnings, go to detail view for more.">${r.wus} ⚠</span>`
                     : r.wus;
+                const eta = overviewEtaDisplay(r.pendingStart);
                 return `
                 <tr data-server="${r.server}" data-qos="${esc(r.qos)}" data-user="${r.user}">
                     <td class="text-center"><span class="fav-btn ${favorites.has(r.xid) ? 'active' : ''}" onclick="toggleFavorite('${r.xid}')">${favorites.has(r.xid) ? '❤︎' : '♡'}</span></td>
@@ -1501,6 +1567,7 @@
                     <td>${formatStates(r.states)}</td>
                     <td class="mono">${wusDisplay}</td>
                     <td class="mono text-right">${r.totalGpus}</td>
+                    <td class="mono text-right" title="${esc(eta.title)}">${esc(eta.text)}</td>
                     <td class="mono text-right">${r.restarts}</td>
                     <td class="qos-cell" data-qos="${esc(r.qos)}" data-server="${r.server}" title="${esc(r.qos)}">${esc(r.qos)}</td>
                     <td class="col-config" title="${esc(r.config)}">${esc(r.config)}</td>
@@ -1519,6 +1586,7 @@
                     <td>${formatStates(allStates)}</td>
                     <td class="mono">${totalWUs}</td>
                     <td class="mono text-right">${totalGPUs}</td>
+                    <td></td>
                     <td></td>
                     <td></td>
                     <td></td>
@@ -1952,7 +2020,11 @@
                 const runtimeCell = document.querySelector(`td[data-wid="${wu.wid}"][data-field="runtime"]`);
 
                 if (restartCell) restartCell.textContent = wu.restarts ?? 0;
-                if (qwaitCell) qwaitCell.textContent = wu.qwait || 'n/a';
+                if (qwaitCell) {
+                    const qwaitInfo = qwaitDisplay(wu);
+                    qwaitCell.textContent = qwaitInfo.text;
+                    qwaitCell.title = qwaitInfo.title;
+                }
                 if (runtimeCell) runtimeCell.textContent = wu.runtime || 'n/a';
                 if (statusCell) {
                     const hasExitCode = wu.exit_code !== null && wu.exit_code !== undefined;
@@ -2149,6 +2221,7 @@
                 const statusTooltip = isPending && wu.reason
                     ? `${wu.status} (${esc(wu.reason)})`
                     : `${wu.status} (exit: ${hasExitCode ? wu.exit_code : '?'})`;
+                const qwaitInfo = qwaitDisplay(wu);
 
                 html += `
                     <tr data-jid="${wu.jid}" data-wid="${wu.wid}" data-nsteps="${wu.nsteps || 0}">
@@ -2164,7 +2237,7 @@
                         ${metricToShow ? `<td class="mono text-right" data-wid="${wu.wid}" data-field="metric">-</td>` : ''}
                         <td class="config-args">${configArgs}${constantToggle}<span class="config-view-btn" onclick="showFullConfig('${serverUrl}', '${data.xid}', ${wu.wid})" title="View full config">🔍︎</span></td>
                         <td>${esc(wu.name)}</td>
-                        <td class="mono text-right" data-wid="${wu.wid}" data-field="qwait">${wu.qwait}</td>
+                        <td class="mono text-right" data-wid="${wu.wid}" data-field="qwait" title="${esc(qwaitInfo.title)}">${esc(qwaitInfo.text)}</td>
                         <td class="mono text-right" data-wid="${wu.wid}" data-field="runtime">${wu.runtime}</td>
                     </tr>`;
             }
