@@ -53,6 +53,10 @@ fi
 echo $CONDA_PREFIX
 pwd
 
+GPU_TYPE=$(sinfo -h -N -n "$MASTER_ADDR" -o "%G" | sed -n 's/.*gpu:\([^:,(]*\).*/\1/p' | head -n 1)
+GPU_TYPE=${GPU_TYPE:-$SLURM_JOB_PARTITION}
+export GPU_TYPE  # Export so it works regardless of quoting below.
+
 srun --ntasks-per-node=1 --ntasks="$SLURM_JOB_NUM_NODES" nvidia-smi topo -m
 
 # The --unbuffered is needed if we want to live-tail the stdout/stderr logfile, otherwise it buffers aggressively.
@@ -69,4 +73,4 @@ srun \
   --cpus-per-task="$((SLURM_CPUS_ON_NODE / NTASKS_PER_NODE))" \
   --cpu-bind=cores \
   --mem-bind=local \
-  bash -c 'export CUDA_VISIBLE_DEVICES=$SLURM_LOCALID; exec bv2/tools/_python "$@" c.jid:="$SLURM_JOB_ID" c.gpus:="$((SLURM_GPUS_PER_NODE * SLURM_JOB_NUM_NODES))" c.gpu:="$SLURM_JOB_PARTITION"' _ "$@"
+  bash -c 'export CUDA_VISIBLE_DEVICES=$SLURM_LOCALID; exec bv2/tools/_python "$@" c.jid:="$SLURM_JOB_ID" c.gpus:="$((SLURM_GPUS_PER_NODE * SLURM_JOB_NUM_NODES))" c.gpu:="$GPU_TYPE"' _ "$@"
