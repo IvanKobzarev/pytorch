@@ -181,6 +181,12 @@
         tbody tr.recent-warn-48h:nth-child(odd) { background: rgba(249, 115, 22, 0.10); }
         tbody tr.recent-warn-48h:nth-child(even) { background: rgba(249, 115, 22, 0.08); }
         tbody tr.recent-warn-48h:hover { background: rgba(249, 115, 22, 0.16); }
+        tbody tr.recent-stopped-12h:nth-child(odd) { background: rgba(75, 85, 99, 0.16); }
+        tbody tr.recent-stopped-12h:nth-child(even) { background: rgba(75, 85, 99, 0.13); }
+        tbody tr.recent-stopped-12h:hover { background: rgba(75, 85, 99, 0.24); }
+        tbody tr.recent-stopped-48h:nth-child(odd) { background: rgba(75, 85, 99, 0.11); }
+        tbody tr.recent-stopped-48h:nth-child(even) { background: rgba(75, 85, 99, 0.08); }
+        tbody tr.recent-stopped-48h:hover { background: rgba(75, 85, 99, 0.18); }
         input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; background: var(--input-bg); border: 1px solid var(--border); border-radius: 3px; }
         .text-right { text-align: right; }
         .text-center { text-align: center; }
@@ -1684,12 +1690,14 @@
                     : '';
                 const nowSec = Date.now() / 1000;
                 const ageHours = r.finishTime ? (nowSec - r.finishTime) / 3600 : Infinity;
-                const isSuccess = r.wus > 0 && r.done + r.stopped === r.wus;
+                const hasFailure = r.fail > 0;
+                const hasDone = r.done > 0;
+                const isStopped = r.wus > 0 && r.stopped > 0 && r.done === 0 && r.done + r.stopped === r.wus;
                 const needsResume = r.preempted > 0 && r.done + r.stopped + r.preempted === r.wus;
                 const recencyClass = ageHours < 12
-                    ? (isSuccess ? 'recent-12h' : needsResume ? 'recent-warn-12h' : 'recent-bad-12h')
+                    ? (hasFailure ? 'recent-bad-12h' : hasDone ? 'recent-12h' : isStopped ? 'recent-stopped-12h' : needsResume ? 'recent-warn-12h' : 'recent-bad-12h')
                     : ageHours < 48
-                        ? (isSuccess ? 'recent-48h' : needsResume ? 'recent-warn-48h' : 'recent-bad-48h')
+                        ? (hasFailure ? 'recent-bad-48h' : hasDone ? 'recent-48h' : isStopped ? 'recent-stopped-48h' : needsResume ? 'recent-warn-48h' : 'recent-bad-48h')
                         : '';
                 const finishedDisplay = !r.finishTime ? '' : ageHours < 48
                     ? formatAgo(r.finishTime)

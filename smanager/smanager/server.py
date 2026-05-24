@@ -776,8 +776,10 @@ def get_overview():
                 if start_ts := _parse_slurm_start_time(start_raw):
                     pending_estimates.append((start_ts, start_raw, j.get("REASON", "")))
             if pending_jobs:
-                start_ts, start_raw, reason = min(pending_estimates) if pending_estimates else (None, "", "")
-                if not reason:
+                if pending_estimates:
+                    start_ts, start_raw, reason = min(pending_estimates)
+                else:
+                    start_ts, start_raw = None, ""
                     reason = Counter(j.get("REASON", "") for j in pending_jobs).most_common(1)[0][0]
                 info["pending_start"] = {
                     "ts": start_ts,
