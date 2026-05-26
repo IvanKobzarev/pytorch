@@ -153,11 +153,14 @@ def install_exit_handler(config_path=None):
     def write_exit_status(status):
         nonlocal exit_status
         exit_status = status
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        config["exit_status"] = status
-        config["exit_status_at"] = datetime.now().isoformat(timespec="seconds")
-        nfs_safe_overwrite(config_path, json.dumps(config, indent=0) + "\n")
+        if config_path:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            config["exit_status"] = status
+            config["exit_status_at"] = datetime.now().isoformat(timespec="seconds")
+            nfs_safe_overwrite(config_path, json.dumps(config, indent=0) + "\n")
+        if status == "done":
+            remove_exit_handler()
 
     def handler(signum, frame):
         global _ABOUT_TO_GET_KILLED
@@ -173,17 +176,27 @@ def install_exit_handler(config_path=None):
             write_exit_status("error" if had_exception else exit_status[:-6])
 
     old_excepthook = sys.excepthook
+    signals = (signal.SIGUSR2, signal.SIGTERM)
+    old_signal_handlers = {s: signal.getsignal(s) for s in signals}
 
     def excepthook(*args):
         nonlocal had_exception
         had_exception = True
         old_excepthook(*args)
 
-    for s in (signal.SIGUSR2, signal.SIGTERM):
+    def remove_exit_handler():
+        for s, old_handler in old_signal_handlers.items():
+            signal.signal(s, old_handler)
+        sys.excepthook = old_excepthook
+        if config_path:
+            atexit.unregister(finalize_exit_status)
+
+    for s in signals:
         signal.signal(s, handler)
     sys.excepthook = excepthook
     if config_path:
         atexit.register(finalize_exit_status)
+    return write_exit_status
 
 
 def about_to_get_killed():
