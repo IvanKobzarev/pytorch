@@ -12,7 +12,9 @@ from torchtitan.experiments.graph_trainer.trainer import GraphTrainer
 from torchtitan.models.llama3.config_registry import (
     llama3_405b,
     llama3_70b,
+    llama3_70b_flex_attn,
     llama3_8b,
+    llama3_8b_flex_attn,
     llama3_debugmodel,
     llama3_debugmodel_flex_attn,
 )
@@ -46,5 +48,17 @@ def graph_trainer_llama3_70b() -> GraphTrainer.Config:
 
 def graph_trainer_llama3_405b() -> GraphTrainer.Config:
     config = to_graph_trainer_config(llama3_405b(), model_registry)
+    config.compile = GraphTrainerCompileConfig(enable=True)
+    return config
+
+
+def graph_trainer_llama3_8b_flex_attn() -> GraphTrainer.Config:
+    config = to_graph_trainer_config(llama3_8b_flex_attn(), model_registry)
+    config.compile = GraphTrainerCompileConfig(enable=True)
+    return config
+
+
+def graph_trainer_llama3_70b_flex_attn() -> GraphTrainer.Config:
+    config = to_graph_trainer_config(llama3_70b_flex_attn(), model_registry)
     config.compile = GraphTrainerCompileConfig(enable=True)
     return config

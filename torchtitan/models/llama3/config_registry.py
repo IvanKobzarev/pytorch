@@ -288,3 +288,21 @@ def sft_debugmodel() -> Trainer.Config:
             mode="selective",
         ),
     )
+
+
+def llama3_8b_flex_attn() -> Trainer.Config:
+    from torchtitan.components.loss import CrossEntropyLoss
+
+    config = llama3_8b()
+    config.model_spec = model_registry("8B", attn_backend="flex")
+    config.loss = CrossEntropyLoss.Config()
+    return config
+
+
+def llama3_70b_flex_attn() -> Trainer.Config:
+    from torchtitan.components.loss import CrossEntropyLoss
+
+    config = llama3_70b()
+    config.model_spec = model_registry("70B", attn_backend="flex")
+    config.loss = CrossEntropyLoss.Config()
+    return config
