@@ -84,6 +84,30 @@ For actions, POST to the server that owns the row:
 - `/api/action/resume?script=...`
 - `/api/note/{xid}`
 
+## flattlibrettli API from a laptop
+
+flattlibrettli is the browser/HTTP viewer for Plättli metrics from experiment runs.
+
+If `/checkpoint` doesn't exist, use the flattlibrettli HTTP APIs instead of SSH.
+
+With SSH forwards active, assume three independent local flattlibrettli backends exist:
+- `fair-sc-3`: `http://localhost:1337`
+- `fair-sc`: `http://localhost:1338`
+- `dm1`: `http://localhost:1339`
+
+As with smanager, use `curl --noproxy '*' http://127.0.0.1:1338/...` to avoid proxy issues.
+
+Useful API calls:
+- `GET /api/plattli/files` lists run IDs known to that flattlibrettli backend.
+- `POST /api/plattli/info` with a JSON list of run IDs returns each run's config, manifest summary, row count, and export time.
+- `POST /api/plattli/colbundle` with JSON `{runs, cols, include_indices, strict}` returns a ZIP of raw metric columns for multiple runs. Values are stored as `{run_id}/{metric}.{dtype}`; with `include_indices: true`, metrics whose manifest uses an indices file also include `{run_id}/{metric}.indices`. If the manifest has range-style indices, use those from `/api/plattli/info`; no `.indices` file is written.
+- `POST /api/plattli/xysbundle` with JSON `{series, smooth, strict}` returns a ZIP of ready-to-plot x/y arrays. Each series entry has `run`, `xname`, `yname`, optional `xrange: [xmin, xmax]`, and optional `key`. For smoothing, use `smooth: {"mode": "axisbin", "value": N}` to bin into N x-axis bins (`200` is a good default), or `smooth: {"mode": "databin", "value": width}` to bin in data-space x units. Smoothed results include `ym`/`yM` low/high bands in the ZIP metadata when smoothing applies.
+- `GET /api/plattli/files/{run_id}` downloads the `.plattli` archive for zipped runs.
+
+Prefer `xysbundle` when reading many metrics for plotting; it batches series and can return smoothed arrays directly. Use `colbundle` when you need raw metric arrays rather than plot-ready x/y series.
+
+For just the final scalar value of a metric like `train/loss`, prefer smanager's `/api/xid/{xid}/metrics?metric=train/loss`; use flattlibrettli when you need the run manifest or full raw metric series.
+
 ## Datasets
 
 To inspect raw data from any dataset here, we can either use the dataset class:
