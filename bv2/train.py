@@ -203,7 +203,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
 
     peak_mems, model_times, step_times = [], [], []
     t0 = t_step_start = t_prev_step_end = perf_counter()
-    prof = c.nsteps >= 50 and profile(
+    prof = c.nsteps >= 50 and first_step == 0 and profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         record_shapes=True,
         profile_memory=False,  # Done with torch.cuda functions instead.
