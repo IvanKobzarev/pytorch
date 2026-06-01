@@ -15,6 +15,7 @@ import os
 import stat
 import shutil
 import zipfile
+import math
 from datetime import datetime
 from getpass import getuser
 from pathlib import Path
@@ -883,7 +884,19 @@ def last_metric(wd_path, metric_name="train/loss"):
                     values = r.metric_values(metric_name)
                     if len(values) > 0:
                         v = values[-1]
-                        result[metric_name] = v.item() if hasattr(v, 'item') else v
+                        v = v.item() if hasattr(v, 'item') else v
+                        # Sanitize non-finite float values (nan, inf, -inf) to strings
+                        # JSON does not support these values and will raise ValueError.
+                        # Using strings allows the UI to distinguish between "metric is nan/inf"
+                        # vs "no metric data" (which shows as '-').
+                        if isinstance(v, float) and not math.isfinite(v):
+                            if math.isnan(v):
+                                v = "nan"
+                            elif v > 0:
+                                v = "inf"
+                            else:
+                                v = "-inf"
+                        result[metric_name] = v
                 return result
         except Exception as e:
             log.debug("plattli read failed for %s: %s", wd_path, e)
