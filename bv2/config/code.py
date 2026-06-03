@@ -8,6 +8,23 @@ def _int(s):
     return round(float(s[:-1]) * 1000000)
 
 
+# Valid `c.voc` values are "bytes", "code_<N>k" tokenizers such as "code_4k",
+# "l4_full" for the complete L4 tokenizer, or "l4_<N>k" for its first_N version
+# after leaving room for 16 reserved IDs (as the code_Nk already do).
+def make_tokenizer(c, ctok):
+    ctok.regex = lambda: "o200k" if c.voc.startswith("l4_") else "code"
+    ctok.path = lambda: (
+        "/checkpoint/rigi/bv2/l4_200k_base.model" if c.voc.startswith("l4_")
+        else "/checkpoint/rigi/bv2/code_4k.tt" if c.voc == "bytes"
+        else f"/checkpoint/rigi/bv2/{c.voc}.tt"
+    )
+    ctok.first_N = lambda: (
+        256 if c.voc == "bytes"
+        else None if c.voc == "l4_full" or not c.voc.startswith("l4_")
+        else int(c.voc[3:-1]) * 1000 - 16
+    )
+
+
 def get_config():
     c = sws.Config()
     c.seed = 0
@@ -18,10 +35,8 @@ def get_config():
     c.dataset_size = "0.25M"
     c.data.split = lambda: f"codewall_train_{c.dataset_size}"
     c.data.cache = True
-    c.data.tokenizer.regex = "code"
     c.voc = "code_4k"
-    c.data.tokenizer.path = lambda: f"/checkpoint/rigi/bv2/{c.voc if c.voc != 'bytes' else 'code_4k'}.tt"  # For bytes, use any file, say 4k.
-    c.data.tokenizer.first_N = lambda: 256 if c.voc == "bytes" else None
+    make_tokenizer(c, c.data.tokenizer)
     c.iter.maxtok = lambda: c.maxtok
 
     c.nexamples = lambda: min(_int(c.dataset_size), 1_000_000) * 64
