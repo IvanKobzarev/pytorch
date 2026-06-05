@@ -384,6 +384,8 @@
             color: var(--text);
         }
         .report-status { font-size: 11px; color: var(--muted); }
+        .report-status.ok { color: #22c55e; font-weight: 600; }
+        .report-status.failed { color: #ef4444; font-weight: 600; }
         .report-drop-overlay {
             display: none;
             position: fixed;
@@ -2003,6 +2005,13 @@
             return /\.zip$/i.test(file.name || '') || ['application/zip', 'application/x-zip-compressed'].includes(file.type);
         }
 
+        const REPORT_SRC_MAX_BYTES = 32 * 1024 * 1024;
+
+        function formatReportBytes(n) {
+            const mb = n / (1024 * 1024);
+            return `${mb >= 10 ? mb.toFixed(0) : mb.toFixed(1)} MB`;
+        }
+
         function reportUploadPrimaryUrl() {
             const existing = servers.find(s => {
                 try { return new URL(s.url).port === '2337'; }
@@ -2054,6 +2063,14 @@
                 alert('Drop exactly one HTML report and optionally one ZIP source file.');
                 return;
             }
+            status.classList.remove('ok', 'failed');
+            if (zipFiles[0] && zipFiles[0].size > REPORT_SRC_MAX_BYTES) {
+                const msg = `Source ZIP is ${formatReportBytes(zipFiles[0].size)}; max is ${formatReportBytes(REPORT_SRC_MAX_BYTES)}.`;
+                status.textContent = `Report upload failed: ${msg}`;
+                status.classList.add('failed');
+                alert(`Report upload failed: ${msg}`);
+                return;
+            }
             const reportId = reportIdFromHtmlFile(htmlFiles[0]);
             if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(reportId)) {
                 alert('Invalid report ID');
@@ -2066,6 +2083,7 @@
             const primaryUrl = reportUploadPrimaryUrl();
             const fallbackUrl = reportUploadFallbackUrl(primaryUrl);
             status.textContent = `Uploading ${reportId} to ${getServerDisplayName(primaryUrl)}...`;
+            status.classList.remove('ok', 'failed');
             try {
                 let meta;
                 try {
@@ -2076,10 +2094,13 @@
                     meta = await postReportForm(fallbackUrl, reportId, form);
                 }
                 status.textContent = `Uploaded ${meta.report_id}/v${meta.version}`;
+                status.classList.add('ok');
                 loadReports();
             } catch (e) {
-                status.textContent = '';
-                alert(`Report upload failed: ${e.message}`);
+                const msg = `Report upload failed: ${e.message}`;
+                status.textContent = msg;
+                status.classList.add('failed');
+                alert(msg);
             }
         }
 
@@ -2141,21 +2162,17 @@
             }).join('');
         }
 
-        async function showReportsDetail() {
+        function activateReportsDetail() {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.querySelector('[data-view="reports-detail"]').classList.add('active');
             document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
             document.getElementById('reports-detail').classList.add('active');
             history.pushState({ view: 'reports-detail' }, '', '#reports');
-            await loadReports();
         }
 
-        function activateReportsDetailForDrop() {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelector('[data-view="reports-detail"]').classList.add('active');
-            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-            document.getElementById('reports-detail').classList.add('active');
-            history.pushState({ view: 'reports-detail' }, '', '#reports');
+        async function showReportsDetail() {
+            activateReportsDetail();
+            await loadReports();
         }
 
         let reportDragDepth = 0;
@@ -2187,7 +2204,7 @@
                 e.preventDefault();
                 reportDragDepth = 0;
                 document.body.classList.remove('report-dragging');
-                activateReportsDetailForDrop();
+                activateReportsDetail();
                 uploadReportFiles(e.dataTransfer.files);
             });
         }

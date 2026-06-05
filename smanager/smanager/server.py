@@ -24,6 +24,7 @@ from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path
 from collections import Counter
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
@@ -192,6 +193,11 @@ _report_xid_re = re.compile(r'\b\d{6}_\d{6}\b')
 _report_run_re = re.compile(r'\b(\d{6}_\d{6})/([^\s<>"\']+)')
 _report_version_re = re.compile(r'v(\d+)\.json$')
 _report_lock = threading.Lock()
+REPORT_HTML_MAX_BYTES = 100 * 1024 * 1024
+REPORT_SRC_MAX_BYTES = 32 * 1024 * 1024
+REPORT_UPLOAD_MAX_BYTES = REPORT_HTML_MAX_BYTES + REPORT_SRC_MAX_BYTES + 1024 * 1024
+REPORT_LOCK_WAIT_SECONDS = 30
+REPORT_LOCK_STALE_SECONDS = 10 * 60
 
 
 def run_cmd(cmd):
@@ -695,6 +701,59 @@ def _report_dir(report_id):
     return REPORT_ROOT_DIR / _validate_report_id(report_id)
 
 
+def _report_bytes_label(n):
+    return f"{n // (1024 * 1024)}MB"
+
+
+async def _read_limited_body(request, max_bytes, label):
+    chunks = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"{label} too large (max {_report_bytes_label(max_bytes)})",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@contextmanager
+def _report_write_lock():
+    REPORT_ROOT_DIR.mkdir(parents=True, exist_ok=True)
+    lock_dir = REPORT_ROOT_DIR / ".write.lock"
+    deadline = time.time() + REPORT_LOCK_WAIT_SECONDS
+    with _report_lock:
+        while True:
+            try:
+                lock_dir.mkdir()
+                (lock_dir / "owner.json").write_text(json.dumps({
+                    "pid": os.getpid(),
+                    "user": getuser(),
+                    "host": os.uname().nodename,
+                    "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                }) + "\n", encoding="utf-8")
+                break
+            except FileExistsError:
+                try:
+                    if time.time() - lock_dir.stat().st_mtime > REPORT_LOCK_STALE_SECONDS:
+                        shutil.rmtree(lock_dir, ignore_errors=True)
+                        continue
+                except FileNotFoundError:
+                    continue
+                if time.time() >= deadline:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Report storage is locked by another smanager upload; retry in a few seconds",
+                    )
+                time.sleep(0.1)
+        try:
+            yield
+        finally:
+            shutil.rmtree(lock_dir, ignore_errors=True)
+
+
 def _report_versions(report_id):
     path = _report_dir(report_id)
     if not path.exists():
@@ -890,7 +949,7 @@ def _report_html(report_id, version):
     path = _report_dir(report_id) / f"v{version}.html"
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Report HTML not found: {report_id}/v{version}")
-    return path.read_text(errors="replace")
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def _report_src_path(report_id, version):
@@ -900,8 +959,11 @@ def _report_src_path(report_id, version):
 def _validate_report_src(src_bytes):
     if not src_bytes:
         raise HTTPException(status_code=400, detail="Empty source upload")
-    if len(src_bytes) > 1024 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Source upload too large (max 1GB)")
+    if len(src_bytes) > REPORT_SRC_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Source upload too large (max {_report_bytes_label(REPORT_SRC_MAX_BYTES)})",
+        )
     if not zipfile.is_zipfile(BytesIO(src_bytes)):
         raise HTTPException(status_code=400, detail="Source material must be a zip file")
 
@@ -953,10 +1015,10 @@ def _report_upload_parts(body, content_type):
 
 async def _upload_report_src(report_id, version, request):
     report_id = _validate_report_id(report_id)
-    src_bytes = await request.body()
+    src_bytes = await _read_limited_body(request, REPORT_SRC_MAX_BYTES, "Source upload")
     _validate_report_src(src_bytes)
 
-    with _report_lock:
+    with _report_write_lock():
         if version is None:
             version = _latest_report_version(report_id)
         else:
@@ -986,17 +1048,20 @@ def _download_report_src(report_id, version):
 @app.post("/api/reports/{report_id}")
 async def upload_report(report_id, request: Request):
     report_id = _validate_report_id(report_id)
-    body = await request.body()
+    body = await _read_limited_body(request, REPORT_UPLOAD_MAX_BYTES, "Report upload")
     html_bytes, src_bytes = _report_upload_parts(body, request.headers.get("content-type", ""))
     if not html_bytes:
         raise HTTPException(status_code=400, detail="Empty report upload")
-    if len(html_bytes) > 100 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Report too large (max 100MB)")
+    if len(html_bytes) > REPORT_HTML_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Report HTML too large (max {_report_bytes_label(REPORT_HTML_MAX_BYTES)})",
+        )
     if src_bytes is not None:
         _validate_report_src(src_bytes)
     html_text = html_bytes.decode("utf-8", errors="replace")
 
-    with _report_lock:
+    with _report_write_lock():
         report_dir = _report_dir(report_id)
         report_dir.mkdir(parents=True, exist_ok=True)
         version = (_report_versions(report_id) or [0])[-1] + 1
@@ -1129,7 +1194,6 @@ def report_viewer_page(report_id, version=None):
     else:
         _read_report_metadata(report_id, _report_version(version))
     html = (SCRIPT_DIR / "report.html").read_text()
-    html = html.replace("{{VERSION}}", __version__)
     return Response(content=html, media_type="text/html")
 
 
@@ -1882,6 +1946,186 @@ def _workdirs_by_suffix(wd_path):
     return workdirs, warnings
 
 
+RUN_QUERY_CONFIG_SKIP = {"jid", "wid", "xid", "name", "exit_status", "exit_status_at"}
+RUN_QUERY_OPS = {"in", "exists", "ne", "gt", "gte", "lt", "lte"}
+MISSING = object()
+
+
+def _wid_key(wid):
+    return (0, int(wid)) if str(wid).isdigit() else (1, str(wid))
+
+
+def _xid_datetime(xid):
+    return datetime.strptime(xid, "%y%m%d_%H%M%S")
+
+
+def _scope_datetime(scope, key):
+    value = scope.get(key)
+    if value is None:
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(value)
+        value = str(value)
+        iso_value = value[:-1] + "+00:00" if value.endswith("Z") else value
+        dt = _xid_datetime(value) if _xid_re.fullmatch(value) else datetime.fromisoformat(iso_value)
+        return dt.astimezone().replace(tzinfo=None) if dt.tzinfo and dt.utcoffset() is not None else dt
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"Invalid scope.{key}: {value}")
+
+
+def _flatten_config(value, path="", out=None):
+    out = out if out is not None else {}
+    if isinstance(value, dict) and value:
+        for k, v in value.items():
+            p = f"{path}.{k}" if path else str(k)
+            if p.split(".", 1)[0] not in RUN_QUERY_CONFIG_SKIP:
+                _flatten_config(v, p, out)
+    elif isinstance(value, list) and value:
+        for i, v in enumerate(value):
+            _flatten_config(v, f"{path}.{i}" if path else str(i), out)
+    elif path:
+        out[path] = value
+    return out
+
+
+def _config_value(config, path):
+    value = config
+    for part in path.split("."):
+        if isinstance(value, dict):
+            if part not in value:
+                return MISSING
+            value = value[part]
+        elif isinstance(value, list) and part.isdigit() and int(part) < len(value):
+            value = value[int(part)]
+        else:
+            return MISSING
+    return value
+
+
+def _json_key(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _matches_predicate(value, pred):
+    if isinstance(pred, dict) and any(k in pred for k in RUN_QUERY_OPS):
+        if "exists" in pred and (value is not MISSING) != bool(pred["exists"]):
+            return False
+        if value is MISSING:
+            return "exists" in pred and len(pred) == 1
+        if "in" in pred and value not in pred["in"]:
+            return False
+        if "ne" in pred and value == pred["ne"]:
+            return False
+        for op, cmp in (
+            ("gt", lambda a, b: a > b),
+            ("gte", lambda a, b: a >= b),
+            ("lt", lambda a, b: a < b),
+            ("lte", lambda a, b: a <= b),
+        ):
+            if op not in pred:
+                continue
+            try:
+                if not cmp(value, pred[op]):
+                    return False
+            except TypeError:
+                return False
+        return True
+    return value is not MISSING and value == pred
+
+
+def _run_status(run):
+    raw = run["config"].get("exit_status")
+    return state_from_exit_status(raw) or (str(raw).upper() if raw else "")
+
+
+def _public_run(run):
+    config = run["config"]
+    return {
+        "xid": run["xid"],
+        "wid": run["wid"],
+        "name": config.get("name", ""),
+        "workdir": run["workdir"],
+        "plattli_run_id": run["workdir"],
+        "jid": normalize_jid(config.get("jid")),
+        "exit_status": config.get("exit_status"),
+        "status": _run_status(run),
+    }
+
+
+def _xid_run_configs(xid, wanted_wids=None):
+    wd_path = _find_xid_path(xid)
+    if not wd_path:
+        return [], [{"xid": xid}]
+    workdirs, _ = _workdirs_by_suffix(wd_path)
+    if wanted_wids is None:
+        launchids = load_launchids(wd_path)
+        wids = sorted(set(workdirs) | {normalize_wid(wid) for wid in launchids}, key=_wid_key)
+    else:
+        wids = sorted({normalize_wid(wid) for wid in wanted_wids}, key=_wid_key)
+
+    missing = [{"xid": xid, "wid": wid} for wid in wids if wid not in workdirs]
+    wids = [wid for wid in wids if wid in workdirs]
+    configs = fs_executor.map(_load_config_only, [(wd_path, workdirs[wid]) for wid in wids])
+    runs = []
+    for wid, (wuwd_name, config) in zip(wids, configs):
+        if not config:
+            missing.append({"xid": xid, "wid": wid})
+            continue
+        runs.append({
+            "xid": xid,
+            "wid": wid,
+            "workdir": f"{wd_path.name}/{wuwd_name}",
+            "config": config,
+        })
+    return runs, missing
+
+
+def _runs_from_specs(specs):
+    by_xid = {}
+    order = []
+    for spec in specs:
+        if not isinstance(spec, dict):
+            raise HTTPException(status_code=400, detail="runs entries must be objects")
+        xid = str(spec.get("xid", ""))
+        if not _xid_re.fullmatch(xid):
+            raise HTTPException(status_code=400, detail=f"Invalid run xid: {xid}")
+        if xid not in by_xid:
+            by_xid[xid] = set()
+            order.append(xid)
+        if by_xid[xid] is None:
+            continue
+        if "wid" in spec:
+            by_xid[xid].add(normalize_wid(spec["wid"]))
+        else:
+            by_xid[xid] = None
+
+    runs, missing = [], []
+    for xid in order:
+        xid_runs, xid_missing = _xid_run_configs(xid, by_xid[xid])
+        runs.extend(xid_runs)
+        missing.extend(xid_missing)
+    return runs, missing
+
+
+def _xids_from_scope(scope):
+    xids = [str(xid) for xid in scope.get("xids", [])]
+    if not xids:
+        xids = sorted({xid for wd in dir_names(BASEDIR) if (xid := extract_xid(wd))}, reverse=True)
+
+    after = _scope_datetime(scope, "created_after")
+    before = _scope_datetime(scope, "created_before")
+    result = []
+    for xid in xids:
+        if not _xid_re.fullmatch(xid):
+            continue
+        dt = _xid_datetime(xid)
+        if (after and dt < after) or (before and dt > before):
+            continue
+        result.append(xid)
+    return result
+
+
 def _launch_args(meta):
     if not isinstance(meta, dict):
         return []
@@ -2064,6 +2308,99 @@ def get_sacct_states(payload=Body(...)):
         xid_time, fallback_time, time.time() - t0,
     )
     return {str(jid): state for jid, state in states.items()}
+
+
+@app.post("/api/runs/what_varies")
+def runs_what_varies(payload=Body(...)):
+    """Return flattened config leaves that vary over a set of XIDs/WIDs."""
+    t0 = time.time()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Expected object payload")
+    specs = payload.get("runs", [])
+    if not specs:
+        raise HTTPException(status_code=400, detail="Expected non-empty runs list")
+
+    runs, missing = _runs_from_specs(specs)
+    flat_configs = [_flatten_config(run["config"]) for run in runs]
+    config = {}
+    for path in sorted({path for flat in flat_configs for path in flat}):
+        counts = {}
+        for flat in flat_configs:
+            value = flat[path] if path in flat else MISSING
+            key = "__missing__" if value is MISSING else _json_key(value)
+            counts.setdefault(key, {"value": value, "count": 0})
+            counts[key]["count"] += 1
+        if len(counts) <= 1:
+            continue
+        values = []
+        for item in counts.values():
+            if item["value"] is MISSING:
+                values.append({"missing": True, "count": item["count"]})
+            else:
+                values.append({"value": item["value"], "count": item["count"]})
+        config[path] = values
+
+    log.info("POST /api/runs/what_varies - done: %d runs, %d varying paths (%.2fs)",
+             len(runs), len(config), time.time() - t0)
+    return {
+        "runs_total": len(runs) + len(missing),
+        "runs_used": len(runs),
+        "missing_runs": missing,
+        "config": config,
+    }
+
+
+@app.post("/api/runs/query")
+def runs_query(payload=Body(...)):
+    """Find runs on this smanager backend by config predicates."""
+    t0 = time.time()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Expected object payload")
+
+    scope = payload.get("scope") or {}
+    if not isinstance(scope, dict):
+        raise HTTPException(status_code=400, detail="Expected object scope")
+    query = payload.get("config_where") or {}
+    if not isinstance(query, dict):
+        raise HTTPException(status_code=400, detail="Expected object config_where")
+
+    limit = scope.get("limit")
+    if limit is not None:
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"Invalid scope.limit: {limit}")
+        if limit < 1:
+            raise HTTPException(status_code=400, detail="scope.limit must be positive")
+    wanted_statuses = {str(status).lower() for status in payload.get("status", [])}
+
+    matched, missing = [], []
+    scanned = 0
+    source_batches = [_runs_from_specs(scope["runs"])] if "runs" in scope else (
+        _xid_run_configs(xid) for xid in _xids_from_scope(scope)
+    )
+    for source_runs, source_missing in source_batches:
+        missing.extend(source_missing)
+        for run in source_runs:
+            scanned += 1
+            statuses = {str(run["config"].get("exit_status", "")).lower(), _run_status(run).lower()}
+            if wanted_statuses and not (statuses & wanted_statuses):
+                continue
+            if all(_matches_predicate(_config_value(run["config"], path), pred) for path, pred in query.items()):
+                matched.append(_public_run(run))
+                if limit is not None and len(matched) >= limit:
+                    break
+        if limit is not None and len(matched) >= limit:
+            break
+
+    log.info("POST /api/runs/query - done: %d matched, %d scanned (%.2fs)",
+             len(matched), scanned, time.time() - t0)
+    return {
+        "runs": matched,
+        "runs_scanned": scanned,
+        "runs_matched": len(matched),
+        "missing_runs": missing,
+    }
 
 
 @app.get("/api/xid/{xid}")
