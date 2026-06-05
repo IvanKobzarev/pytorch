@@ -575,9 +575,6 @@
     <div id="reports-detail" class="view">
         <div class="report-toolbar">
             <input type="text" id="reportSearch" placeholder="search reports" oninput="loadReports()" />
-            <input type="text" id="reportXidSearch" placeholder="xid" oninput="loadReports()" />
-            <input type="text" id="reportRunSearch" placeholder="run" oninput="loadReports()" />
-            <button class="btn" onclick="loadReports()">Refresh</button>
             <span id="reportStatus" class="report-status"></span>
         </div>
         <div class="table-container-full">
@@ -587,9 +584,9 @@
                         <th style="width:14em">Report</th>
                         <th>Title</th>
                         <th style="width:18em">XIDs</th>
-                        <th style="width:22em">Runs</th>
                         <th style="width:7em">Uploader</th>
                         <th style="width:13em">Uploaded</th>
+                        <th style="width:5em">Version</th>
                         <th class="col-server">Server</th>
                     </tr>
                 </thead>
@@ -1976,11 +1973,7 @@
         function reportSearchParams() {
             const params = new URLSearchParams();
             const q = document.getElementById('reportSearch').value.trim();
-            const xid = document.getElementById('reportXidSearch').value.trim();
-            const run = document.getElementById('reportRunSearch').value.trim();
             if (q) params.set('q', q);
-            if (xid) params.set('xid', xid);
-            if (run) params.set('run', run);
             return params.toString();
         }
 
@@ -2142,21 +2135,14 @@
                 const xids = (meta.xids || []).map(xid =>
                     `<a class="mono clickable" href="${meta.serverUrl}/#${encodeURIComponent(xid)}" target="_blank">${esc(xid)}</a>`
                 ).join(' ');
-                const runs = (meta.runs || []).map(run => {
-                    const raw = run.raw || `${run.xid}/${run.name}`;
-                    const href = run.wid !== undefined
-                        ? `${meta.serverUrl}/files/${encodeURIComponent(run.xid)}/wu/${encodeURIComponent(run.wid)}`
-                        : `${meta.serverUrl}/#${encodeURIComponent(run.xid)}`;
-                    return `<a class="mono clickable" href="${href}" target="_blank">${esc(raw)}</a>`;
-                }).join(' ');
                 return `
                 <tr>
-                    <td class="mono"><a class="report-link" href="${reportHref}" target="_blank">${esc(meta.report_id)}/v${meta.version}</a></td>
+                    <td class="mono"><a class="report-link" href="${reportHref}" target="_blank">${esc(meta.report_id)}</a></td>
                     <td>${esc(meta.title)}</td>
                     <td class="report-ref-list">${xids}</td>
-                    <td class="report-ref-list">${runs}</td>
                     <td>${esc(meta.uploader || '')}</td>
                     <td class="mono" title="${esc(meta.uploaded_at || '')}">${esc(formatReportTime(meta))}</td>
+                    <td class="mono"><a class="report-link" href="${meta.serverUrl}/reports/${encodeURIComponent(meta.report_id)}/v${encodeURIComponent(meta.version)}" target="_blank">v${esc(meta.version)}</a></td>
                     <td><span class="server-badge">${esc(meta.serverName)}</span></td>
                 </tr>`;
             }).join('');
