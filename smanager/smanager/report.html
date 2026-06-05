@@ -68,6 +68,15 @@
         }
         .run-links { display: flex; gap: 8px; margin-top: 4px; color: var(--muted); }
         .versions { display: flex; flex-wrap: wrap; gap: 4px; }
+        .download-link {
+            display: inline-flex;
+            align-items: center;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 4px 8px;
+            margin: 10px 0 2px;
+            background: var(--input-bg);
+        }
         .version-link {
             border: 1px solid var(--border);
             border-radius: 4px;
@@ -84,6 +93,7 @@
         <h1 id="title">Report</h1>
         <div class="muted mono" id="reportId"></div>
         <div class="muted" id="uploaded"></div>
+        <a class="download-link" id="downloadHtml" href="#" download>Download HTML</a>
         <h2>XIDs</h2>
         <div id="xids"></div>
         <h2>Runs</h2>
@@ -105,6 +115,10 @@
             return explicitVersion ? `${base}/v${explicitVersion}${suffix}` : `${base}${suffix}`;
         }
 
+        function reportVersionApiPath(version, suffix = '') {
+            return `/api/reports/${encodeURIComponent(reportId)}/v${version}${suffix}`;
+        }
+
         function link(path, text, cls = '') {
             return `<a class="${cls}" href="${path}">${esc(text)}</a>`;
         }
@@ -114,6 +128,9 @@
             document.getElementById('title').textContent = meta.title || meta.report_id;
             document.getElementById('reportId').textContent = `${meta.report_id}/v${meta.version}`;
             document.getElementById('uploaded').textContent = `${meta.uploader || ''} ${meta.uploaded_at || ''}`.trim();
+            const download = document.getElementById('downloadHtml');
+            download.href = reportVersionApiPath(meta.version, '/html');
+            download.download = `${meta.report_id}-v${meta.version}.html`;
             document.getElementById('xids').innerHTML = (meta.xids || []).map(xid =>
                 `<span class="pill mono">${link('/#' + encodeURIComponent(xid), xid)}</span>`
             ).join('') || '<span class="muted">None</span>';
@@ -147,7 +164,7 @@
                 renderMeta(meta);
                 loadVersions(meta.version);
 
-                const htmlResp = await fetch(reportApiPath('/html'));
+                const htmlResp = await fetch(reportVersionApiPath(meta.version, '/html'));
                 if (!htmlResp.ok) throw new Error('Report HTML not found');
                 document.getElementById('reportFrame').srcdoc = await htmlResp.text();
             } catch (e) {
