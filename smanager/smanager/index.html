@@ -368,6 +368,39 @@
         .xid-actions .xid-note { cursor: pointer; padding: 0.1em 0.4em; border-radius: 3px; color: var(--fg-muted); font-size: 0.9em; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .xid-actions .xid-note:hover { background: var(--hover-bg); }
         .xid-actions .xid-note.has-note { color: var(--accent); }
+        .report-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+        .report-toolbar input, .report-toolbar select {
+            padding: 6px 10px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 13px;
+            background: var(--input-bg);
+            color: var(--text);
+        }
+        .report-status { font-size: 11px; color: var(--muted); }
+        .report-drop-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            align-items: center;
+            justify-content: center;
+            background: rgba(75, 192, 200, 0.16);
+            border: 3px dashed var(--accent);
+            color: var(--text);
+            font-size: 18px;
+            font-weight: 600;
+            z-index: 3000;
+            pointer-events: none;
+        }
+        body.report-dragging .report-drop-overlay { display: flex; }
+        .report-link { color: var(--accent); cursor: pointer; }
+        .report-ref-list { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .fav-toggle.active { opacity: 1; color: #ef4444; }
         .col-fav { width: 1.6em; }
         .col-rq { width: 1.6em; }
@@ -432,6 +465,7 @@
     </style>
 </head>
 <body>
+    <div id="reportDropOverlay" class="report-drop-overlay">Drop report</div>
     <div class="header-row">
         <h1><span style="color:var(--accent)">s</span>Manager<span style="font-size: 10px; opacity: 0.3; margin-left: 4px;">v{{VERSION}}</span></h1>
         <div id="serverList" class="server-list"></div>
@@ -449,6 +483,7 @@
     <div class="tabs">
         <button class="tab active" data-view="overview">Overview</button>
         <button class="tab" data-view="xid-detail">XID Details</button>
+        <button class="tab" data-view="reports-detail">Reports</button>
         <button class="tab" data-view="misc-detail">Misc Details</button>
     </div>
 
@@ -532,6 +567,32 @@
         </div>
         <div id="xidContent">
             <p class="loading">Enter an XID and select a server to view details</p>
+        </div>
+    </div>
+
+    <div id="reports-detail" class="view">
+        <div class="report-toolbar">
+            <input type="text" id="reportSearch" placeholder="search reports" oninput="loadReports()" />
+            <input type="text" id="reportXidSearch" placeholder="xid" oninput="loadReports()" />
+            <input type="text" id="reportRunSearch" placeholder="run" oninput="loadReports()" />
+            <button class="btn" onclick="loadReports()">Refresh</button>
+            <span id="reportStatus" class="report-status"></span>
+        </div>
+        <div class="table-container-full">
+            <table id="reportsTable">
+                <thead>
+                    <tr>
+                        <th style="width:14em">Report</th>
+                        <th>Title</th>
+                        <th style="width:18em">XIDs</th>
+                        <th style="width:22em">Runs</th>
+                        <th style="width:7em">Uploader</th>
+                        <th style="width:13em">Uploaded</th>
+                        <th class="col-server">Server</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
         </div>
     </div>
 
@@ -758,6 +819,7 @@
         let servers = [];
         let overviewData = {};
         let miscData = {};  // serverIdx -> misc jobs data
+        let reportsLoadToken = 0;
         let favorites = new Set();
         let showOnlyFavorites = false;
         let serverUsers = {};  // serverIdx -> username
@@ -1259,6 +1321,8 @@
             // Refresh the currently active tab
             if (document.getElementById('xid-detail').classList.contains('active')) {
                 loadXidDetail();
+            } else if (document.getElementById('reports-detail').classList.contains('active')) {
+                loadReports();
             } else if (document.getElementById('misc-detail').classList.contains('active')) {
                 document.querySelector('#miscTable tbody').innerHTML = '<tr><td colspan="14" class="loading">Loading...</td></tr>';
                 await refreshAll();
@@ -1907,6 +1971,227 @@
             `).join('');
         }
 
+        function reportSearchParams() {
+            const params = new URLSearchParams();
+            const q = document.getElementById('reportSearch').value.trim();
+            const xid = document.getElementById('reportXidSearch').value.trim();
+            const run = document.getElementById('reportRunSearch').value.trim();
+            if (q) params.set('q', q);
+            if (xid) params.set('xid', xid);
+            if (run) params.set('run', run);
+            return params.toString();
+        }
+
+        function reportIdFromHtmlFile(file) {
+            const reportId = (file?.name || '').replace(/\.html?$/i, '')
+                .replace(/[^A-Za-z0-9._-]+/g, '-')
+                .replace(/^[._-]+|[._-]+$/g, '');
+            return reportId;
+        }
+
+        function formatReportTime(meta) {
+            if (!meta.uploaded_ts) return meta.uploaded_at || '';
+            const d = new Date(meta.uploaded_ts * 1000);
+            return isNaN(d.getTime()) ? meta.uploaded_at || '' : d.toLocaleString();
+        }
+
+        function isHtmlReportFile(file) {
+            return /\.html?$/i.test(file.name || '') || file.type === 'text/html';
+        }
+
+        function isZipFile(file) {
+            return /\.zip$/i.test(file.name || '') || ['application/zip', 'application/x-zip-compressed'].includes(file.type);
+        }
+
+        function reportUploadPrimaryUrl() {
+            const existing = servers.find(s => {
+                try { return new URL(s.url).port === '2337'; }
+                catch { return false; }
+            });
+            if (existing) return existing.url;
+            const url = new URL(window.location.origin);
+            url.port = '2337';
+            return url.origin;
+        }
+
+        function reportUploadFallbackUrl(primaryUrl) {
+            return primaryUrl === window.location.origin ? '' : window.location.origin;
+        }
+
+        async function postReportForm(serverUrl, reportId, form) {
+            const resp = await fetch(`${serverUrl}/api/reports/${encodeURIComponent(reportId)}`, {
+                method: 'POST',
+                body: form,
+                signal: AbortSignal.timeout(120000),
+            });
+            if (!resp.ok) {
+                let detail = 'Upload failed';
+                try {
+                    const err = await resp.json();
+                    detail = err.detail || detail;
+                } catch {}
+                const e = new Error(detail);
+                e.status = resp.status;
+                throw e;
+            }
+            return await resp.json();
+        }
+
+        function shouldFallbackReportUpload(e) {
+            return e.name === 'AbortError' || e.status === 404 || e.status === 405 || e instanceof TypeError;
+        }
+
+        async function uploadReportFiles(files) {
+            files = [...files];
+            const status = document.getElementById('reportStatus');
+            if (files.length < 1 || files.length > 2) {
+                alert('Drop one HTML file, or one HTML file and one ZIP file.');
+                return;
+            }
+            const htmlFiles = files.filter(isHtmlReportFile);
+            const zipFiles = files.filter(isZipFile);
+            if (htmlFiles.length !== 1 || htmlFiles.length + zipFiles.length !== files.length || zipFiles.length > 1) {
+                alert('Drop exactly one HTML report and optionally one ZIP source file.');
+                return;
+            }
+            const reportId = reportIdFromHtmlFile(htmlFiles[0]);
+            if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(reportId)) {
+                alert('Invalid report ID');
+                return;
+            }
+            const form = new FormData();
+            form.append('html', htmlFiles[0], htmlFiles[0].name);
+            if (zipFiles[0]) form.append('src', zipFiles[0], 'src.zip');
+
+            const primaryUrl = reportUploadPrimaryUrl();
+            const fallbackUrl = reportUploadFallbackUrl(primaryUrl);
+            status.textContent = `Uploading ${reportId} to ${getServerDisplayName(primaryUrl)}...`;
+            try {
+                let meta;
+                try {
+                    meta = await postReportForm(primaryUrl, reportId, form);
+                } catch (e) {
+                    if (!fallbackUrl || !shouldFallbackReportUpload(e)) throw e;
+                    status.textContent = `Uploading ${reportId} to ${getServerDisplayName(fallbackUrl)}...`;
+                    meta = await postReportForm(fallbackUrl, reportId, form);
+                }
+                status.textContent = `Uploaded ${meta.report_id}/v${meta.version}`;
+                loadReports();
+            } catch (e) {
+                status.textContent = '';
+                alert(`Report upload failed: ${e.message}`);
+            }
+        }
+
+        async function loadReports() {
+            const tbody = document.querySelector('#reportsTable tbody');
+            const token = ++reportsLoadToken;
+            tbody.innerHTML = '<tr><td colspan="7" class="loading">Loading...</td></tr>';
+            const params = reportSearchParams();
+            const results = await Promise.allSettled(servers.map(async (server, serverIdx) => {
+                const resp = await fetch(`${server.url}/api/reports${params ? '?' + params : ''}`, { signal: AbortSignal.timeout(30000) });
+                if (!resp.ok) throw new Error('Failed to fetch reports');
+                const data = await resp.json();
+                server.status = 'ok';
+                return (data.reports || []).map(meta => ({ ...meta, serverIdx, serverName: server.name, serverUrl: server.url }));
+            }));
+            if (token !== reportsLoadToken) return;
+
+            const rows = [];
+            for (let i = 0; i < results.length; i++) {
+                if (results[i].status === 'fulfilled') {
+                    rows.push(...results[i].value);
+                } else if (servers[i]) {
+                    servers[i].status = 'error';
+                }
+            }
+            renderServers();
+            rows.sort((a, b) => (b.uploaded_ts || 0) - (a.uploaded_ts || 0));
+            renderReportsTable(rows);
+        }
+
+        function renderReportsTable(rows) {
+            const tbody = document.querySelector('#reportsTable tbody');
+            if (!rows.length) {
+                tbody.innerHTML = '<tr><td colspan="7" class="loading">No reports found</td></tr>';
+                return;
+            }
+            tbody.innerHTML = rows.map(meta => {
+                const reportHref = `${meta.serverUrl}/reports/${encodeURIComponent(meta.report_id)}`;
+                const xids = (meta.xids || []).map(xid =>
+                    `<a class="mono clickable" href="${meta.serverUrl}/#${encodeURIComponent(xid)}" target="_blank">${esc(xid)}</a>`
+                ).join(' ');
+                const runs = (meta.runs || []).map(run => {
+                    const raw = run.raw || `${run.xid}/${run.name}`;
+                    const href = run.wid !== undefined
+                        ? `${meta.serverUrl}/files/${encodeURIComponent(run.xid)}/wu/${encodeURIComponent(run.wid)}`
+                        : `${meta.serverUrl}/#${encodeURIComponent(run.xid)}`;
+                    return `<a class="mono clickable" href="${href}" target="_blank">${esc(raw)}</a>`;
+                }).join(' ');
+                return `
+                <tr>
+                    <td class="mono"><a class="report-link" href="${reportHref}" target="_blank">${esc(meta.report_id)}/v${meta.version}</a></td>
+                    <td>${esc(meta.title)}</td>
+                    <td class="report-ref-list">${xids}</td>
+                    <td class="report-ref-list">${runs}</td>
+                    <td>${esc(meta.uploader || '')}</td>
+                    <td class="mono" title="${esc(meta.uploaded_at || '')}">${esc(formatReportTime(meta))}</td>
+                    <td><span class="server-badge">${esc(meta.serverName)}</span></td>
+                </tr>`;
+            }).join('');
+        }
+
+        async function showReportsDetail() {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector('[data-view="reports-detail"]').classList.add('active');
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.getElementById('reports-detail').classList.add('active');
+            history.pushState({ view: 'reports-detail' }, '', '#reports');
+            await loadReports();
+        }
+
+        function activateReportsDetailForDrop() {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector('[data-view="reports-detail"]').classList.add('active');
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.getElementById('reports-detail').classList.add('active');
+            history.pushState({ view: 'reports-detail' }, '', '#reports');
+        }
+
+        let reportDragDepth = 0;
+
+        function dragHasFiles(e) {
+            return Array.from(e.dataTransfer?.types || []).includes('Files');
+        }
+
+        function setupReportDropTarget() {
+            window.addEventListener('dragenter', (e) => {
+                if (!dragHasFiles(e)) return;
+                e.preventDefault();
+                reportDragDepth++;
+                document.body.classList.add('report-dragging');
+            });
+            window.addEventListener('dragover', (e) => {
+                if (!dragHasFiles(e)) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+            });
+            window.addEventListener('dragleave', (e) => {
+                if (!dragHasFiles(e)) return;
+                e.preventDefault();
+                reportDragDepth = Math.max(0, reportDragDepth - 1);
+                if (reportDragDepth === 0) document.body.classList.remove('report-dragging');
+            });
+            window.addEventListener('drop', (e) => {
+                if (!dragHasFiles(e)) return;
+                e.preventDefault();
+                reportDragDepth = 0;
+                document.body.classList.remove('report-dragging');
+                activateReportsDetailForDrop();
+                uploadReportFiles(e.dataTransfer.files);
+            });
+        }
+
         async function loadXidFromHash() {
             const hash = window.location.hash;
             if (!hash || hash.length < 2) return;
@@ -1916,6 +2201,10 @@
             // Handle #misc specially
             if (xid === 'misc') {
                 showMiscDetail();
+                return;
+            }
+            if (xid === 'reports') {
+                showReportsDetail();
                 return;
             }
 
@@ -2506,6 +2795,9 @@
                         history.pushState({ xid }, '', '#' + xid);
                         loadXidDetail();
                     }
+                } else if (tab.dataset.view === 'reports-detail') {
+                    history.pushState({ view: 'reports-detail' }, '', '#reports');
+                    loadReports();
                 } else if (tab.dataset.view === 'misc-detail') {
                     history.pushState({ view: 'misc-detail' }, '', '#misc');
                     renderMiscTable();
@@ -2527,6 +2819,13 @@
                 document.getElementById('misc-detail').classList.add('active');
                 if (wasXidDetail) clearRowFilter();
                 renderMiscTable();
+            } else if (hash === '#reports') {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelector('[data-view="reports-detail"]').classList.add('active');
+                document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+                document.getElementById('reports-detail').classList.add('active');
+                if (wasXidDetail) clearRowFilter();
+                loadReports();
             } else if (hash && hash.length > 1) {
                 loadXidFromHash();
             } else {
@@ -2618,6 +2917,7 @@
             });
         }
         setupHotTableHovers();
+        setupReportDropTarget();
 
         // Init
         async function init() {

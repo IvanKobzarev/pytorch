@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>sManager Report</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --text: #333333;
+            --border: #dddddd;
+            --header-bg: #f7f7f9;
+            --input-bg: #ffffff;
+            --accent: #4bc0c8;
+            --muted: #666666;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #121417;
+                --text: #f0f3f9;
+                --border: rgba(255, 255, 255, 0.08);
+                --header-bg: rgb(32 34 37);
+                --input-bg: rgba(255, 255, 255, 0.06);
+                --accent: #4bc0c8;
+                --muted: #9aa4b1;
+            }
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; }
+        body {
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 13px;
+            background: var(--bg);
+            color: var(--text);
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            min-height: 100%;
+        }
+        aside {
+            border-right: 1px solid var(--border);
+            background: var(--header-bg);
+            padding: 14px;
+            overflow: auto;
+        }
+        main { min-width: 0; min-height: 0; }
+        h1 { font-size: 17px; margin-bottom: 4px; line-height: 1.25; }
+        h2 { font-size: 12px; margin: 16px 0 6px; color: var(--muted); text-transform: uppercase; }
+        a { color: inherit; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .muted { color: var(--muted); }
+        .mono { font-family: ui-monospace, "SF Mono", Monaco, "Cascadia Mono", monospace; }
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 2px 6px;
+            margin: 2px 3px 2px 0;
+            background: var(--input-bg);
+        }
+        .run {
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 6px;
+            margin: 4px 0;
+            background: var(--input-bg);
+        }
+        .run-links { display: flex; gap: 8px; margin-top: 4px; color: var(--muted); }
+        .versions { display: flex; flex-wrap: wrap; gap: 4px; }
+        .version-link {
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 2px 6px;
+            background: var(--input-bg);
+        }
+        .version-link.active { border-color: var(--accent); color: var(--accent); }
+        iframe { width: 100%; height: 100vh; border: 0; display: block; background: #fff; }
+        .error { color: #ef4444; padding: 12px; }
+    </style>
+</head>
+<body>
+    <aside>
+        <h1 id="title">Report</h1>
+        <div class="muted mono" id="reportId"></div>
+        <div class="muted" id="uploaded"></div>
+        <h2>XIDs</h2>
+        <div id="xids"></div>
+        <h2>Runs</h2>
+        <div id="runs"></div>
+        <h2>Versions</h2>
+        <div class="versions" id="versions"></div>
+    </aside>
+    <main id="main">
+        <iframe id="reportFrame" sandbox="allow-scripts"></iframe>
+    </main>
+    <script>
+        const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        const pathMatch = location.pathname.match(/^\/reports\/([^/]+)(?:\/v(\d+))?\/?$/);
+        const reportId = decodeURIComponent(pathMatch?.[1] || '');
+        const explicitVersion = pathMatch?.[2] || '';
+
+        function reportApiPath(suffix = '') {
+            const base = `/api/reports/${encodeURIComponent(reportId)}`;
+            return explicitVersion ? `${base}/v${explicitVersion}${suffix}` : `${base}${suffix}`;
+        }
+
+        function link(path, text, cls = '') {
+            return `<a class="${cls}" href="${path}">${esc(text)}</a>`;
+        }
+
+        function renderMeta(meta) {
+            document.title = `${meta.title || meta.report_id} - sManager`;
+            document.getElementById('title').textContent = meta.title || meta.report_id;
+            document.getElementById('reportId').textContent = `${meta.report_id}/v${meta.version}`;
+            document.getElementById('uploaded').textContent = `${meta.uploader || ''} ${meta.uploaded_at || ''}`.trim();
+            document.getElementById('xids').innerHTML = (meta.xids || []).map(xid =>
+                `<span class="pill mono">${link('/#' + encodeURIComponent(xid), xid)}</span>`
+            ).join('') || '<span class="muted">None</span>';
+            document.getElementById('runs').innerHTML = (meta.runs || []).map(run => `
+                <div class="run">
+                    <div class="mono">${esc(run.raw || `${run.xid}/${run.name}`)}</div>
+                    <div class="run-links">
+                        ${link('/#' + encodeURIComponent(run.xid), 'XID')}
+                        ${run.wid !== undefined ? link(`/files/${encodeURIComponent(run.xid)}/wu/${encodeURIComponent(run.wid)}`, 'Files') : ''}
+                        ${run.wid !== undefined ? link(`/config/${encodeURIComponent(run.xid)}/${encodeURIComponent(run.wid)}`, 'Config') : ''}
+                    </div>
+                </div>
+            `).join('') || '<span class="muted">None</span>';
+        }
+
+        async function loadVersions(activeVersion) {
+            const resp = await fetch(`/api/reports/${encodeURIComponent(reportId)}/versions`);
+            if (!resp.ok) return;
+            const data = await resp.json();
+            document.getElementById('versions').innerHTML = (data.versions || []).map(meta => {
+                const path = `/reports/${encodeURIComponent(reportId)}/v${meta.version}`;
+                return link(path, `v${meta.version}`, `version-link ${meta.version === activeVersion ? 'active' : ''}`);
+            }).join('');
+        }
+
+        async function loadReport() {
+            try {
+                const metaResp = await fetch(reportApiPath());
+                if (!metaResp.ok) throw new Error('Report metadata not found');
+                const meta = await metaResp.json();
+                renderMeta(meta);
+                loadVersions(meta.version);
+
+                const htmlResp = await fetch(reportApiPath('/html'));
+                if (!htmlResp.ok) throw new Error('Report HTML not found');
+                document.getElementById('reportFrame').srcdoc = await htmlResp.text();
+            } catch (e) {
+                document.getElementById('main').innerHTML = `<div class="error">${esc(e.message)}</div>`;
+            }
+        }
+
+        loadReport();
+    </script>
+</body>
+</html>

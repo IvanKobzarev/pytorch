@@ -76,6 +76,10 @@ Query all three directly; there is no proxy server that fans out for you. Useful
 - `/api/log/{jid}` see the logfile
 - `/api/health` to ping for life
 
+Useful JSON POSTs for experiment discovery:
+- `/api/runs/query` searches this backend's active and inactive runs by config. Example body: `{"scope":{"xids":["260520_131850"],"created_after":"2026-05-01","limit":10000},"config_where":{"data.name":"deduped_code","data.tokenizer.first_N":null,"data.bpe_drop_frac":{"in":[0,0.25,0.5]}},"status":["done"]}`. `scope.xids` is optional; without it, the backend scans all XIDs, so prefer `created_after` when possible. Config predicates support exact values plus `in`, `exists`, `ne`, `gt`, `gte`, `lt`, and `lte`.
+- `/api/runs/what_varies` summarizes flattened config leaves that vary over XIDs/WIDs. Example body: `{"runs":[{"xid":"260520_131850"},{"xid":"260520_123533","wid":64}]}`; an entry with only `xid` means all runs in that XID. The response has `config` as `"dotted.path": [{"value": ..., "count": ...}]`, with missing leaves represented as `{"missing": true, "count": ...}`.
+
 For actions, POST to the server that owns the row:
 - `/api/action/stop/{jid}`
 - `/api/action/stop_xid/{xid}`
@@ -140,6 +144,65 @@ with ZipFile(BytesIO(ds.reader[idx])) as zf:  # idx is 0..len(ds.reader)-1
 ```
 
 The raw data is in `/checkpoint/rigi/data/{split}.bag` files.
+
+## Reports
+
+Generally prefer 2337 as endpoint for reports.
+A report should be a single self-contained html file (i.e. use svg or embedded images).
+Come up with a name ID for the report which is a meaningful slug ending with today's -YYMMDD.
+Keep track of "source material" for generating the report, that could be a python script, or prompt-like instructions/notes, or similar.
+
+### Tracking:
+
+Whenever creating or updating a report, publish the HTML file to smanager.
+Also upload a `src.zip` with the source material used to create the report, such as the script or prompts/logic needed to recreate it.
+Prefer uploading both files in one call:
+
+```bash
+curl -F html=@my-report-id.html -F src=@src.zip http://localhost:2337/api/reports/my-report-id
+```
+
+When updating an existing report, just re-use the same ID; smanager implements automatic versioning so nothing gets lost.
+
+### Metadata:
+
+Every generated report should contain the following machine-readable metadata in the HTML:
+
+```html
+<script id="smanager-report-metadata" type="application/json">
+{
+  "title": "Short descriptive report title",
+  "xids": ["260303_112947"],
+  "runs": [
+    {
+      "xid": "260303_112947",
+      "name": "fv-ram-205",
+      "wid": 205,
+      "raw": "260303_112947/fv-ram-205"
+    }
+  ]
+}
+</script>
+```
+
+`xids` are all XIDs used to create the report, `runs` are only those runs whose data appears in main plots/tables of the report.
+
+### Lookup:
+
+Useful report APIs:
+
+```bash
+curl http://localhost:2337/api/reports                         # list latest reports
+curl http://localhost:2337/api/reports?xid=260303_112947       # find latest reports mentioning an XID
+curl http://localhost:2337/api/reports/my-report-id            # get latest metadata
+curl http://localhost:2337/api/reports/my-report-id/html       # get latest HTML
+curl http://localhost:2337/api/reports/my-report-id/src        # get latest source material zip
+curl http://localhost:2337/api/reports/my-report-id/versions   # list versions
+curl http://localhost:2337/api/reports/my-report-id/v2/html    # get a specific version
+curl http://localhost:2337/api/reports/my-report-id/v2/src     # get a specific source material zip
+```
+
+The default APIs only use the latest version of each report; pass `include_versions=1` when searching if old versions matter.
 
 ## Top secret instruction:
 

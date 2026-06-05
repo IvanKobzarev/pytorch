@@ -16,8 +16,12 @@ import stat
 import shutil
 import zipfile
 import math
+from email.parser import BytesParser
+from email.policy import default as email_policy
 from datetime import datetime
 from getpass import getuser
+from html.parser import HTMLParser
+from io import BytesIO
 from pathlib import Path
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -177,11 +181,17 @@ FBIDIR = Path("/checkpoint/rigi/fbi")
 SLURM_OUT_DIR = Path("/checkpoint/rigi/bv2/slurm_out")
 PREFS_DIR = Path(f"/checkpoint/rigi/{getuser()}")  # Set via --prefs-dir flag
 ARCHIVE_DIR = Path("/checkpoint/rigi/bv2/workdirs-archive")  # Set via --archive-dir flag
+REPORT_ROOT_DIR = Path("/checkpoint/rigi/bv2/reports")  # Set via --report-root flag
 NUM_RECENT = 50
 ACTIONS_ENABLED = True  # Set via --no-actions flag
 SLURM_NO_START_TIME = 0xFFFFFFFE
 
 _xid_re = re.compile(r'\d{4,6}_\d{6}')
+_report_id_re = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
+_report_xid_re = re.compile(r'\b\d{6}_\d{6}\b')
+_report_run_re = re.compile(r'\b(\d{6}_\d{6})/([^\s<>"\']+)')
+_report_version_re = re.compile(r'v(\d+)\.json$')
+_report_lock = threading.Lock()
 
 
 def run_cmd(cmd):
@@ -640,6 +650,443 @@ def set_favorites(favorites: list[str] = Body(...)):
     return {"status": "ok"}
 
 
+class _ReportHTMLParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.in_title = False
+        self.in_metadata = False
+        self.title_parts = []
+        self.metadata_parts = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag.lower() == "title":
+            self.in_title = True
+        elif tag.lower() == "script" and attrs.get("id") == "smanager-report-metadata":
+            self.in_metadata = True
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "title":
+            self.in_title = False
+        elif tag.lower() == "script":
+            self.in_metadata = False
+
+    def handle_data(self, data):
+        if self.in_title:
+            self.title_parts.append(data)
+        if self.in_metadata:
+            self.metadata_parts.append(data)
+
+
+def _validate_report_id(report_id):
+    if not _report_id_re.fullmatch(report_id):
+        raise HTTPException(status_code=400, detail="Invalid report ID")
+    return report_id
+
+
+def _report_version(version):
+    version = str(version)
+    if not version.isdigit():
+        raise HTTPException(status_code=400, detail="Invalid report version")
+    return int(version)
+
+
+def _report_dir(report_id):
+    return REPORT_ROOT_DIR / _validate_report_id(report_id)
+
+
+def _report_versions(report_id):
+    path = _report_dir(report_id)
+    if not path.exists():
+        return []
+    versions = []
+    with os.scandir(path) as it:
+        for e in it:
+            if e.is_file(follow_symlinks=False) and (m := _report_version_re.fullmatch(e.name)):
+                versions.append(int(m.group(1)))
+    return sorted(versions)
+
+
+def _read_report_metadata(report_id, version):
+    path = _report_dir(report_id) / f"v{version}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Report version not found: {report_id}/v{version}")
+    return json.loads(path.read_text())
+
+
+def _latest_report_metadata(report_id):
+    versions = _report_versions(report_id)
+    if not versions:
+        raise HTTPException(status_code=404, detail=f"Report not found: {report_id}")
+    return _read_report_metadata(report_id, versions[-1])
+
+
+def _atomic_write_text(path, text):
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _atomic_write_bytes(path, data):
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
+
+
+def _write_report_metadata(metadata, update_latest=False):
+    report_dir = _report_dir(metadata["report_id"])
+    _atomic_write_text(report_dir / f"v{metadata['version']}.json", json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+    if update_latest:
+        _atomic_write_text(report_dir / "latest.json", json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+
+
+def _run_from_parts(xid, name):
+    name = str(name or "").rstrip(".,;:)]}")
+    if not xid or not _report_xid_re.fullmatch(xid) or not name:
+        return None
+    run = {"xid": xid, "name": name, "raw": f"{xid}/{name}"}
+    if m := re.search(r'-(\d+)$', name):
+        run["wid"] = int(m.group(1))
+    return run
+
+
+def _normalize_report_runs(items):
+    runs = {}
+    for item in items or []:
+        run = None
+        if isinstance(item, str):
+            if m := re.fullmatch(r'(\d{6}_\d{6})/([^\s<>"\']+)', item.strip()):
+                run = _run_from_parts(m.group(1), m.group(2))
+        elif isinstance(item, dict):
+            raw = item.get("raw")
+            if raw and (m := re.fullmatch(r'(\d{6}_\d{6})/([^\s<>"\']+)', str(raw).strip())):
+                run = _run_from_parts(m.group(1), m.group(2))
+            else:
+                xid = str(item.get("xid") or "")
+                name = str(item.get("name") or "")
+                if not name and item.get("wid") is not None:
+                    name = str(item.get("wid"))
+                run = _run_from_parts(xid, name)
+            if run and item.get("wid") is not None:
+                wid = str(item.get("wid"))
+                if wid.isdigit():
+                    run["wid"] = int(wid)
+        if run:
+            runs[run["raw"]] = run
+    return sorted(runs.values(), key=lambda r: r["raw"])
+
+
+def _normalize_report_xids(items):
+    return sorted({
+        str(xid) for xid in items or []
+        if isinstance(xid, str) and _report_xid_re.fullmatch(xid)
+    })
+
+
+def _extract_report_metadata(html_text):
+    parser = _ReportHTMLParser()
+    parser.feed(html_text)
+    title = " ".join(" ".join(parser.title_parts).split())
+    embedded_text = "".join(parser.metadata_parts).strip()
+    extraction = {"source": "grep", "embedded_metadata": False}
+
+    if embedded_text:
+        try:
+            embedded = json.loads(embedded_text)
+            if not isinstance(embedded, dict):
+                raise ValueError("metadata is not an object")
+            runs = _normalize_report_runs(embedded.get("runs", []))
+            xids = set(_normalize_report_xids(embedded.get("xids", [])))
+            xids.update(run["xid"] for run in runs)
+            return {
+                "title": str(embedded.get("title") or title or "").strip(),
+                "xids": sorted(xids),
+                "runs": runs,
+                "extraction": {"source": "embedded_metadata", "embedded_metadata": True},
+            }
+        except Exception as e:
+            extraction["embedded_error"] = str(e)
+
+    runs = _normalize_report_runs([f"{m.group(1)}/{m.group(2)}" for m in _report_run_re.finditer(html_text)])
+    xids = set(_report_xid_re.findall(html_text))
+    xids.update(run["xid"] for run in runs)
+    return {"title": title, "xids": sorted(xids), "runs": runs, "extraction": extraction}
+
+
+def _report_metadata(report_id, version, html_text):
+    extracted = _extract_report_metadata(html_text)
+    uploaded_at = datetime.now().astimezone()
+    return {
+        "schema": 1,
+        "report_id": report_id,
+        "version": version,
+        "title": extracted["title"] or report_id,
+        "uploader": getuser(),
+        "uploaded_at": uploaded_at.isoformat(timespec="seconds"),
+        "uploaded_ts": uploaded_at.timestamp(),
+        "html_file": f"v{version}.html",
+        "xids": extracted["xids"],
+        "runs": extracted["runs"],
+        "extraction": extracted["extraction"],
+    }
+
+
+def _all_report_metadata(include_versions=False):
+    if not REPORT_ROOT_DIR.exists():
+        return []
+    reports = []
+    with os.scandir(REPORT_ROOT_DIR) as it:
+        names = sorted(e.name for e in it if e.is_dir(follow_symlinks=False) and _report_id_re.fullmatch(e.name))
+    for report_id in names:
+        versions = _report_versions(report_id)
+        if not versions:
+            continue
+        for version in (versions if include_versions else [versions[-1]]):
+            try:
+                reports.append(_read_report_metadata(report_id, version))
+            except Exception as e:
+                log.warning("Failed to read report metadata %s/v%s: %s", report_id, version, e)
+    return sorted(reports, key=lambda m: (m.get("uploaded_ts") or 0, m.get("report_id") or ""), reverse=True)
+
+
+def _report_text(meta):
+    parts = [meta.get("report_id", ""), meta.get("title", ""), meta.get("uploader", "")]
+    parts.extend(meta.get("xids", []))
+    for run in meta.get("runs", []):
+        parts.extend([run.get("raw", ""), run.get("name", ""), str(run.get("wid", ""))])
+    return " ".join(parts).lower()
+
+
+def _report_matches_run(meta, run_filter, xid_filter=""):
+    if not run_filter:
+        return True
+    run_filter = run_filter.strip().lower()
+    if "/" in run_filter:
+        xid_part, run_part = run_filter.split("/", 1)
+        xid_filter = xid_filter or xid_part
+        run_filter = run_part
+    for run in meta.get("runs", []):
+        if xid_filter and run.get("xid") != xid_filter:
+            continue
+        fields = [run.get("raw", ""), run.get("name", ""), str(run.get("wid", ""))]
+        if any(run_filter == str(field).lower() or run_filter in str(field).lower() for field in fields):
+            return True
+    return False
+
+
+def _truthy(value):
+    return str(value).lower() in ("1", "true", "yes", "on")
+
+
+def _report_matches(meta, q="", xid="", run=""):
+    if q and not all(word in _report_text(meta) for word in q.lower().split()):
+        return False
+    if xid and xid not in meta.get("xids", []) and not any(r.get("xid") == xid for r in meta.get("runs", [])):
+        return False
+    return _report_matches_run(meta, run, xid)
+
+
+def _report_html(report_id, version):
+    path = _report_dir(report_id) / f"v{version}.html"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Report HTML not found: {report_id}/v{version}")
+    return path.read_text(errors="replace")
+
+
+def _report_src_path(report_id, version):
+    return _report_dir(report_id) / f"v{version}.src.zip"
+
+
+def _validate_report_src(src_bytes):
+    if not src_bytes:
+        raise HTTPException(status_code=400, detail="Empty source upload")
+    if len(src_bytes) > 1024 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Source upload too large (max 1GB)")
+    if not zipfile.is_zipfile(BytesIO(src_bytes)):
+        raise HTTPException(status_code=400, detail="Source material must be a zip file")
+
+
+def _source_material_metadata(src_bytes, version):
+    uploaded_at = datetime.now().astimezone()
+    return {
+        "zip_file": f"v{version}.src.zip",
+        "size": len(src_bytes),
+        "uploader": getuser(),
+        "uploaded_at": uploaded_at.isoformat(timespec="seconds"),
+        "uploaded_ts": uploaded_at.timestamp(),
+    }
+
+
+def _latest_report_version(report_id):
+    versions = _report_versions(report_id)
+    if not versions:
+        raise HTTPException(status_code=404, detail=f"Report not found: {report_id}")
+    return versions[-1]
+
+
+def _report_upload_parts(body, content_type):
+    if not content_type.lower().startswith("multipart/form-data"):
+        raise HTTPException(status_code=400, detail="Report upload must use multipart/form-data with an html part")
+
+    msg = BytesParser(policy=email_policy).parsebytes(
+        f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode() + body)
+    if not msg.is_multipart():
+        raise HTTPException(status_code=400, detail="Invalid multipart report upload")
+
+    parts = {}
+    filenames = {}
+    for part in msg.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        filename = part.get_filename()
+        payload = part.get_payload(decode=True) or b""
+        if name:
+            parts[name] = payload
+        if filename:
+            filenames[filename] = payload
+
+    html_bytes = parts.get("html") or parts.get("report") or parts.get("file") or filenames.get("report.html")
+    src_bytes = parts.get("src") or parts.get("source") or parts.get("src_zip") or filenames.get("src.zip")
+    if not html_bytes:
+        raise HTTPException(status_code=400, detail="Multipart report upload needs an html part")
+    return html_bytes, src_bytes
+
+
+async def _upload_report_src(report_id, version, request):
+    report_id = _validate_report_id(report_id)
+    src_bytes = await request.body()
+    _validate_report_src(src_bytes)
+
+    with _report_lock:
+        if version is None:
+            version = _latest_report_version(report_id)
+        else:
+            version = _report_version(version)
+        metadata = _read_report_metadata(report_id, version)
+        _atomic_write_bytes(_report_src_path(report_id, version), src_bytes)
+        metadata["source_material"] = _source_material_metadata(src_bytes, version)
+        _write_report_metadata(metadata, update_latest=version == _latest_report_version(report_id))
+
+    log.info("POST /api/reports/%s/v%s/src (%d bytes)", report_id, version, len(src_bytes))
+    return metadata
+
+
+def _download_report_src(report_id, version):
+    report_id = _validate_report_id(report_id)
+    if version is None:
+        version = _latest_report_version(report_id)
+    else:
+        version = _report_version(version)
+        _read_report_metadata(report_id, version)
+    path = _report_src_path(report_id, version)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Source material not found for {report_id}/v{version}")
+    return FileResponse(path, media_type="application/zip", filename="src.zip")
+
+
+@app.post("/api/reports/{report_id}")
+async def upload_report(report_id, request: Request):
+    report_id = _validate_report_id(report_id)
+    body = await request.body()
+    html_bytes, src_bytes = _report_upload_parts(body, request.headers.get("content-type", ""))
+    if not html_bytes:
+        raise HTTPException(status_code=400, detail="Empty report upload")
+    if len(html_bytes) > 100 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Report too large (max 100MB)")
+    if src_bytes is not None:
+        _validate_report_src(src_bytes)
+    html_text = html_bytes.decode("utf-8", errors="replace")
+
+    with _report_lock:
+        report_dir = _report_dir(report_id)
+        report_dir.mkdir(parents=True, exist_ok=True)
+        version = (_report_versions(report_id) or [0])[-1] + 1
+        metadata = _report_metadata(report_id, version, html_text)
+        _atomic_write_text(report_dir / f"v{version}.html", html_text)
+        if src_bytes is not None:
+            _atomic_write_bytes(_report_src_path(report_id, version), src_bytes)
+            metadata["source_material"] = _source_material_metadata(src_bytes, version)
+        _write_report_metadata(metadata, update_latest=True)
+
+    log.info("POST /api/reports/%s -> v%s", report_id, version)
+    return metadata
+
+
+@app.post("/api/reports/{report_id}/src")
+async def upload_report_latest_src(report_id, request: Request):
+    return await _upload_report_src(report_id, None, request)
+
+
+@app.post("/api/reports/{report_id}/v{version}/src")
+async def upload_report_version_src(report_id, version, request: Request):
+    return await _upload_report_src(report_id, version, request)
+
+
+@app.get("/api/reports/{report_id}/src")
+def get_report_latest_src(report_id):
+    return _download_report_src(report_id, None)
+
+
+@app.get("/api/reports/{report_id}/v{version}/src")
+def get_report_version_src(report_id, version):
+    return _download_report_src(report_id, version)
+
+
+@app.get("/api/reports")
+def list_reports(q="", xid="", run="", include_versions=False):
+    include_versions = _truthy(include_versions)
+    reports = [m for m in _all_report_metadata(include_versions) if _report_matches(m, q, xid, run)]
+    return {"reports": reports}
+
+
+@app.get("/api/reports/by-xid/{xid}")
+def reports_by_xid(xid, include_versions=False):
+    if not _report_xid_re.fullmatch(xid):
+        raise HTTPException(status_code=400, detail="Invalid XID format")
+    include_versions = _truthy(include_versions)
+    return {"reports": [m for m in _all_report_metadata(include_versions) if _report_matches(m, xid=xid)]}
+
+
+@app.get("/api/reports/by-run/{xid}/{run}")
+def reports_by_run(xid, run, include_versions=False):
+    if not _report_xid_re.fullmatch(xid):
+        raise HTTPException(status_code=400, detail="Invalid XID format")
+    include_versions = _truthy(include_versions)
+    return {"reports": [m for m in _all_report_metadata(include_versions) if _report_matches(m, xid=xid, run=run)]}
+
+
+@app.get("/api/reports/{report_id}/versions")
+def report_versions(report_id):
+    versions = _report_versions(report_id)
+    if not versions:
+        raise HTTPException(status_code=404, detail=f"Report not found: {report_id}")
+    return {"report_id": report_id, "versions": [_read_report_metadata(report_id, v) for v in versions]}
+
+
+@app.get("/api/reports/{report_id}/v{version}")
+def get_report_version(report_id, version):
+    _validate_report_id(report_id)
+    version = _report_version(version)
+    return _read_report_metadata(report_id, version)
+
+
+@app.get("/api/reports/{report_id}/v{version}/html")
+def get_report_version_html(report_id, version):
+    _validate_report_id(report_id)
+    version = _report_version(version)
+    return Response(content=_report_html(report_id, version), media_type="text/plain; charset=utf-8")
+
+
+@app.get("/api/reports/{report_id}/html")
+def get_report_html(report_id):
+    metadata = _latest_report_metadata(report_id)
+    return Response(content=_report_html(report_id, metadata["version"]), media_type="text/plain; charset=utf-8")
+
+
+@app.get("/api/reports/{report_id}")
+def get_report(report_id):
+    return _latest_report_metadata(report_id)
+
+
 @app.post("/api/note/{xid}")
 def set_note(xid: str, note: str = Body(..., embed=True)):
     """Set or delete a note for an XID."""
@@ -669,6 +1116,19 @@ def set_note(xid: str, note: str = Body(..., embed=True)):
 def serve_index():
     log.info("GET / (serving index.html)")
     html = (SCRIPT_DIR / "index.html").read_text()
+    html = html.replace("{{VERSION}}", __version__)
+    return Response(content=html, media_type="text/html")
+
+
+@app.get("/reports/{report_id}")
+@app.get("/reports/{report_id}/v{version}")
+def report_viewer_page(report_id, version=None):
+    _validate_report_id(report_id)
+    if version is None:
+        _latest_report_metadata(report_id)
+    else:
+        _read_report_metadata(report_id, _report_version(version))
+    html = (SCRIPT_DIR / "report.html").read_text()
     html = html.replace("{{VERSION}}", __version__)
     return Response(content=html, media_type="text/html")
 
@@ -2613,7 +3073,7 @@ def archive_xid(xid: str, move: bool = True):
 
 
 def main():
-    global PREFS_DIR, ACTIONS_ENABLED, ARCHIVE_DIR
+    global PREFS_DIR, ACTIONS_ENABLED, ARCHIVE_DIR, REPORT_ROOT_DIR
     import argparse
     parser = argparse.ArgumentParser(description="sManager - Slurm job management web UI")
     parser.add_argument("--version", action="version", version=f"smanager {__version__}")
@@ -2621,6 +3081,7 @@ def main():
     parser.add_argument("--prefs-dir", help=f"Directory for preferences files (default: /checkpoint/rigi/USER)")
     parser.add_argument("--no-actions", action="store_true", help="Disable all action endpoints (stop, resume, delete)")
     parser.add_argument("--archive-dir", help="Directory where archived XIDs are moved to")
+    parser.add_argument("--report-root", help="Directory where uploaded reports are stored")
     args = parser.parse_args()
     if args.prefs_dir:
         PREFS_DIR = Path(args.prefs_dir)
@@ -2631,6 +3092,9 @@ def main():
     if args.archive_dir:
         ARCHIVE_DIR = Path(args.archive_dir)
         log.info("Archive directory: %s", ARCHIVE_DIR)
+    if args.report_root:
+        REPORT_ROOT_DIR = Path(args.report_root)
+        log.info("Report root directory: %s", REPORT_ROOT_DIR)
     uvicorn.run(app, host="127.0.0.1", port=args.port)
 
 
