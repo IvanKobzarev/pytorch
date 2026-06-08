@@ -510,7 +510,9 @@ def _is_safe_to_reorder(node: fx.Node) -> bool:
         name = getattr(node.target, "__name__", "")
         if name.endswith("_"):
             return False
-        if getattr(node.target, "__module__", "") == "_operator" and name.startswith("i"):
+        if getattr(node.target, "__module__", "") == "_operator" and name.startswith(
+            "i"
+        ):
             return False
         if isinstance(node.kwargs.get("out"), fx.Node):
             return False
