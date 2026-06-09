@@ -147,6 +147,7 @@ The raw data is in `/checkpoint/rigi/data/{split}.bag` files.
 
 ## Reports
 
+Do not generate a report unless explicitly requested by the user.
 Generally prefer 2337 as endpoint for reports.
 A report should be a single self-contained html file (i.e. use svg or embedded images).
 Come up with a name ID for the report which is a meaningful slug ending with today's -YYMMDD.
