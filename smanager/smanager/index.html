@@ -365,6 +365,8 @@
         .xid-actions .xid-btn:hover { opacity: 1; }
         .xid-actions .xid-btn.fa-icon { font-family: var(--font-fa); font-weight: 400; }
         .xid-actions .xid-btn.active { opacity: 1; color: #ef4444; }
+        .xid-actions .running-eta { font-size: 13px; white-space: nowrap; }
+        .xid-actions .running-eta .label { color: var(--muted); }
         .xid-actions .xid-note { cursor: pointer; padding: 0.1em 0.4em; border-radius: 3px; color: var(--fg-muted); font-size: 0.9em; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .xid-actions .xid-note:hover { background: var(--hover-bg); }
         .xid-actions .xid-note.has-note { color: var(--accent); }
@@ -422,7 +424,7 @@
         .col-config { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 0; }
         .col-server { width: 50px; }
         .eta-cell { max-width: 62px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .qwait-cell { max-width: 8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .qwait-cell { max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; font-size: smaller; }
         .note-text { color: var(--accent); }
         .name-text { color: var(--text); }
         .name-note-cell { cursor: pointer; }
@@ -679,15 +681,46 @@
 
         const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
+        function pad2(n) {
+            return String(n).padStart(2, '0');
+        }
+
         function formatDurationCompact(seconds) {
             seconds = Math.max(0, Math.round(seconds));
             const d = Math.floor(seconds / 86400);
             const h = Math.floor(seconds / 3600) % 24;
             const m = Math.floor(seconds / 60) % 60;
-            if (d) return `${d}d${h ? h + 'h' : ''}`;
-            if (h) return `${h}h${m ? m + 'm' : ''}`;
+            if (d) return `${d}d${pad2(h)}h`;
+            if (h) return `${h}h${pad2(m)}m`;
             if (m) return `${m}m`;
             return '<1m';
+        }
+
+        function validSeconds(seconds) {
+            return typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0;
+        }
+
+        function formatSignedEtaDuration(seconds) {
+            if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return 'n/a';
+            return `${seconds < 0 ? '-' : ''}${formatDurationCompact(Math.abs(seconds))}`;
+        }
+
+        function etaCountsText(eta) {
+            const counts = eta?.counts || {};
+            const parts = ['chrono/proctime', 'chrono/percent', 'chrono/modeltime']
+                .filter(name => name in counts)
+                .map(name => `${name}: ${counts[name] || 0}`);
+            if (counts['chrono/evaltime']) parts.push(`chrono/evaltime: ${counts['chrono/evaltime']}`);
+            return parts.join(', ');
+        }
+
+        function etaUnavailableDisplay(eta, thing) {
+            const reason = eta?.eta_error || `missing required chrono metrics with at least ${eta?.min_points || 100} measurements`;
+            const counts = etaCountsText(eta);
+            return {
+                text: 'n/a',
+                title: `${thing} unavailable: ${reason}.${counts ? ' Metric points: ' + counts + '.' : ''}`,
+            };
         }
 
         function formatEstimateLocal(date) {
@@ -735,8 +768,72 @@
             return { text: short, title: hint ? `${reason}: ${hint}` : reason };
         }
 
+        function slurmRuntimeText(wu) {
+            const runtime = String(wu.runtime ?? '').trim();
+            return runtime && runtime !== 'n/a' ? runtime : '';
+        }
+
+        function trainingEtaDisplay(wu) {
+            const eta = wu.runtime_eta;
+            if (!validSeconds(eta?.eta_real)) return etaUnavailableDisplay(eta, 'Training ETA');
+            const finish = new Date(Date.now() + eta.eta_real * 1000);
+            const slurmRuntime = slurmRuntimeText(wu);
+            const lines = [
+                `Training ETA: ${formatDurationCompact(eta.eta_real)} remaining wall-clock/proctime.`,
+                `Estimated finish: ${formatEstimateLocal(finish)} (viewer local); ${formatEstimateUtc(finish)}.`,
+                `Progress: ${(eta.percent * 100).toFixed(2)}%; measurements: ${eta.n_points}.`,
+                `Current uninterrupted Slurm allocation runtime: ${slurmRuntime || 'n/a'}.`,
+            ];
+            const hasBreakdown = validSeconds(eta.eta_model) || validSeconds(eta.eta_eval)
+                || typeof eta.eta_other === 'number' || eta.breakdown_error || eta.eval_source;
+            if (validSeconds(eta.eta_model)) {
+                lines.push(`Remaining model/core time: ${formatDurationCompact(eta.eta_model)}.`);
+            }
+            if (validSeconds(eta.eta_eval)) {
+                lines.push(`Remaining eval overhead: ${formatDurationCompact(eta.eta_eval)}${eta.eval_source ? ' from ' + eta.eval_source : ''}.`);
+            } else if (hasBreakdown && !eta.breakdown_error) {
+                lines.push('Eval overhead is n/a because no chrono/evaltime metric is available yet; other overhead is n/a without eval time.');
+            }
+            if (typeof eta.eta_other === 'number' && Number.isFinite(eta.eta_other)) {
+                lines.push(`Remaining other overhead: ${formatDurationCompact(Math.max(0, eta.eta_other))} (raw ${formatSignedEtaDuration(eta.eta_other)}).`);
+            } else if (eta.breakdown_error) {
+                lines.push(`Breakdown unavailable: ${eta.breakdown_error}.`);
+            } else if (!hasBreakdown) {
+                lines.push('Model/eval breakdown is loading separately.');
+            }
+            return {
+                text: formatDurationCompact(eta.eta_real),
+                title: lines.join('\n'),
+            };
+        }
+
+        function trainingRuntimeDisplay(wu) {
+            const eta = wu.runtime_eta;
+            const slurmRuntime = slurmRuntimeText(wu);
+            if (!validSeconds(eta?.runtime)) {
+                if (slurmRuntime) {
+                    return {
+                        text: slurmRuntime,
+                        title: `Metric-derived training runtime is unavailable; showing Slurm runtime fallback. This is the most recent uninterrupted Slurm allocation runtime, not chrono/proctime.`,
+                    };
+                }
+                const counts = etaCountsText(eta);
+                return {
+                    text: 'n/a',
+                    title: `Training runtime unavailable: missing or invalid chrono/proctime, with no Slurm runtime fallback.${counts ? ' Metric points: ' + counts + '.' : ''}`,
+                };
+            }
+            return {
+                text: formatDurationCompact(eta.runtime),
+                title: `Total training runtime from last chrono/proctime: ${formatDurationCompact(eta.runtime)} (${Math.round(eta.runtime)}s).${slurmRuntime ? ' Slurm allocation runtime: ' + slurmRuntime + '.' : ''}`,
+            };
+        }
+
         function qwaitDisplay(wu) {
-            if (wu.status !== 'PENDING') return { text: wu.qwait || 'n/a', title: '' };
+            const status = String(wu.status ?? '');
+            if (status === 'RUNNING' || status === 'COMPLETING') return trainingEtaDisplay(wu);
+            if (status && !['PENDING', 'REQUEUE_HOLD', 'UNKNOWN'].includes(status)) return trainingRuntimeDisplay(wu);
+            if (status !== 'PENDING') return { text: wu.qwait || 'n/a', title: '' };
             const reason = wu.qwait_estimate_reason || wu.reason || '';
             if (!wu.qwait_estimate_ts) {
                 const reasonInfo = pendingReasonHint(reason);
@@ -1335,12 +1432,7 @@
             if (!ts) return '';
             const sec = Math.floor(Date.now() / 1000 - ts);
             if (sec < 0) return '';
-            const m = Math.floor(sec / 60) % 60;
-            const h = Math.floor(sec / 3600) % 24;
-            const d = Math.floor(sec / 86400);
-            if (d) return `${d}d${h.toString().padStart(2, '0')}h`;
-            if (h) return `${h}h${m.toString().padStart(2, '0')}m`;
-            return `${m}m`;
+            return formatDurationCompact(sec);
         }
 
         function formatStates(states) {
@@ -2295,15 +2387,39 @@
             }
         }
 
+        function activeEtaWids() {
+            return (currentXidData?.wus || [])
+                .filter(wu => ['RUNNING', 'COMPLETING'].includes(wu.status))
+                .map(wu => wu.wid);
+        }
+
         async function fetchAndPopulateMetrics(serverUrl, xid, metric) {
             try {
-                const resp = await fetch(`${serverUrl}/api/xid/${xid}/metrics?metric=${encodeURIComponent(metric)}`, { signal: AbortSignal.timeout(60000) });
+                const params = new URLSearchParams({ metric });
+                const etaWids = activeEtaWids();
+                params.set('eta_wids', etaWids.join(','));
+                const resp = await fetch(`${serverUrl}/api/xid/${xid}/metrics?${params}`, { signal: AbortSignal.timeout(60000) });
                 if (!resp.ok) return;
                 const metricsData = await resp.json();
                 if (currentXidData?.xid !== xid) return;
                 populateMetrics(metricsData, metric);
+                fetchAndPopulateEtaBreakdown(serverUrl, xid, etaWids);
             } catch (e) {
                 console.log('Failed to fetch metrics:', e);
+            }
+        }
+
+        async function fetchAndPopulateEtaBreakdown(serverUrl, xid, etaWids) {
+            if (!etaWids.length) return;
+            try {
+                const params = new URLSearchParams({ eta_wids: etaWids.join(',') });
+                const resp = await fetch(`${serverUrl}/api/xid/${xid}/eta_breakdown?${params}`, { signal: AbortSignal.timeout(60000) });
+                if (!resp.ok) return;
+                const data = await resp.json();
+                if (currentXidData?.xid !== xid) return;
+                populateEtaBreakdown(data);
+            } catch (e) {
+                console.log('Failed to fetch ETA breakdown:', e);
             }
         }
 
@@ -2351,7 +2467,6 @@
                 const restartCell = document.querySelector(`td[data-wid="${wu.wid}"][data-field="restarts"]`);
                 const statusCell = document.querySelector(`td[data-wid="${wu.wid}"][data-field="status"]`);
                 const qwaitCell = document.querySelector(`td[data-wid="${wu.wid}"][data-field="qwait"]`);
-                const runtimeCell = document.querySelector(`td[data-wid="${wu.wid}"][data-field="runtime"]`);
 
                 if (restartCell) restartCell.textContent = wu.restarts ?? 0;
                 if (qwaitCell) {
@@ -2359,7 +2474,6 @@
                     qwaitCell.textContent = qwaitInfo.text;
                     qwaitCell.title = qwaitInfo.title;
                 }
-                if (runtimeCell) runtimeCell.textContent = wu.runtime || 'n/a';
                 if (statusCell) {
                     const hasExitCode = wu.exit_code !== null && wu.exit_code !== undefined;
                     const effectiveStatus = (wu.status === 'CANCELLED' && hasExitCode && wu.exit_code !== 0) ? 'CANCELLED_FAIL' : wu.status;
@@ -2373,17 +2487,24 @@
             }
             // Update average progress after status updates
             updateAverageProgress();
+            updateRunningEta();
         }
 
         function populateMetrics(metricsData, metricName) {
             // Update each row's step, metric, and progress cells
             // Store progress data for average calculation
             currentProgressData = {};
+            const wuByWid = Object.fromEntries((currentXidData?.wus || []).map(wu => [String(wu.wid), wu]));
             for (const [wid, metrics] of Object.entries(metricsData)) {
                 const stepCell = document.querySelector(`td[data-wid="${wid}"][data-field="step"]`);
                 const metricCell = document.querySelector(`td[data-wid="${wid}"][data-field="metric"]`);
                 const progressCell = document.querySelector(`td[data-wid="${wid}"][data-field="progress"]`);
+                const qwaitCell = document.querySelector(`td[data-wid="${wid}"][data-field="qwait"]`);
                 const row = document.querySelector(`tr[data-wid="${wid}"]`);
+                const wu = wuByWid[String(wid)];
+                if (wu) {
+                    wu.runtime_eta = metrics._runtime_eta || null;
+                }
                 if (row && metrics._target_value) {
                     row.dataset.targetValue = metrics._target_value;
                     row.dataset.targetMetric = metrics._target_metric || 'step';
@@ -2415,8 +2536,64 @@
                 } else {
                     currentProgressData[wid] = 0;
                 }
+                if (qwaitCell && wu) {
+                    const qwaitInfo = qwaitDisplay(wu);
+                    qwaitCell.textContent = qwaitInfo.text;
+                    qwaitCell.title = qwaitInfo.title;
+                }
             }
             updateAverageProgress();
+            updateRunningEta();
+        }
+
+        function populateEtaBreakdown(data) {
+            const wuByWid = Object.fromEntries((currentXidData?.wus || []).map(wu => [String(wu.wid), wu]));
+            for (const [wid, eta] of Object.entries(data)) {
+                const wu = wuByWid[String(wid)];
+                if (!wu) continue;
+                wu.runtime_eta = { ...(wu.runtime_eta || {}), ...eta };
+                const qwaitCell = document.querySelector(`td[data-wid="${wid}"][data-field="qwait"]`);
+                if (qwaitCell) {
+                    const qwaitInfo = qwaitDisplay(wu);
+                    qwaitCell.textContent = qwaitInfo.text;
+                    qwaitCell.title = qwaitInfo.title;
+                }
+            }
+            updateRunningEta();
+        }
+
+        function updateRunningEta() {
+            const etaEl = document.getElementById('xidRunningEta');
+            if (!etaEl) return;
+            etaEl.innerHTML = '';
+            if (!currentXidData || !currentProgressData) return;
+
+            const running = (currentXidData.wus || []).filter(wu => ['RUNNING', 'COMPLETING'].includes(wu.status));
+            if (!running.length) return;
+
+            const valid = running.filter(wu => validSeconds(wu.runtime_eta?.eta_real));
+            const pendingCount = (currentXidData.wus || []).filter(wu => ['PENDING', 'REQUEUE_HOLD'].includes(wu.status)).length;
+            const missingCount = running.length - valid.length;
+            if (!valid.length) {
+                etaEl.innerHTML = '<span class="label">RETA:</span> n/a';
+                etaEl.title = `Running ETA unavailable: no running work-unit has a valid ETA yet. Assumes no further interruptions and ignores ${pendingCount} pending unit(s).`;
+                return;
+            }
+
+            let maxWu = valid[0];
+            for (const wu of valid.slice(1)) {
+                if (wu.runtime_eta.eta_real > maxWu.runtime_eta.eta_real) maxWu = wu;
+            }
+
+            const finish = new Date(Date.now() + maxWu.runtime_eta.eta_real * 1000);
+            etaEl.innerHTML = `<span class="label">RETA:</span> ${esc(formatDurationCompact(maxWu.runtime_eta.eta_real))}`;
+            etaEl.title = [
+                `Running ETA is the max ETA across ${valid.length}/${running.length} running/completing work-unit(s).`,
+                `Assumes no further interruptions and ignores ${pendingCount} pending unit(s).`,
+                `Current max: WID ${maxWu.wid}, ${formatDurationCompact(maxWu.runtime_eta.eta_real)} remaining.`,
+                `Estimated finish: ${formatEstimateLocal(finish)} (viewer local); ${formatEstimateUtc(finish)}.`,
+                missingCount ? `${missingCount} running/completing unit(s) have missing or invalid ETA metrics.` : '',
+            ].filter(Boolean).join('\n');
         }
 
         function updateAverageProgress() {
@@ -2489,12 +2666,14 @@
             document.getElementById('xidDisplay').textContent = xid;
             // Show average progress bar when there's more than 1 work-unit
             const avgProgressHtml = wus.length > 1 ? `<span id="xidAvgProgress" class="mono" style="display:inline-flex;align-items:center;font-size:13px;"></span>` : '';
+            const runningEtaHtml = `<span id="xidRunningEta" class="mono running-eta"></span>`;
             document.getElementById('xidActions').innerHTML = `
                 <span class="server-badge" title="Server hosting this XID">${esc(serverName)}</span>
                 <span class="xid-btn ${favorites.has(xid) ? 'active' : ''}" onclick="toggleFavoriteDetail('${xid}')" title="Favorite">${favorites.has(xid) ? '❤︎' : '♡'}</span>
                 <span class="xid-btn fa-icon" onclick="window.open('${serverUrl}/code/${xid}', '_blank')" title="Browse source code">🗎</span>
                 <span class="xid-btn fa-icon" onclick="window.open('${serverUrl}/files/${xid}', '_blank')" title="Browse workdir">🗁</span>
                 ${avgProgressHtml}
+                ${runningEtaHtml}
                 ${!hasActiveJobs ? `<span class="xid-btn" onclick="deleteXidDetail('${serverUrl}', ${serverIdx}, '${xid}')" title="Delete ${xid}">🗑</span>` : ''}
                 <span class="xid-note ${note ? 'has-note' : ''}" onclick="editXidNote(this, ${serverIdx}, '${xid}', '${escapedNote}')">${esc(displayText) || '<span style="opacity:0.3">click to add note</span>'}</span>
             `;
@@ -2514,8 +2693,7 @@
                         ${metricToShow ? `<th style="width:5em">Metric</th>` : ''}
                         <th style="width:40%">Config Args</th>
                         <th>Name</th>
-                        <th style="width:8em" title="Queue wait">Qwait</th>
-                        <th style="width:6em">Runtime</th>
+                        <th style="width:14em" title="If queued: estimated time until start. If running: estimated time to finish. If done/stopped: total training runtime from metrics, falling back to Slurm runtime if metrics are missing.">ETA/ran</th>
                     </tr>
                 </thead>
                 <tbody>`;
@@ -2580,8 +2758,7 @@
                         ${metricToShow ? `<td class="mono text-right" data-wid="${wu.wid}" data-field="metric">-</td>` : ''}
                         <td class="config-args">${configArgs}${constantToggle}<span class="config-view-btn" onclick="showFullConfig('${serverUrl}', '${data.xid}', ${wu.wid})" title="View full config">🔍︎</span></td>
                         <td>${esc(wu.name)}</td>
-                        <td class="mono text-right qwait-cell" data-wid="${wu.wid}" data-field="qwait" title="${esc(qwaitInfo.title)}">${esc(qwaitInfo.text)}</td>
-                        <td class="mono text-right" data-wid="${wu.wid}" data-field="runtime">${wu.runtime}</td>
+                        <td class="mono qwait-cell" data-wid="${wu.wid}" data-field="qwait" title="${esc(qwaitInfo.title)}">${esc(qwaitInfo.text)}</td>
                     </tr>`;
             }
 

@@ -1391,25 +1391,182 @@ def load_config(wd_path):
         return {}
 
 
-def last_metric(wd_path, metric_name="train/loss", extra_metrics=()):
+ETA_MIN_POINTS = 100
+
+
+def _finite_float(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _metric_rows(reader, metrics, name):
+    return reader.rows(name) if name in metrics else 0
+
+
+# Public plattli selectors fall back to full-array reads when hot rows exist.
+# TODO: upstream a plattli last-value API and stop reaching into Reader internals.
+def _metric_last_value(reader, metrics, name):
+    if name not in metrics:
+        return None
+    spec = reader._metric_spec(name, allow_hot=True)
+    count, last_step = reader._columnar_count_and_last_step(name, spec) if spec is not None else (0, None)
+    _, hot_values = reader._hot_for_metric(name, last_step)
+    if len(hot_values):
+        return hot_values[-1]
+    if not count:
+        return None
+    values = reader._read_value_slice(name, spec, count - 1, 1)
+    return values[-1] if len(values) else None
+
+
+def _metric_last_index(reader, metrics, name):
+    if name not in metrics:
+        return None
+    spec = reader._metric_spec(name, allow_hot=True)
+    count, last_step = reader._columnar_count_and_last_step(name, spec) if spec is not None else (0, None)
+    hot_indices, _ = reader._hot_for_metric(name, last_step)
+    if hot_indices.size:
+        return int(hot_indices[-1])
+    return int(last_step) if count and last_step is not None else None
+
+
+def _metric_last_float(reader, metrics, name):
+    return _finite_float(_metric_last_value(reader, metrics, name))
+
+
+def _sum_float(values):
+    if values is None or len(values) == 0:
+        return None
+    return _finite_float(values.sum())
+
+
+def _metric_full_values(reader, metrics, name):
+    if name not in metrics:
+        return None
+    values = reader.metric_values(name)
+    return values if len(values) else None
+
+
+def _runtime_eta_from_plattli(reader, metrics, include_eta=True, include_breakdown=False):
+    result = {
+        "min_points": ETA_MIN_POINTS,
+        "counts": {"chrono/proctime": _metric_rows(reader, metrics, "chrono/proctime")},
+    }
+
+    proctime = _metric_last_float(reader, metrics, "chrono/proctime")
+    if proctime is not None and proctime >= 0:
+        result["runtime"] = proctime
+    if not include_eta:
+        return result
+
+    result["counts"].update({
+        "chrono/percent": _metric_rows(reader, metrics, "chrono/percent"),
+    })
+
+    missing = [name for name in ["chrono/proctime", "chrono/percent"] if not result["counts"][name]]
+    if missing:
+        result["eta_error"] = "missing " + ", ".join(missing)
+        return result
+
+    result["n_points"] = min(result["counts"][name] for name in ["chrono/proctime", "chrono/percent"])
+    if result["n_points"] < ETA_MIN_POINTS:
+        result["eta_error"] = f"too few measurements ({result['n_points']}/{ETA_MIN_POINTS})"
+        return result
+
+    percent = _metric_last_float(reader, metrics, "chrono/percent")
+    if percent is None or percent <= 0 or percent >= 1:
+        result["eta_error"] = f"invalid chrono/percent {percent}"
+        return result
+    if proctime is None or proctime <= 0:
+        result["eta_error"] = f"invalid chrono/proctime {proctime}"
+        return result
+
+    scale = 1 / percent - 1
+    eta_real = proctime * scale
+    if not math.isfinite(eta_real):
+        result["eta_error"] = "non-finite ETA"
+        return result
+
+    result.update({
+        "percent": percent,
+        "proctime": proctime,
+        "eta_real": eta_real,
+    })
+    if not include_breakdown:
+        return result
+
+    result["counts"].update({
+        "chrono/modeltime": _metric_rows(reader, metrics, "chrono/modeltime"),
+        "chrono/evaltime": _metric_rows(reader, metrics, "chrono/evaltime"),
+    })
+
+    model_total = _sum_float(_metric_full_values(reader, metrics, "chrono/modeltime"))
+    if model_total is None or model_total < 0:
+        result["breakdown_error"] = f"invalid chrono/modeltime sum {model_total}"
+        return result
+
+    eta_model = model_total * scale
+    if not math.isfinite(eta_model):
+        result["breakdown_error"] = "non-finite model ETA"
+        return result
+
+    result.update({
+        "model_total": model_total,
+        "eta_model": eta_model,
+    })
+
+    eval_total = _sum_float(_metric_full_values(reader, metrics, "chrono/evaltime"))
+    if eval_total is not None and eval_total >= 0:
+        eta_eval = eval_total * scale
+        eta_other = result["eta_real"] - eta_eval - result["eta_model"]
+        if math.isfinite(eta_eval) and math.isfinite(eta_other):
+            result["eval_total"] = eval_total
+            result["eta_eval"] = eta_eval
+            result["eta_other"] = eta_other
+            result["eval_source"] = "chrono/evaltime"
+        else:
+            result["eval_source"] = "invalid"
+    elif eval_total is not None:
+        result["eval_source"] = "chrono/evaltime"
+    else:
+        result["eval_source"] = "missing"
+    return result
+
+
+def runtime_eta(wd_path, include_eta=True, include_breakdown=False):
+    if not plattli.is_run(wd_path):
+        return {}
+    try:
+        with plattli.Reader(wd_path) as r:
+            metrics = set(r.metrics())
+            return _runtime_eta_from_plattli(r, metrics, include_eta, include_breakdown)
+    except Exception as e:
+        log.debug("plattli ETA read failed for %s: %s", wd_path, e)
+        return {}
+
+
+def last_metric(wd_path, metric_name="train/loss", extra_metrics=(), include_eta=True):
     # Try plattli format first
     if plattli.is_run(wd_path):
         try:
             with plattli.Reader(wd_path) as r:
                 result = {}
                 metrics = r.metrics()
+                metric_names = set(metrics)
                 # Get step from first metric's last index
                 if metrics:
-                    indices = r.metric_indices(metrics[0])
-                    if len(indices) > 0:
-                        result["step"] = int(indices[-1])
+                    step = _metric_last_index(r, metric_names, metrics[0])
+                    if step is not None:
+                        result["step"] = step
                 # Only fetch the requested metrics
                 for name in dict.fromkeys([metric_name, *extra_metrics]):
-                    if name not in metrics:
+                    if name not in metric_names:
                         continue
-                    values = r.metric_values(name)
-                    if len(values) > 0:
-                        v = values[-1]
+                    v = _metric_last_value(r, metric_names, name)
+                    if v is not None:
                         v = v.item() if hasattr(v, 'item') else v
                         # Sanitize non-finite float values (nan, inf, -inf) to strings
                         # JSON does not support these values and will raise ValueError.
@@ -1423,6 +1580,7 @@ def last_metric(wd_path, metric_name="train/loss", extra_metrics=()):
                             else:
                                 v = "-inf"
                         result[name] = v
+                result["_runtime_eta"] = _runtime_eta_from_plattli(r, metric_names, include_eta)
                 return result
         except Exception as e:
             log.debug("plattli read failed for %s: %s", wd_path, e)
@@ -1554,8 +1712,13 @@ def _load_config_only(args):
 
 
 def _load_metric_only(args):
-    wd_path, wuwd_name, metric_name, extra_metrics = args
-    return wuwd_name, last_metric(wd_path / wuwd_name, metric_name, extra_metrics)
+    wd_path, wuwd_name, metric_name, extra_metrics, include_eta = args
+    return wuwd_name, last_metric(wd_path / wuwd_name, metric_name, extra_metrics, include_eta)
+
+
+def _load_eta_breakdown_only(args):
+    wd_path, wuwd_name = args
+    return wuwd_name, runtime_eta(wd_path / wuwd_name, include_breakdown=True)
 
 
 def load_launchids(wd_path):
@@ -1591,6 +1754,12 @@ def normalize_jid(jid):
 def normalize_wid(wid):
     normalized = normalize_jid(wid)
     return normalized if normalized is not None else wid
+
+
+def parse_wids_arg(wids):
+    if wids is None:
+        return None
+    return {normalize_wid(wid.strip()) for wid in str(wids).split(",") if wid.strip()}
 
 
 def extract_launch_info(launch_file):
@@ -2660,13 +2829,14 @@ def get_xid_info(xid: str):
 
 
 @app.get("/api/xid/{xid}/metrics")
-def get_xid_metrics(xid: str, metric: str = "train/loss"):
+def get_xid_metrics(xid: str, metric: str = "train/loss", eta_wids=None):
     """Get metrics for all WUs of an XID (separate from main xid-detail for lazy loading)."""
     t0 = time.time()
     log.info("GET /api/xid/%s/metrics (metric=%s)", xid, metric)
     wd_path = _find_xid_path(xid)
     if not wd_path:
         raise HTTPException(status_code=404, detail=f"XID {xid} not found")
+    eta_wids = parse_wids_arg(eta_wids)
 
     launchids = load_launchids(wd_path)
     if launchids:
@@ -2679,7 +2849,8 @@ def get_xid_metrics(xid: str, metric: str = "train/loss"):
             target = _train_target(config_by_wuwd.get(wuwd_name, {}), _launch_args(launchids.get(str(wid), {})))
             targets[wuwd_name] = target
             extra_metrics = (target["metric"],) if target and target["metric"] != "step" else ()
-            metric_futs.append(fs_executor.submit(_load_metric_only, (wd_path, wuwd_name, metric, extra_metrics)))
+            metric_futs.append(fs_executor.submit(_load_metric_only, (
+                wd_path, wuwd_name, metric, extra_metrics, eta_wids is None or wid in eta_wids)))
         metric_by_wuwd = dict(f.result() for f in metric_futs)
         result = {}
         for wid, wuwd_name in workdirs.items():
@@ -2704,11 +2875,13 @@ def get_xid_metrics(xid: str, metric: str = "train/loss"):
     config_futs = [fs_executor.submit(_load_config_only, (wd_path, wd)) for wd in workdirs]
     config_results = [f.result() for f in config_futs]
     targets = {wuwd_name: _train_target(config) for wuwd_name, config in config_results}
-    metric_futs = [
-        fs_executor.submit(_load_metric_only, (
-            wd_path, wd, metric, ((targets[wd]["metric"],) if targets[wd] and targets[wd]["metric"] != "step" else ())))
-        for wd in workdirs
-    ]
+    metric_futs = []
+    for wuwd_name, config in config_results:
+        target = targets[wuwd_name]
+        extra_metrics = (target["metric"],) if target and target["metric"] != "step" else ()
+        wid = normalize_wid(config.get("wid", wuwd_name))
+        metric_futs.append(fs_executor.submit(_load_metric_only, (
+            wd_path, wuwd_name, metric, extra_metrics, eta_wids is None or wid in eta_wids)))
     metric_results = [f.result() for f in metric_futs]
 
     # Build wid -> metrics mapping (same duplicate resolution as main endpoint)
@@ -2735,6 +2908,29 @@ def get_xid_metrics(xid: str, metric: str = "train/loss"):
                 result[wid]["_nsteps"] = target["value"]
 
     log.info("GET /api/xid/%s/metrics - done: %d WUs (%.2fs)", xid, len(result), time.time() - t0)
+    return result
+
+
+@app.get("/api/xid/{xid}/eta_breakdown")
+def get_xid_eta_breakdown(xid, eta_wids=""):
+    t0 = time.time()
+    log.info("GET /api/xid/%s/eta_breakdown", xid)
+    wd_path = _find_xid_path(xid)
+    if not wd_path:
+        raise HTTPException(status_code=404, detail=f"XID {xid} not found")
+
+    eta_wids = parse_wids_arg(eta_wids) or set()
+    if not eta_wids:
+        return {}
+
+    workdirs, _ = _workdirs_by_suffix(wd_path)
+    futs = [
+        (wid, fs_executor.submit(_load_eta_breakdown_only, (wd_path, wuwd_name)))
+        for wid, wuwd_name in workdirs.items()
+        if wid in eta_wids
+    ]
+    result = {wid: fut.result()[1] for wid, fut in futs}
+    log.info("GET /api/xid/%s/eta_breakdown - done: %d WUs (%.2fs)", xid, len(result), time.time() - t0)
     return result
 
 
