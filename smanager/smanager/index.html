@@ -581,9 +581,9 @@
             <table id="reportsTable">
                 <thead>
                     <tr>
-                        <th style="width:14em">Report</th>
+                        <th style="width:3em"></th>
+                        <th style="width:20em">Report</th>
                         <th>Title</th>
-                        <th style="width:18em">XIDs</th>
                         <th style="width:7em">Uploader</th>
                         <th style="width:13em">Uploaded</th>
                         <th style="width:5em">Version</th>
@@ -2132,14 +2132,11 @@
             }
             tbody.innerHTML = rows.map(meta => {
                 const reportHref = `${meta.serverUrl}/reports/${encodeURIComponent(meta.report_id)}`;
-                const xids = (meta.xids || []).map(xid =>
-                    `<a class="mono clickable" href="${meta.serverUrl}/#${encodeURIComponent(xid)}" target="_blank">${esc(xid)}</a>`
-                ).join(' ');
                 return `
                 <tr>
+                    <td><span class="copy-btn" data-rid="${esc(meta.report_id)}" onclick="navigator.clipboard.writeText(this.dataset.rid)" title="Copy report ID">⎘</span></td>
                     <td class="mono"><a class="report-link" href="${reportHref}" target="_blank">${esc(meta.report_id)}</a></td>
                     <td>${esc(meta.title)}</td>
-                    <td class="report-ref-list">${xids}</td>
                     <td>${esc(meta.uploader || '')}</td>
                     <td class="mono" title="${esc(meta.uploaded_at || '')}">${esc(formatReportTime(meta))}</td>
                     <td class="mono"><a class="report-link" href="${meta.serverUrl}/reports/${encodeURIComponent(meta.report_id)}/v${encodeURIComponent(meta.version)}" target="_blank">v${esc(meta.version)}</a></td>
