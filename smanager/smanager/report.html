@@ -83,6 +83,39 @@
             background: var(--input-bg);
         }
         .download-link[hidden] { display: none; }
+        .toc {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .toc-link {
+            display: block;
+            border-radius: 4px;
+            padding: 3px 6px;
+            line-height: 1.25;
+            overflow-wrap: anywhere;
+        }
+        .toc-link:hover {
+            background: var(--input-bg);
+            text-decoration: none;
+        }
+        .toc-h2 {
+            position: relative;
+            padding-left: 20px;
+            color: var(--muted);
+        }
+        .toc-h2::before {
+            content: "";
+            position: absolute;
+            left: 8px;
+            top: 0.8em;
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: currentColor;
+            opacity: 0.7;
+            transform: translateY(-50%);
+        }
         .version-link {
             border: 1px solid var(--border);
             border-radius: 4px;
@@ -103,6 +136,10 @@
             <a class="download-link" id="downloadHtml" href="#" download>Download HTML</a>
             <a class="download-link" id="downloadSrc" href="#" download hidden>Download Source</a>
         </div>
+        <section id="tocSection" hidden>
+            <h2>Contents</h2>
+            <div class="toc" id="toc"></div>
+        </section>
         <h2>XIDs</h2>
         <div id="xids"></div>
         <h2>Runs</h2>
@@ -131,6 +168,70 @@
         function link(path, text, cls = '') {
             return `<a class="${cls}" href="${path}">${esc(text)}</a>`;
         }
+
+        function reportViewerScript() {
+            return `<script>
+(() => {
+    const usedIds = new Set();
+    const headings = Array.from(document.querySelectorAll('h1,h2')).map((heading, index) => {
+        const text = (heading.textContent || '').trim().replace(/\\s+/g, ' ');
+        if (!text) return null;
+        let id = heading.id;
+        if (!id || usedIds.has(id)) {
+            let suffix = 1;
+            id = 'smanager-toc-' + (index + 1);
+            while (document.getElementById(id) || usedIds.has(id)) {
+                suffix++;
+                id = 'smanager-toc-' + (index + 1) + '-' + suffix;
+            }
+            heading.id = id;
+        }
+        usedIds.add(id);
+        return {id, text, level: heading.tagName.toLowerCase()};
+    }).filter(Boolean);
+
+    parent.postMessage({type: 'smanager-report-toc', headings}, '*');
+    window.addEventListener('message', event => {
+        if (event.source !== parent) return;
+        const data = event.data || {};
+        if (data.type !== 'smanager-scroll-to-heading') return;
+        const heading = document.getElementById(data.id);
+        if (heading) heading.scrollIntoView({behavior: 'smooth', block: 'start'});
+    });
+})();
+</` + `script>`;
+        }
+
+        function withReportViewerScript(html) {
+            const script = reportViewerScript();
+            return /<\/body\s*>/i.test(html) ? html.replace(/<\/body\s*>(?![\s\S]*<\/body\s*>)/i, match => script + match) : html + script;
+        }
+
+        function renderToc(headings) {
+            const section = document.getElementById('tocSection');
+            const toc = document.getElementById('toc');
+            headings = headings.filter(h => h && (h.level === 'h1' || h.level === 'h2') && h.id && h.text);
+            section.hidden = !headings.length;
+            toc.innerHTML = headings.map(h =>
+                `<a class="toc-link ${h.level === 'h2' ? 'toc-h2' : 'toc-h1'}" href="#${encodeURIComponent(h.id)}" data-toc-id="${esc(h.id)}">${esc(h.text)}</a>`
+            ).join('');
+        }
+
+        document.getElementById('toc').addEventListener('click', e => {
+            const link = e.target.closest('[data-toc-id]');
+            if (!link) return;
+            e.preventDefault();
+            document.getElementById('reportFrame')?.contentWindow?.postMessage(
+                {type: 'smanager-scroll-to-heading', id: link.dataset.tocId},
+                '*',
+            );
+        });
+
+        window.addEventListener('message', e => {
+            const frame = document.getElementById('reportFrame');
+            if (e.source !== frame?.contentWindow || e.data?.type !== 'smanager-report-toc') return;
+            renderToc(e.data.headings || []);
+        });
 
         function renderMeta(meta) {
             document.title = `${meta.title || meta.report_id} - sManager`;
@@ -179,7 +280,8 @@
 
                 const htmlResp = await fetch(reportVersionApiPath(meta.version, '/html'));
                 if (!htmlResp.ok) throw new Error('Report HTML not found');
-                document.getElementById('reportFrame').srcdoc = await htmlResp.text();
+                renderToc([]);
+                document.getElementById('reportFrame').srcdoc = withReportViewerScript(await htmlResp.text());
             } catch (e) {
                 document.getElementById('main').innerHTML = `<div class="error">${esc(e.message)}</div>`;
             }
