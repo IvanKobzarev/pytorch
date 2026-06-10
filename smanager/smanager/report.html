@@ -68,15 +68,21 @@
         }
         .run-links { display: flex; gap: 8px; margin-top: 4px; color: var(--muted); }
         .versions { display: flex; flex-wrap: wrap; gap: 4px; }
+        .download-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin: 10px 0 2px;
+        }
         .download-link {
             display: inline-flex;
             align-items: center;
             border: 1px solid var(--border);
             border-radius: 4px;
             padding: 4px 8px;
-            margin: 10px 0 2px;
             background: var(--input-bg);
         }
+        .download-link[hidden] { display: none; }
         .version-link {
             border: 1px solid var(--border);
             border-radius: 4px;
@@ -93,7 +99,10 @@
         <h1 id="title">Report</h1>
         <div class="muted mono" id="reportId"></div>
         <div class="muted" id="uploaded"></div>
-        <a class="download-link" id="downloadHtml" href="#" download>Download HTML</a>
+        <div class="download-links">
+            <a class="download-link" id="downloadHtml" href="#" download>Download HTML</a>
+            <a class="download-link" id="downloadSrc" href="#" download hidden>Download Source</a>
+        </div>
         <h2>XIDs</h2>
         <div id="xids"></div>
         <h2>Runs</h2>
@@ -131,6 +140,10 @@
             const download = document.getElementById('downloadHtml');
             download.href = reportVersionApiPath(meta.version, '/html');
             download.download = `${meta.report_id}-v${meta.version}.html`;
+            const sourceDownload = document.getElementById('downloadSrc');
+            sourceDownload.hidden = !meta.source_material;
+            sourceDownload.href = reportVersionApiPath(meta.version, '/src');
+            sourceDownload.download = `${meta.report_id}-v${meta.version}-src.zip`;
             document.getElementById('xids').innerHTML = (meta.xids || []).map(xid =>
                 `<span class="pill mono">${link('/#' + encodeURIComponent(xid), xid)}</span>`
             ).join('') || '<span class="muted">None</span>';
