@@ -205,6 +205,488 @@ def run_cmd(cmd):
     return result.stdout.strip().split('\n')
 
 
+SLURM_QUEUE_FIELDS = [
+    ("job_id", "JobId", 24),
+    ("name", "Name", 80),
+    ("user", "UserName", 32),
+    ("account", "Account", 32),
+    ("partition", "Partition", 40),
+    ("state", "State", 24),
+    ("time_used", "TimeUsed", 20),
+    ("time_limit", "TimeLimit", 20),
+    ("num_cpus", "NumCPUs", 12),
+    ("num_nodes", "NumNodes", 12),
+    ("qos", "QOS", 32),
+    ("tres_per_job", "tres-per-job", 48),
+    ("tres_per_node", "tres-per-node", 48),
+    ("gres", "GRES", 48),
+    ("submit_time", "SubmitTime", 25),
+    ("eligible_time", "EligibleTime", 25),
+    ("start_time", "StartTime", 25),
+    ("end_time", "EndTime", 25),
+    ("reason", "Reason", 80),
+    ("priority", "Priority", 20),
+    ("priority_long", "PriorityLong", 24),
+    ("restart_count", "RestartCnt", 12),
+    ("comment", "Comment", 160),
+]
+
+SLURM_QUEUE_FALLBACK_FIELDS = [
+    field for field in SLURM_QUEUE_FIELDS
+    if field[0] not in {"tres_per_job", "submit_time", "eligible_time", "end_time", "time_limit"}
+]
+
+
+def _slurm_run(cmd, timeout=30):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout), None
+    except FileNotFoundError:
+        return None, f"{cmd[0]} not found"
+    except subprocess.TimeoutExpired:
+        return None, f"{cmd[0]} timed out after {timeout}s"
+
+
+def _slurm_failure(result, fallback):
+    if result is None:
+        return fallback
+    return result.stderr.strip() or result.stdout.strip() or fallback
+
+
+def _slurm_run_or_raise(cmd, label, timeout=30):
+    result, error = _slurm_run(cmd, timeout=timeout)
+    if error:
+        raise HTTPException(status_code=500, detail=f"{label} failed: {error}")
+    if result.returncode != 0:
+        raise HTTPException(status_code=500, detail=f"{label} failed: {_slurm_failure(result, 'unknown error')}")
+    return result
+
+
+def _query_value(value, default=""):
+    value = default if value is None else value
+    value = str(value).strip()
+    return "" if value.lower() in {"", "*", "all", "none", "null"} else value
+
+
+def _query_bool(value):
+    return str(value).strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _slurm_int(value):
+    value = str(value or "").strip()
+    return int(value) if re.fullmatch(r"-?\d+", value) else None
+
+
+def _fixed_width_dicts(text, fields):
+    offsets = [sum(field[2] for field in fields[:i]) for i in range(len(fields))]
+    rows = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        rows.append({
+            key: line[offsets[i]:offsets[i]+width].strip()
+            for i, (key, _field, width) in enumerate(fields)
+        })
+    return rows
+
+
+def _squeue_format(fields):
+    return ",".join(f"{field}:{width}" for _key, field, width in fields)
+
+
+def _load_slurm_queue_rows(account=None, users=None, states=None, partition=None):
+    errors = []
+    for fields in (SLURM_QUEUE_FIELDS, SLURM_QUEUE_FALLBACK_FIELDS):
+        cmd = ["squeue", "-h", "-O", _squeue_format(fields)]
+        if account:
+            cmd += ["-A", account]
+        if users:
+            cmd += ["-u", users]
+        if states:
+            cmd += ["-t", states]
+        if partition:
+            cmd += ["-p", partition]
+        result, error = _slurm_run(cmd)
+        if error:
+            errors.append(error)
+            continue
+        if result.returncode == 0:
+            return _fixed_width_dicts(result.stdout, fields)
+        errors.append(_slurm_failure(result, "unknown error"))
+    raise HTTPException(status_code=500, detail=f"squeue failed: {errors[-1] if errors else 'unknown error'}")
+
+
+def _parse_gpu_count(value):
+    if value is None:
+        return 0
+    if isinstance(value, dict):
+        total = 0
+        for key, item in value.items():
+            if "gpu" in str(key).lower() and (n := _slurm_int(item)) is not None:
+                total += n
+            else:
+                total += _parse_gpu_count(item)
+        return total
+    if isinstance(value, list):
+        return sum(_parse_gpu_count(item) for item in value)
+
+    text = str(value)
+    total = 0
+    matched = False
+    for match in re.finditer(r"(?:^|[/,])gpu(?::[^:=,()]+)?[:=](\d+)", text, re.IGNORECASE):
+        matched = True
+        total += int(match.group(1))
+    if matched:
+        return total
+    if "gpu" not in text.lower():
+        return 0
+    return 1
+
+
+def _parse_slurm_api_time(value):
+    return _parse_slurm_time(value, {"", "N/A", "Unknown", "None"})
+
+
+def _format_slurm_queue_job(row, now):
+    num_nodes = _slurm_int(row.get("num_nodes"))
+    num_cpus = _slurm_int(row.get("num_cpus"))
+    per_job_gpus = _parse_gpu_count(row.get("tres_per_job"))
+    per_node_gpus = _parse_gpu_count(row.get("tres_per_node") or row.get("gres"))
+    gpus = per_job_gpus or per_node_gpus * (num_nodes or 1)
+    submit_ts = _parse_slurm_api_time(row.get("submit_time"))
+    eligible_ts = _parse_slurm_api_time(row.get("eligible_time"))
+    start_ts = _parse_slurm_api_time(row.get("start_time"))
+    end_ts = _parse_slurm_api_time(row.get("end_time"))
+    state = row.get("state", "").upper()
+    job = {
+        "job_id": normalize_jid(row.get("job_id")),
+        "job_id_raw": row.get("job_id", ""),
+        "name": row.get("name", ""),
+        "xid": extract_xid(row.get("name", "")),
+        "user": row.get("user", ""),
+        "account": row.get("account", ""),
+        "partition": row.get("partition", ""),
+        "state": state,
+        "qos": row.get("qos", ""),
+        "reason": row.get("reason", ""),
+        "priority": _slurm_int(row.get("priority")),
+        "priority_long": _slurm_int(row.get("priority_long")) or _slurm_int(row.get("priority")),
+        "restart_count": _slurm_int(row.get("restart_count")) or 0,
+        "num_cpus": num_cpus,
+        "num_nodes": num_nodes,
+        "gpus": gpus,
+        "gpus_per_node": per_node_gpus,
+        "time_used": row.get("time_used", ""),
+        "time_limit": row.get("time_limit", ""),
+        "submit_time": row.get("submit_time", ""),
+        "submit_time_ts": submit_ts,
+        "eligible_time": row.get("eligible_time", ""),
+        "eligible_time_ts": eligible_ts,
+        "start_time": row.get("start_time", ""),
+        "start_time_ts": start_ts,
+        "end_time": row.get("end_time", ""),
+        "end_time_ts": end_ts,
+        "comment": row.get("comment", ""),
+    }
+    job["age_seconds"] = max(0, now - submit_ts) if submit_ts else None
+    if state == "PENDING":
+        job["eligible_age_seconds"] = max(0, now - eligible_ts) if eligible_ts else None
+        job["wait_estimate_seconds"] = max(0, start_ts - now) if start_ts else None
+    else:
+        job["eligible_age_seconds"] = None
+        job["wait_estimate_seconds"] = None
+    return job
+
+
+def _pending_sort_key(job):
+    priority = job.get("priority_long")
+    priority = priority if priority is not None else -1
+    return (-priority, job.get("eligible_time_ts") or 10**18, job.get("submit_time_ts") or 10**18, job.get("job_id") or 10**18)
+
+
+def _rank_pending_jobs(jobs):
+    pending = sorted([job for job in jobs if job.get("state") == "PENDING"], key=_pending_sort_key)
+    for i, job in enumerate(pending, 1):
+        job["pending_rank"] = i
+
+    by_partition = {}
+    for job in pending:
+        by_partition.setdefault(job.get("partition") or "(none)", []).append(job)
+    for part_jobs in by_partition.values():
+        for i, job in enumerate(sorted(part_jobs, key=_pending_sort_key), 1):
+            job["partition_pending_rank"] = i
+    return pending
+
+
+def _empty_job_bucket():
+    return {
+        "jobs": 0,
+        "running": 0,
+        "pending": 0,
+        "other": 0,
+        "gpus_running": 0,
+        "gpus_pending": 0,
+        "gpus_total": 0,
+        "states": {},
+    }
+
+
+def _add_job_to_bucket(bucket, job):
+    state = job.get("state") or "UNKNOWN"
+    gpus = job.get("gpus") or 0
+    bucket["jobs"] += 1
+    bucket["states"][state] = bucket["states"].get(state, 0) + 1
+    bucket["gpus_total"] += gpus
+    if state == "RUNNING":
+        bucket["running"] += 1
+        bucket["gpus_running"] += gpus
+    elif state == "PENDING":
+        bucket["pending"] += 1
+        bucket["gpus_pending"] += gpus
+    else:
+        bucket["other"] += 1
+
+
+def _group_job_summary(jobs, key):
+    grouped = {}
+    for job in jobs:
+        value = job.get(key) or "(none)"
+        if value not in grouped:
+            grouped[value] = _empty_job_bucket()
+        _add_job_to_bucket(grouped[value], job)
+    return grouped
+
+
+def _pending_estimate_summary(pending, now):
+    known = [job for job in pending if job.get("start_time_ts")]
+    if not known:
+        return {"known": 0, "unknown": len(pending), "earliest_start_ts": None, "latest_start_ts": None}
+    earliest = min(known, key=lambda job: job["start_time_ts"])
+    latest = max(known, key=lambda job: job["start_time_ts"])
+    return {
+        "known": len(known),
+        "unknown": len(pending) - len(known),
+        "earliest_start_ts": earliest["start_time_ts"],
+        "earliest_start_raw": earliest["start_time"],
+        "earliest_job_id": earliest["job_id"],
+        "earliest_reason": earliest["reason"],
+        "latest_start_ts": latest["start_time_ts"],
+        "latest_start_raw": latest["start_time"],
+        "latest_job_id": latest["job_id"],
+        "max_wait_estimate_seconds": max(0, latest["start_time_ts"] - now),
+    }
+
+
+def _split_slurm_labels(value):
+    labels = []
+    if isinstance(value, dict):
+        for item in value.values():
+            labels.extend(_split_slurm_labels(item))
+        return labels
+    if isinstance(value, list):
+        for item in value:
+            labels.extend(_split_slurm_labels(item))
+        return labels
+    for part in re.split(r"[,+\s]+", str(value or "")):
+        part = part.strip("*~#").upper()
+        if part:
+            labels.append(part)
+    return labels
+
+
+def _node_state_bucket(labels):
+    labels = set(labels)
+    if labels & {"DOWN", "DRAIN", "DRAINING", "DRAINED", "FAIL", "FAILING", "MAINT", "POWER_DOWN", "POWERED_DOWN"}:
+        return "unavailable"
+    if labels & {"IDLE"}:
+        return "idle"
+    if labels & {"MIXED", "MIX"}:
+        return "mixed"
+    if labels & {"ALLOCATED", "ALLOC"}:
+        return "allocated"
+    if labels & {"RESERVED", "RESV"}:
+        return "reserved"
+    return "other"
+
+
+def _node_can_accept_jobs(labels):
+    labels = set(labels)
+    return not labels & {"DOWN", "DRAIN", "DRAINING", "DRAINED", "FAIL", "FAILING", "MAINT", "POWER_DOWN", "POWERED_DOWN"}
+
+
+def _as_slurm_list(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip("*") for item in value if str(item).strip("*")]
+    return [item.strip("*") for item in str(value).split(",") if item.strip("*")]
+
+
+def _dict_get_any(obj, keys, default=None):
+    for key in keys:
+        if key in obj:
+            return obj[key]
+    return default
+
+
+def _format_slurm_node(node):
+    name = _dict_get_any(node, ["name", "node", "hostname"], "")
+    partitions = _as_slurm_list(_dict_get_any(node, ["partitions", "partition"], []))
+    labels = _split_slurm_labels(_dict_get_any(node, ["state", "states"], ""))
+    bucket = _node_state_bucket(labels)
+    gres = _dict_get_any(node, ["gres", "gres_total"], "")
+    gres_used = _dict_get_any(node, ["gres_used", "gres_used_total"], None)
+    gpus = _parse_gpu_count(gres) or _parse_gpu_count(_dict_get_any(node, ["tres", "tres_fmt_str"], ""))
+    gpus_used = _parse_gpu_count(gres_used) if gres_used is not None else None
+    if gpus_used is None and bucket == "idle":
+        gpus_used = 0
+    if gpus_used is None:
+        gpus_free = 0 if bucket == "allocated" else None
+    else:
+        gpus_free = max(0, gpus - gpus_used)
+    available = _node_can_accept_jobs(labels) and gpus_free is not None and gpus_free > 0
+    return {
+        "name": str(name),
+        "partitions": partitions,
+        "state": "+".join(labels) if labels else "",
+        "state_bucket": bucket,
+        "cpus": _slurm_int(_dict_get_any(node, ["cpus", "cpus_total"])),
+        "memory_mb": _slurm_int(_dict_get_any(node, ["real_memory", "memory"])),
+        "gres": gres,
+        "gres_used": gres_used,
+        "gpus": gpus,
+        "gpus_used": gpus_used,
+        "gpus_free": gpus_free,
+        "available": available,
+    }
+
+
+def _load_slurm_nodes_json():
+    result, error = _slurm_run(["scontrol", "show", "nodes", "--json"], timeout=45)
+    if error or result.returncode != 0 or not result.stdout.strip():
+        return None
+    data = json.loads(result.stdout)
+    return [_format_slurm_node(node) for node in data.get("nodes", [])]
+
+
+def _load_slurm_nodes_sinfo():
+    result = _slurm_run_or_raise(["sinfo", "-h", "-N", "-o", "%N|%P|%T|%G|%c|%m"], "sinfo", timeout=30)
+    nodes = {}
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        name, partition, state, gres, cpus, memory = (line.split("|", 5) + [""] * 5)[:6]
+        labels = _split_slurm_labels(state)
+        bucket = _node_state_bucket(labels)
+        gpus = _parse_gpu_count(gres)
+        if bucket == "idle":
+            gpus_used, gpus_free = 0, gpus
+        elif bucket == "allocated":
+            gpus_used, gpus_free = gpus, 0
+        else:
+            gpus_used, gpus_free = None, None
+        node = nodes.setdefault(name, {
+            "name": name,
+            "partitions": [],
+            "state": "+".join(labels) if labels else state,
+            "state_bucket": bucket,
+            "cpus": _slurm_int(cpus),
+            "memory_mb": _slurm_int(memory),
+            "gres": gres,
+            "gres_used": None,
+            "gpus": gpus,
+            "gpus_used": gpus_used,
+            "gpus_free": gpus_free,
+            "available": _node_can_accept_jobs(labels) and gpus_free is not None and gpus_free > 0,
+        })
+        if partition.strip("*") and partition.strip("*") not in node["partitions"]:
+            node["partitions"].append(partition.strip("*"))
+    return list(nodes.values())
+
+
+def _load_slurm_nodes():
+    try:
+        nodes = _load_slurm_nodes_json()
+    except Exception as e:
+        log.debug("scontrol node json failed, falling back to sinfo: %s", e)
+        nodes = None
+    return nodes if nodes is not None else _load_slurm_nodes_sinfo()
+
+
+def _empty_node_bucket():
+    return {
+        "nodes": 0,
+        "states": {},
+        "gpus_total": 0,
+        "gpus_used": 0,
+        "gpus_free": 0,
+        "gpus_available": 0,
+        "gpu_used_known_nodes": 0,
+        "gpu_free_known_nodes": 0,
+    }
+
+
+def _add_node_to_bucket(bucket, node):
+    state = node.get("state_bucket") or "other"
+    bucket["nodes"] += 1
+    bucket["states"][state] = bucket["states"].get(state, 0) + 1
+    bucket["gpus_total"] += node.get("gpus") or 0
+    if node.get("gpus_used") is not None:
+        bucket["gpus_used"] += node.get("gpus_used") or 0
+        bucket["gpu_used_known_nodes"] += 1
+    if node.get("gpus_free") is not None:
+        bucket["gpus_free"] += node.get("gpus_free") or 0
+        bucket["gpu_free_known_nodes"] += 1
+    if node.get("available"):
+        bucket["gpus_available"] += node.get("gpus_free") or 0
+
+
+def _summarize_slurm_nodes(nodes):
+    summary = _empty_node_bucket()
+    summary["by_partition"] = {}
+    for node in nodes:
+        _add_node_to_bucket(summary, node)
+        for partition in node.get("partitions") or ["(none)"]:
+            if partition not in summary["by_partition"]:
+                summary["by_partition"][partition] = _empty_node_bucket()
+            _add_node_to_bucket(summary["by_partition"][partition], node)
+    return summary
+
+
+def _partition_options(queue_summary, nodes_summary):
+    node_parts = (nodes_summary or {}).get("by_partition", {})
+    partitions = set(queue_summary["by_partition"]) | set(node_parts)
+    options = []
+    for partition in sorted(partitions):
+        jobs = queue_summary["by_partition"].get(partition, _empty_job_bucket())
+        nodes = node_parts.get(partition, _empty_node_bucket())
+        options.append({
+            "partition": partition,
+            "nodes": nodes.get("nodes", 0),
+            "gpus_total": nodes.get("gpus_total", 0),
+            "gpus_free": nodes.get("gpus_free", 0),
+            "gpus_available": nodes.get("gpus_available", 0),
+            "running_jobs": jobs.get("running", 0),
+            "pending_jobs": jobs.get("pending", 0),
+            "running_gpus": jobs.get("gpus_running", 0),
+            "pending_gpus": jobs.get("gpus_pending", 0),
+        })
+    return sorted(options, key=lambda row: (-row["gpus_available"], row["pending_gpus"], row["pending_jobs"], row["partition"]))
+
+
+def _summarize_slurm_queue(jobs, pending, nodes_summary, now):
+    summary = _empty_job_bucket()
+    for job in jobs:
+        _add_job_to_bucket(summary, job)
+    summary["by_user"] = _group_job_summary(jobs, "user")
+    summary["by_account"] = _group_job_summary(jobs, "account")
+    summary["by_partition"] = _group_job_summary(jobs, "partition")
+    summary["by_qos"] = _group_job_summary(jobs, "qos")
+    summary["pending_reasons"] = dict(Counter(job.get("reason") or "(none)" for job in pending))
+    summary["pending_estimates"] = _pending_estimate_summary(pending, now)
+    summary["partition_options"] = _partition_options(summary, nodes_summary)
+    return summary
+
+
 def extract_xid(name):
     if firstmatch := _xid_re.search(name):
         return firstmatch.group()
@@ -1205,6 +1687,70 @@ def serve_font(filename: str):
     if not font_path.exists():
         raise HTTPException(status_code=404, detail="Font not found")
     return Response(content=font_path.read_bytes(), media_type="font/woff2")
+
+
+@app.get("/api/slurm/nodes")
+def get_slurm_nodes_api():
+    """Get node and GPU availability from Slurm."""
+    t0 = time.time()
+    log.info("GET /api/slurm/nodes - fetching...")
+    nodes = _load_slurm_nodes()
+    summary = _summarize_slurm_nodes(nodes)
+    log.info("GET /api/slurm/nodes - done: %d nodes (%.2fs)", len(nodes), time.time() - t0)
+    return {
+        "cluster": _cluster,
+        "generated_at": int(time.time()),
+        "nodes": nodes,
+        "summary": summary,
+    }
+
+
+@app.get("/api/slurm/queue")
+def get_slurm_queue(account=None, users=None, states=None, partition=None, include_nodes="1"):
+    """Get Slurm queue jobs plus user/partition/QOS summaries."""
+    t0 = time.time()
+    now = int(time.time())
+    account_filter = _query_value(account, GROUP)
+    users_filter = _query_value(users, USERS)
+    states_filter = _query_value(states)
+    partition_filter = _query_value(partition)
+    load_nodes = _query_bool(include_nodes)
+
+    log.info(
+        "GET /api/slurm/queue - account=%s users=%s states=%s partition=%s include_nodes=%s",
+        account_filter or "all", users_filter or "all", states_filter or "all", partition_filter or "all", load_nodes,
+    )
+    nodes_fut = executor.submit(_load_slurm_nodes) if load_nodes else None
+    rows = _load_slurm_queue_rows(
+        account=account_filter,
+        users=users_filter,
+        states=states_filter,
+        partition=partition_filter,
+    )
+    jobs = [_format_slurm_queue_job(row, now) for row in rows]
+    pending = _rank_pending_jobs(jobs)
+    nodes = nodes_fut.result() if nodes_fut else None
+    nodes_summary = _summarize_slurm_nodes(nodes) if nodes is not None else None
+    summary = _summarize_slurm_queue(jobs, pending, nodes_summary, now)
+    log.info(
+        "GET /api/slurm/queue - done: %d jobs, %d pending%s (%.2fs)",
+        len(jobs), len(pending), f", {len(nodes)} nodes" if nodes is not None else "", time.time() - t0,
+    )
+    return {
+        "cluster": _cluster,
+        "generated_at": now,
+        "filters": {
+            "account": account_filter,
+            "users": users_filter,
+            "states": states_filter,
+            "partition": partition_filter,
+        },
+        "jobs": jobs,
+        "pending": pending,
+        "summary": summary,
+        "nodes": nodes,
+        "nodes_summary": nodes_summary,
+    }
 
 
 @app.get("/api/overview")
