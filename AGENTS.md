@@ -77,12 +77,12 @@ Query all three directly; there is no proxy server that fans out for you. Useful
 - `/api/health` to ping for life
 
 Slurm queue analysis APIs:
+- Slurm does not have a first-class "queue" launch parameter. When users ask which "queue" to use, interpret that as which QOS/backend to launch with; pass it as `--qos <name>`. Treat partitions (`h100`, `h200`, `learn`) as hardware/capacity dimensions, not queue names.
 - `/api/slurm/queue` returns raw jobs, all pending jobs ranked by priority, summaries by user/account/partition/QOS, pending reasons and start-time estimates, plus GPU availability if `include_nodes=1` (default). Use `include_nodes=0` when queue state is enough and you want a faster response.
+    - Useful filters on `/api/slurm/queue`: `account=...`, `users=...`, `states=PENDING,RUNNING`, `partition=...`, and `include_nodes=0/1`. Pass `account=all` or `users=all` to remove the backend default filter.
 - `/api/slurm/nodes` returns node state and GPU availability by partition.
-- Useful filters on `/api/slurm/queue`: `account=...`, `users=...`, `states=PENDING,RUNNING`, `partition=...`, and `include_nodes=0/1`. Pass `account=all` or `users=all` to remove the backend default filter.
 - Query all three smanager backends directly; there is no fanout endpoint. For deciding where to launch, compare physical capacity from `nodes_summary.by_partition`, queue pressure from `summary.by_qos`/`pending`, and launch-user pressure from a `users=$USER` query.
 - Do not attribute aggregate pending reasons to the current user without checking. `summary.pending_reasons` is over the selected `users` filter. The dm1 backend default is a team subset (`users=pplx,qkv,zhai`) because the account is shared; this is neither a per-user view nor a full-account view. For launch-specific conclusions query `users=$USER`; for whole-account pressure use `users=all` or inspect each `pending[].user`.
-- Slurm does not have a first-class "queue" launch parameter. When users ask which "queue" to use, interpret that as which QOS/backend to launch with; pass it as `--qos <name>`. Treat partitions (`h100`, `h200`, `learn`) as hardware/capacity dimensions, not queue names.
 - Known accessible QOSes and GPU caps:
     - `fair-sc-3` (`http://localhost:2337`, account `rigi`): `h100_lowest` max 1024 GPUs/user, `h100_foundations_shared` max 360 GPUs total, `h200_lowest` max 1024 GPUs/user, `h200_foundations_shared` max 1024 GPUs/user.
     - `fair-sc` (`http://localhost:2338`, account `rigi`): `h100_lowest` max 1024 GPUs/user, `h100_foundations_shared` max 256 GPUs total, `h200_lowest` max 1024 GPUs/user.
