@@ -464,8 +464,11 @@
             font-family: ui-monospace, "SF Mono", Monaco, "Cascadia Mono", monospace;
             z-index: 1000;
             pointer-events: none;
+            white-space: pre;
+            line-height: 1.35;
         }
         .gpu-sum-tooltip b { color: var(--accent); }
+        .hot-summary-header { cursor: help; }
     </style>
 </head>
 <body>
@@ -501,16 +504,16 @@
                         <th class="col-rq">↶</th>
                         <th class="col-flattli" title="Open run in Flättlibrettli">📉︎</th>
                         <th class="col-xid">XID</th>
-                        <th class="col-usr">User</th>
+                        <th class="col-usr hot-summary-header" data-hot-summary="user-gpus">User</th>
                         <th class="col-states">States</th>
-                        <th class="col-wus">WUs</th>
-                        <th class="col-gpus text-right">GPUs</th>
+                        <th class="col-wus hot-summary-header" data-hot-summary="user-wus">WUs</th>
+                        <th class="col-gpus text-right hot-summary-header" data-hot-summary="user-gpus">GPUs</th>
                         <th class="col-eta text-right" title="Next pending Slurm start estimate">ETA</th>
                         <th class="col-r text-right">R</th>
-                        <th class="col-qos">QoS</th>
+                        <th class="col-qos hot-summary-header" data-hot-summary="qos-gpus">QoS</th>
                         <th style="width:33%">Config</th>
                         <th style="width:66%">Name / <span style="color:var(--accent)">Note</span></th>
-                        <th class="col-server">Server</th>
+                        <th class="col-server hot-summary-header" data-hot-summary="server-gpus">Server</th>
                     </tr>
                 </thead>
                 <tbody></tbody>
@@ -3030,7 +3033,7 @@
             servers.forEach((_, i) => checkServerHealth(i));
         }, 5000);
 
-        // Hover highlighting for server badges and QoS cells in hot table
+        // Hover highlighting and aggregate tooltips for hot table cells/headers.
         function setupHotTableHovers() {
             const hotTable = document.getElementById('hotTable');
             if (!hotTable) return;
@@ -3052,6 +3055,59 @@
                 }
             }
 
+            function addSummaryCount(counts, key, value) {
+                key = String(key || '').trim();
+                value = Number(value) || 0;
+                if (key && value > 0) counts.set(key, (counts.get(key) || 0) + value);
+            }
+
+            function miscJobGpus(job) {
+                if (job.STATE !== 'RUNNING') return 0;
+                const match = String(job.TRES_PER_NODE || '').match(/^gres\/gpu:(\d+)$/);
+                return (parseInt(job.NODES) || 0) * (match ? parseInt(match[1]) : 0);
+            }
+
+            function hotSummaryCounts(kind) {
+                const counts = new Map();
+                for (const r of hotRows) {
+                    if (r.isMisc) continue;
+                    addSummaryCount(
+                        counts,
+                        kind.startsWith('user') ? r.user : kind === 'qos-gpus' ? r.qos : r.server,
+                        kind === 'user-wus' ? r.wus : r.totalGpus
+                    );
+                }
+                for (const [sIdx, data] of Object.entries(overviewData)) {
+                    if (!data?.misc?.jobs) continue;
+                    for (const job of data.misc.jobs) {
+                        addSummaryCount(
+                            counts,
+                            kind.startsWith('user') ? job.USER : kind === 'qos-gpus' ? job.QOS : servers[sIdx]?.name,
+                            kind === 'user-wus' ? 1 : miscJobGpus(job)
+                        );
+                    }
+                }
+                return counts;
+            }
+
+            function formatSummaryCounts(counts) {
+                const rows = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+                if (!rows.length) return '';
+                const keyWidth = Math.max(...rows.map(([k]) => k.length));
+                const valueWidth = Math.max(...rows.map(([_, v]) => String(v).length));
+                return rows.map(([k, v]) => esc(k.padStart(keyWidth) + ': ' + String(v).padStart(valueWidth))).join('\n');
+            }
+
+            function showHotSummary(header) {
+                const summary = formatSummaryCounts(hotSummaryCounts(header.dataset.hotSummary));
+                if (!summary) return;
+                tooltip.innerHTML = summary;
+                tooltip.style.display = 'block';
+                const rect = header.getBoundingClientRect();
+                tooltip.style.left = Math.max(4, Math.min(rect.left, window.innerWidth - tooltip.offsetWidth - 4)) + 'px';
+                tooltip.style.top = (rect.bottom + 2) + 'px';
+            }
+
             function clearHighlights() {
                 hotTable.querySelectorAll('tr.highlight-full, tr.highlight-muted').forEach(row => {
                     row.classList.remove('highlight-full', 'highlight-muted');
@@ -3060,11 +3116,15 @@
             }
 
             hotTable.addEventListener('mouseover', (e) => {
+                const summaryHeader = e.target.closest('th[data-hot-summary]');
                 const serverBadge = e.target.closest('.server-badge');
                 const qosCell = e.target.closest('.qos-cell');
                 const userCell = e.target.closest('.user-cell');
 
-                if (serverBadge) {
+                if (summaryHeader) {
+                    clearHighlights();
+                    showHotSummary(summaryHeader);
+                } else if (serverBadge) {
                     const server = serverBadge.dataset.server;
                     clearHighlights();
                     hotTable.querySelectorAll(`tbody tr[data-server="${server}"]`).forEach(row => {
@@ -3094,10 +3154,11 @@
             });
 
             hotTable.addEventListener('mouseout', (e) => {
+                const summaryHeader = e.target.closest('th[data-hot-summary]');
                 const serverBadge = e.target.closest('.server-badge');
                 const qosCell = e.target.closest('.qos-cell');
                 const userCell = e.target.closest('.user-cell');
-                if (serverBadge || qosCell || userCell) {
+                if (summaryHeader || serverBadge || qosCell || userCell) {
                     clearHighlights();
                 }
             });
