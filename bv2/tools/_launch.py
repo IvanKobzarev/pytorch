@@ -54,7 +54,7 @@ def main(slurm=True):
     if slurm:
         assert "login" in os.uname().nodename, "Launch is only supported from the login node."
     else:
-        assert "gpu-login" in os.uname().nodename, "Serial launch is only supported from the GPU devbox."
+        assert subprocess.call("nvidia-smi", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0, "Serial launch is only supported from the GPU devbox."
 
     module = sys.argv[1]
     conf_file = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2].endswith(".py") else None
