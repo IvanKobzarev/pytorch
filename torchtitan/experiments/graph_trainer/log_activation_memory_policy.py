@@ -169,6 +169,7 @@ def _format_stack_trace(stack_trace: str | None) -> str:
 
 _POLICY_SHORT_NAMES = {
     CheckpointPolicy.MUST_SAVE: "SAVE",
+    CheckpointPolicy.PREFER_SAVE: "SAVE?",
     CheckpointPolicy.PREFER_RECOMPUTE: "RECOMPUTE",
     CheckpointPolicy.MUST_RECOMPUTE: "RECOMPUTE!",
     CheckpointPolicy.MUST_CPU_OFFLOAD: "OFFLOAD",

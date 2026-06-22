@@ -43,7 +43,9 @@ class GraphTrainerCompileConfig(CompileConfig):
     debug_graph_passes: bool = False
     """Log timing, op-count diffs, and before/after graphs for each pass to tlparse."""
 
-    memory_policy: Literal["default", "full", "eager", "sac_and_offload"] = "default"
+    memory_policy: Literal[
+        "default", "full", "eager", "sac_and_offload", "save_layer_inputs"
+    ] = "default"
     """
     Memory optimization policy for activation management (SAC, offload).
         default: SAC — save all compute-intensive ops and FSDP all_gathers.
@@ -54,6 +56,90 @@ class GraphTrainerCompileConfig(CompileConfig):
         sac_and_offload: SAC + CPU offload — apply default SAC first,
             then offload surviving MUST_SAVE activations to CPU within
             the cpu_offload_budget_gb budget.
+        save_layer_inputs: save each layer's input, recompute the interior.
+    """
+
+    ac_min_cut_enabled: bool = False
+    """Enable min-cut activation-checkpointing refinement on top of the
+    memory_policy floor (details in min_cut_ac.py). The pass first profiles the
+    input AC policy as the reference, then greedily chooses save cutpoints under
+    reference_peak + ac_min_cut_max_peak_increase_gb. The default budget is
+    0GB, so enabling min-cut does not allow modelled peak regression.
+    Tag-decision only;
+    selective_activation_remat materializes downstream, so it stays correct under
+    CPU offload."""
+
+    ac_min_cut_max_peak_increase_gb: float | None = 0.0
+    """Peak budget in GB relative to the pre-min-cut reference policy. The
+    default 0GB forbids modelled peak regression. None means no hard peak
+    requirement and should be treated as an explicit experiment. Positive values
+    spend extra peak memory for less recompute; negative values require a lower
+    peak than the reference policy. The peak is build_memory_profile on the joint
+    forward-loss-backward graph, a static-graph upper bound that holds the FSDP
+    all-gathered params, so this tracks relative changes, not absolute GPU peak."""
+
+    ac_min_cut_save_scope: Literal["min_cut", "all"] = "min_cut"
+    """Candidate pool for min-cut AC:
+        min_cut: only search the min-cut frontier, the byte-minimal structural
+            cutpoints.
+        all: process the min-cut frontier first, then remaining eligible
+            PREFER_SAVE/PREFER_RECOMPUTE activations. Over-target phases use a
+            peak-progress ranker; otherwise candidates are ranked by remat-closure
+            cost avoided per saved byte. Exact remat/profile validation checks
+            the peak budget. If the requested target is infeasible, min-cut keeps
+            the best lower-peak plan found and logs the miss."""
+
+    ac_min_cut_min_broad_candidate_gb: float | None = None
+    ac_min_cut_max_broad_candidate_gb: float | None = None
+    """Optional size window for non-frontier candidates when
+    ac_min_cut_save_scope="all". The min-cut frontier is never capped. This is a
+    debugging and tuning knob for broad candidate pools with very large
+    activations."""
+
+    ac_save_final_layer_output: bool = True
+    """When memory_policy=save_layer_inputs, also save the final transformer
+    layer output boundary. This preserves the eager per-layer checkpointing
+    policy. Disabling it lets the final layer output be recomputed so the graph
+    can avoid holding both the final boundary and post-layer head activation."""
+
+    ac_relax_relaxable_must_saves: bool = False
+    """Opt-in experiment: before min-cut AC, downgrade eligible MUST_SAVE
+    activations to PREFER_SAVE so min-cut can replace rigid saves with a new save
+    set. When min-cut AC is enabled, the peak budget remains relative to the
+    original memory-policy floor before this relaxation. Unsafe/uncuttable saves
+    remain hard. Disabled by default to preserve the normal MUST_* contract."""
+
+    ac_allow_allowed_saves: bool = False
+    """Opt-in experiment: before min-cut AC, mark every eligible non-MUST forward
+    CUDA activation as PREFER_SAVE so ac_min_cut_save_scope=all can search the
+    broad activation pool. When min-cut AC is enabled, the peak budget remains
+    relative to the original memory-policy floor before widening the pool. Hard
+    MUST_* tags remain constraints. This pass only applies cheap semantic filters
+    (collectives, RNG/nondeterministic/mutable ops, CPU/non-tensor values, and
+    nodes without tensor metadata); min-cut candidate filtering later checks
+    fresh storage ownership."""
+
+    ac_allow_unsaveable_recomputes: bool = False
+    """Opt-in experiment: before min-cut AC, mark deterministic unsaveable
+    boundaries as PREFER_RECOMPUTE without widening the ordinary save-candidate
+    pool. This is narrower than ac_allow_allowed_saves and is disabled by
+    default."""
+
+    ac_min_cut_decompose_log_softmax: bool = False
+    """Opt-in experiment: decompose fp32 aten._log_softmax into row-stat pieces
+    before min-cut so the pass can save compact stats instead of the full
+    softmax output. Disabled by default because it changes the graph seen by
+    Inductor and can affect fusion decisions."""
+
+    ac_min_cut_memory_estimator: Literal["approximate", "exact"] = "approximate"
+    """Debug/validation knob for min-cut AC candidate checking:
+        approximate: use the memory curve for ordering/pruning, but
+            exact-check every kept candidate with build_memory_profile on a
+            throwaway remat, then fully recheck the final result. Accepted plans
+            are guaranteed not to exceed the configured peak budget.
+        exact: slow debugging mode for approximate; tentatively save candidates
+            one at a time, remat, and measure build_memory_profile for each
+            candidate without memory-curve pruning.
     """
 
     pass_pipeline: str = "default"

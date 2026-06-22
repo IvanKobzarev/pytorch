@@ -6,6 +6,7 @@
 
 """AC rematerialize pass: in-place duplicate recompute nodes for backward."""
 
+import json
 import logging
 from typing import Any
 
@@ -17,8 +18,13 @@ from torch._functorch.partitioners import (
     has_recomputable_rng_ops,
     must_recompute,
 )
+from torch._logging import trace_structured
 
 from torchtitan.experiments.graph_trainer.common_utils import _is_backward_node
+from torchtitan.experiments.graph_trainer.memory_utils import (
+    _normalize_soft_tags_for_remat,
+    _refresh_fake_tensor_meta,
+)
 
 
 log = logging.getLogger(__name__)
@@ -43,10 +49,7 @@ def _collect_backward_regions(
     """Returns (bwd_start, bwd_end, needs_remat) for each backward region.
 
     Regions are maximal contiguous runs of backward nodes, as [start, end)
-    indices into the graph node list. This is still kind of OK for chunked
-    loss because: (1) we would have errored earlier if there were multiple
-    regions that need recompute, and (2) we only ever do recompute on the
-    last backward.
+    indices into the graph node list.
     """
     regions: list[tuple[int, int, bool]] = []
     bwd_start: int | None = None
@@ -93,8 +96,11 @@ def selective_activation_remat_pass(
 
     The graph may contain multiple disjoint backward regions (e.g. chunked
     loss). Regions that do not depend on recomputable forward nodes are
-    skipped. Only one region may require remat; if multiple do, we error.
+    skipped. Recomputed values are local to each region so remat for one chunk
+    does not keep another chunk's intermediates live.
     """
+    _normalize_soft_tags_for_remat(gm)
+
     if not has_recomputable_ops(gm):
         return gm
 
@@ -109,84 +115,42 @@ def selective_activation_remat_pass(
     if not regions:
         return gm
 
-    # Assumption: chunked-loss regions (e.g. lm_head) do not carry AC, so
-    # at most one backward region depends on must_recompute forward nodes.
-    # If tag_sac_policy starts tagging the lm_head layer with AC, multiple
-    # disjoint backward regions could need remat and this heuristic must
-    # be revisited.
     remat_regions = [(s, e) for s, e, needs in regions if needs]
-
-    if len(remat_regions) > 1:
-        raise RuntimeError(
-            f"Detected {len(remat_regions)} disjoint backward regions that require recomputation, "
-            "but remat only supports one such region in a forward-loss-backward graph."
-        )
-
     if not remat_regions:
         return gm
 
-    bwd_start, bwd_end = remat_regions[0]
-
     all_nodes = list(gm.graph.nodes)
-    bwd_nodes = all_nodes[bwd_start:bwd_end]
     order = {n: i for i, n in enumerate(all_nodes)}
-
-    # Map each must_recompute fwd node to the bwd node its dup will be
-    # inserted in front of. The earliest bwd consumer (in graph order)
-    # wins via ``setdefault`` below.
-    remat_targets: dict[fx.Node, fx.Node] = {}
-
-    def collect_fw_nodes_to_recompute_for(bwd_node: fx.Node) -> None:
-        seen: set[fx.Node] = set()
-
-        def _gather(n: fx.Node) -> None:
-            if n in seen or not must_recompute(n):
-                return
-            seen.add(n)
-            remat_targets.setdefault(n, bwd_node)
-            for inp in n.all_input_nodes:
-                _gather(inp)
-
-        # bwd_node itself may not be must_recompute; start from its inputs.
-        for inp in bwd_node.all_input_nodes:
-            _gather(inp)
-
-    for bwd_node in bwd_nodes:
-        collect_fw_nodes_to_recompute_for(bwd_node)
-
-    # Map original forward must_recompute node -> its recomputed duplicate.
-    recomputed_nodes: dict[fx.Node, fx.Node] = {}
     # CPU offload: track which bwd target each reload-chain node was last
     # hoisted before, so we can re-hoist if an earlier dup needs it later.
     moved_offload: dict[fx.Node, fx.Node] = {}
+    all_recomputed_nodes: dict[fx.Node, list[fx.Node]] = {}
+    remat_events: list[dict[str, object]] = []
 
     # Build offloaded_fwd -> bwd_wait map by walking the offload op pattern
     # (apply_cpu_offload_pass emits: F -> ao.offload -> ao.wait_tensor ->
     # ao.reload -> ao.wait_tensor). Used to redirect a recompute dup that
     # consumes an offloaded fwd to read from the bwd-region GPU value.
     offloaded_fwd_to_bwd_wait: dict[fx.Node, fx.Node] = {}
-    for node in gm.graph.find_nodes(
-        op="call_function", target=torch.ops.ao.offload.default
-    ):
+    import torch._functorch._activation_offloading.offload_ops as _offload_ops  # noqa: F401
+
+    ao_offload = torch.ops.ao.offload.default
+    ao_wait = torch.ops.ao.wait_tensor.default
+    ao_reload = torch.ops.ao.reload.default
+
+    for node in gm.graph.find_nodes(op="call_function", target=ao_offload):
         offloaded_fwd = node.args[0]
-        fwd_wait = next(
-            (u for u in node.users if u.target is torch.ops.ao.wait_tensor.default),
-            None,
-        )
+        fwd_wait = next((u for u in node.users if u.target is ao_wait), None)
         if fwd_wait is None:
             continue
         reload_op = next(
-            (u for u in fwd_wait.users if u.target is torch.ops.ao.reload.default),
+            (u for u in fwd_wait.users if u.target is ao_reload),
             None,
         )
         if reload_op is None:
             continue
         bwd_wait = next(
-            (
-                u
-                for u in reload_op.users
-                if u.target is torch.ops.ao.wait_tensor.default
-            ),
+            (u for u in reload_op.users if u.target is ao_wait),
             None,
         )
         if bwd_wait is None:
@@ -271,19 +235,6 @@ def selective_activation_remat_pass(
             moved_offload[n] = target
             log.debug("moved %s before %s", n.name, target.name)
 
-    def remat_input(x: object) -> object:
-        """Arg-transform: redirect must_recompute originals to their dups, and
-        offloaded forward nodes to their CPU-reload chain. Hoisting of the
-        reload chain happens separately in the dup-creation loop."""
-        if not isinstance(x, fx.Node):
-            return x
-        if x in recomputed_nodes:
-            return recomputed_nodes[x]
-        bwd_wait = offloaded_fwd_to_bwd_wait.get(x)
-        if bwd_wait is not None:
-            return bwd_wait
-        return x
-
     def duplicate_subgraph_get_attrs(
         fwd_node: fx.Node, bwd_target: fx.Node
     ) -> dict[fx.Node, fx.Node]:
@@ -313,67 +264,138 @@ def selective_activation_remat_pass(
             dups[arg] = dup_attr
         return dups
 
-    # Iterate the claimed must_recompute fwd nodes in graph order so that
-    # each dup's upstream deps are already duped (and visible via
-    # ``recomputed_nodes``) by the time we copy a downstream node.
-    for fwd_node in sorted(remat_targets, key=order.__getitem__):
-        bwd_target = remat_targets[fwd_node]
-        # Pre-hoist offload reload chains for any args referencing offloaded
-        # forward nodes, so the chain executes before the dup we're about to
-        # create. Mirrors upstream's eager-copy-into-new-graph trick.
-        for arg in fwd_node.all_input_nodes:
-            bwd_wait = offloaded_fwd_to_bwd_wait.get(arg)
+    def rematerialize_region(region_idx: int, bwd_nodes: list[fx.Node]) -> None:
+        # Map each must_recompute fwd node to the bwd node its dup will be
+        # inserted in front of. The earliest bwd consumer in this region wins.
+        remat_targets: dict[fx.Node, fx.Node] = {}
+
+        def collect_fw_nodes_to_recompute_for(bwd_node: fx.Node) -> None:
+            seen: set[fx.Node] = set()
+
+            def _gather(n: fx.Node) -> None:
+                if n in seen or not must_recompute(n):
+                    return
+                seen.add(n)
+                remat_targets.setdefault(n, bwd_node)
+                for inp in n.all_input_nodes:
+                    _gather(inp)
+
+            for inp in bwd_node.all_input_nodes:
+                _gather(inp)
+
+        for bwd_node in bwd_nodes:
+            collect_fw_nodes_to_recompute_for(bwd_node)
+
+        recomputed_nodes: dict[fx.Node, fx.Node] = {}
+
+        def remat_input(x: object) -> object:
+            if not isinstance(x, fx.Node):
+                return x
+            if x in recomputed_nodes:
+                return recomputed_nodes[x]
+            bwd_wait = offloaded_fwd_to_bwd_wait.get(x)
             if bwd_wait is not None:
-                ensure_offload_chain_before(bwd_wait, bwd_target)
-        # HOP subgraph get_attrs must be private to each recompute dup so
-        # regional_inductor can partition each flex region independently.
-        get_attr_dups = duplicate_subgraph_get_attrs(fwd_node, bwd_target)
+                return bwd_wait
+            return x
 
-        def remat_and_dup_get_attr(x: object, _dups=get_attr_dups) -> object:
-            if isinstance(x, fx.Node) and x in _dups:
-                return _dups[x]
-            return remat_input(x)
+        # Iterate the claimed must_recompute fwd nodes in graph order so that
+        # each dup's upstream deps are already duped by the time we copy a
+        # downstream node.
+        for fwd_node in sorted(remat_targets, key=order.__getitem__):
+            bwd_target = remat_targets[fwd_node]
+            # Pre-hoist offload reload chains for any args referencing
+            # offloaded forward nodes, so the chain executes before the dup.
+            for arg in fwd_node.all_input_nodes:
+                bwd_wait = offloaded_fwd_to_bwd_wait.get(arg)
+                if bwd_wait is not None:
+                    ensure_offload_chain_before(bwd_wait, bwd_target)
+            # HOP subgraph get_attrs must be private to each recompute dup so
+            # regional_inductor can partition each flex region independently.
+            get_attr_dups = duplicate_subgraph_get_attrs(fwd_node, bwd_target)
 
-        with gm.graph.inserting_before(bwd_target):
-            dup = gm.graph.node_copy(fwd_node, remat_and_dup_get_attr)
-            _privatize_custom_meta(dup)  # node_copy shares fwd_node's custom dict
-        dup.name = fwd_node.name + "_recomputed"
-        dup.meta["autograd_backward"] = True
-        recomputed_nodes[fwd_node] = dup
-        log.debug(
-            "Recomputing %s before backward node %s", fwd_node.name, bwd_target.name
-        )
+            def remat_and_dup_get_attr(x: object, _dups=get_attr_dups) -> object:
+                if isinstance(x, fx.Node) and x in _dups:
+                    return _dups[x]
+                return remat_input(x)
 
-    # Redirect every direct backward consumer of a recomputed forward node
-    # to read from the dup. Backward consumers of offloaded forward nodes
-    # were already redirected to their reload chain by the CPU offload
-    # pass, so the offload branch of remat_input is a no-op here.
-    direct_bwd_consumers = {
-        user
-        for fwd_node in recomputed_nodes
-        for user in fwd_node.users
-        if _is_backward_node(user)
-    }
-    for bwd_node in direct_bwd_consumers:
-        bwd_node.args = torch.fx.map_arg(bwd_node.args, remat_input)
-        bwd_node.kwargs = torch.fx.map_arg(bwd_node.kwargs, remat_input)
+            with gm.graph.inserting_before(bwd_target):
+                dup = gm.graph.node_copy(fwd_node, remat_and_dup_get_attr)
+                _privatize_custom_meta(dup)
+            dup.name = (
+                fwd_node.name + "_recomputed"
+                if len(remat_regions) == 1
+                else f"{fwd_node.name}_recomputed_r{region_idx}"
+            )
+            dup.meta["autograd_backward"] = True
+            dup.meta["ac_recomputed"] = True
+            recomputed_nodes[fwd_node] = dup
+            all_recomputed_nodes.setdefault(fwd_node, []).append(dup)
+            remat_events.append(
+                {
+                    "original": fwd_node.name,
+                    "duplicate": dup.name,
+                    "target": bwd_target.name,
+                    "region_nodes": len(bwd_nodes),
+                    "op": str(fwd_node.target),
+                }
+            )
+            log.debug(
+                "Recomputing %s before backward node %s",
+                fwd_node.name,
+                bwd_target.name,
+            )
+
+        # Redirect direct backward consumers in this region only. Backward
+        # consumers of offloaded forward nodes were already redirected to their
+        # reload chain by the CPU offload pass.
+        bwd_node_set = set(bwd_nodes)
+        direct_bwd_consumers = {
+            user
+            for fwd_node in recomputed_nodes
+            for user in fwd_node.users
+            if user in bwd_node_set
+        }
+        for bwd_node in direct_bwd_consumers:
+            bwd_node.args = torch.fx.map_arg(bwd_node.args, remat_input)
+            bwd_node.kwargs = torch.fx.map_arg(bwd_node.kwargs, remat_input)
+
+    for region_idx, (bwd_start, bwd_end) in enumerate(remat_regions):
+        rematerialize_region(region_idx, all_nodes[bwd_start:bwd_end])
 
     # Targeted erase: original forward must_recompute nodes whose consumers
     # were all backward now have no users and can be removed. Originals with
     # remaining forward consumers stay in place. Iterate in reverse graph
     # order so downstream originals are erased first, freeing their upstream
     # originals' user lists for erase in the same pass.
-    for orig in reversed(list(recomputed_nodes)):
+    for orig in reversed(list(all_recomputed_nodes)):
         if not orig.users:
+            replacement = all_recomputed_nodes[orig][-1]
             log.debug(
                 "erased %s, in replace of %s",
                 orig.name,
-                recomputed_nodes[orig].name,
+                replacement.name,
             )
             gm.graph.erase_node(orig)
 
     # raise_getitems pass for better memory (like default_partition)
     gm = raise_getitems(gm)
+    _refresh_fake_tensor_meta(gm)
+
+    trace_structured(
+        "artifact",
+        metadata_fn=lambda: {
+            "name": "graph_trainer_selective_activation_remat",
+            "encoding": "json",
+        },
+        payload_fn=lambda: json.dumps(
+            {
+                "recomputed_count": len(remat_events),
+                "recomputed": remat_events,
+            },
+            sort_keys=True,
+        ),
+        expect_trace_id=False,
+    )
 
     gm.recompile()
     return gm

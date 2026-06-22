@@ -71,20 +71,114 @@ def _is_backward_node(node: torch.fx.Node) -> bool:
     return node.meta.get("autograd_backward", False)
 
 
-def _get_layer_id(node: torch.fx.Node) -> int:
+def _get_layer_id(node: torch.fx.Node, layer_prefix: str = "layers") -> int:
     """Extract the layer index from the node's module_fqn metadata.
 
-    Nodes under ``layers.<N>`` return ``N``.
+    Nodes under ``<layer_prefix>.<N>`` return ``N``.
     All other nodes (tok_embeddings, norm, output) return ``_NOT_IN_LAYERS``.
+    ``layer_prefix`` is the layer container's attribute name.
     """
     fqn = node.meta.get("custom", {}).get(_MODULE_FQN, "")
     parts = fqn.split(".")
-    if parts[0] == "layers" and len(parts) >= 2:
+    if len(parts) >= 2 and parts[0] == layer_prefix:
         try:
             return int(parts[1])
         except ValueError:
             pass
     return _NOT_IN_LAYERS
+
+
+def apply_save_layer_inputs_ac(
+    gm: torch.fx.GraphModule,
+    *,
+    layer_prefix: str = "layers",
+    save_final_layer_output: bool = True,
+) -> torch.fx.GraphModule:
+    """Tag the joint graph with the "save block input" AC policy.
+
+    Pass 1: tag every forward node inside a transformer layer PREFER_RECOMPUTE.
+    Pass 2: upgrade to MUST_SAVE any layer node whose output is consumed by a
+    later layer -- that crossing tensor is the next block's input, so saving it
+    avoids recomputing the whole preceding layer. The final layer output can
+    optionally stay recomputable to avoid pinning both it and the post-layer
+    head activation at the peak.
+    Nodes outside layers (embeddings, final norm, loss head) are left untagged
+    and are therefore saved.
+
+    This is the tag-based equivalent of eager full per-layer activation
+    checkpointing (``checkpoint`` around each block): save the layer boundary,
+    recompute the interior. Expressed as FX ``node.meta["recompute"]`` tags so
+    that ``remat_using_tags_for_fwd_loss_bwd_graph`` materializes the recompute
+    and ``min_cut_ac_pass`` can refine it. Requires ``annotate_module_fqns`` to
+    have run on the model before tracing.
+
+    Reusable across repos: operates on any forward-loss-backward joint fx graph
+    whose backward nodes carry ``node.meta["autograd_backward"]``.
+    """
+    from torch.utils.checkpoint import CheckpointPolicy
+
+    def _is_recomputable(n: torch.fx.Node) -> bool:
+        return n.meta.get("recompute") in (
+            CheckpointPolicy.PREFER_RECOMPUTE,
+            CheckpointPolicy.MUST_RECOMPUTE,
+        )
+
+    def _is_rng(n: torch.fx.Node) -> bool:
+        # RNG / nondeterministic ops (e.g. dropout) cannot live in a recompute
+        # region: remat refuses to duplicate them (has_recomputable_rng_ops).
+        return (
+            hasattr(n.target, "tags")
+            and torch.Tag.nondeterministic_seeded in n.target.tags
+        )
+
+    # Pass 1: tag in-layer forward nodes PREFER_RECOMPUTE (but keep RNG ops
+    # MUST_SAVE so their recompute-needing consumers read the saved value).
+    n_recompute = 0
+    for node in gm.graph.nodes:
+        if node.op != "call_function" or _is_backward_node(node):
+            continue
+        if _get_layer_id(node, layer_prefix) == _NOT_IN_LAYERS:
+            continue
+        if _is_rng(node):
+            node.meta["recompute"] = CheckpointPolicy.MUST_SAVE
+            continue
+        node.meta["recompute"] = CheckpointPolicy.PREFER_RECOMPUTE
+        n_recompute += 1
+
+    if n_recompute == 0:
+        logger.warning(
+            "apply_save_layer_inputs_ac: no nodes under '%s.<N>' -- did "
+            "annotate_module_fqns run before tracing? (no-op)",
+            layer_prefix,
+        )
+        return gm
+
+    # Pass 2: force MUST_SAVE on layer-boundary (residual stream) tensors.
+    n_save = 0
+    for node in gm.graph.nodes:
+        if _is_backward_node(node) or not _is_recomputable(node):
+            continue
+        layer_id = _get_layer_id(node, layer_prefix)
+        if layer_id == _NOT_IN_LAYERS:
+            continue
+        for user in node.users:
+            if _is_backward_node(user):
+                continue
+            user_layer_id = _get_layer_id(user, layer_prefix)
+            if user_layer_id != layer_id and (
+                save_final_layer_output or user_layer_id != _NOT_IN_LAYERS
+            ):
+                node.meta["recompute"] = CheckpointPolicy.MUST_SAVE
+                n_save += 1
+                break
+
+    logger.info(
+        "apply_save_layer_inputs_ac: %d MUST_SAVE (layer boundaries), "
+        "%d PREFER_RECOMPUTE (layer interiors)",
+        n_save,
+        n_recompute - n_save,
+    )
+    return gm
 
 
 def annotate_module_fqns(model: nn.Module) -> None:
