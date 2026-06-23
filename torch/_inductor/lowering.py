@@ -94,6 +94,7 @@ from .utils import (
     ceildiv,
     convert_symint_to_expr,
     decode_device,
+    generate_assert,
     is_dynamic,
     is_gpu,
     is_nvidia_sm100_or_later,
@@ -4426,6 +4427,7 @@ def full(size, fill_value, **kwargs):
 
 @register_lowering(aten.gather, type_promotion_kind=None)
 def gather(x, dim, index, sparse_grad=False):
+    """Lower gather, including a dense path for log-softmax label gathers."""
     # sparse_grad doesn't affect forward computation,
     # and backward tracing is taken care of by AOT Autograd
     if not (isinstance(x, TensorBox)):
@@ -4444,6 +4446,88 @@ def gather(x, dim, index, sparse_grad=False):
 
     x_loader = x.make_loader()
     index_loader = index.make_loader()
+
+    def has_log_softmax_origin() -> bool:
+        origins = getattr(x, "origins", OrderedSet())
+        if any(
+            isinstance(origin, torch.fx.Node)
+            and (
+                origin.target is aten._log_softmax.default
+                or origin.name.startswith("_log_softmax")
+            )
+            for origin in origins
+        ):
+            return True
+        origin_targets = [
+            origin.target for origin in origins if isinstance(origin, torch.fx.Node)
+        ]
+        if (
+            aten.log.default in origin_targets
+            and origin_targets.count(aten.sub.Tensor) >= 2
+        ):
+            return True
+
+        data = x.data
+        while isinstance(data, (BaseView, MutableBox)):
+            data = data.data
+        if not isinstance(data, Pointwise):
+            return False
+        if "log" not in data.inner_fn_opcount().used_ops:
+            return False
+        for dep in data.get_reads():
+            buf = V.graph.try_get_buffer(dep.name)
+            if isinstance(buf, ir.ComputedBuffer) and isinstance(
+                buf.data, OnlineSoftmaxReduction
+            ):
+                return True
+        return False
+
+    x_device = x.get_device()
+    if (
+        not sparse_grad
+        and len(size) == 2
+        and dim == 1
+        and x_device is not None
+        and V.graph.sizevars.statically_known_equals(index.get_size()[dim], 1)
+        and V.graph.sizevars.statically_known_geq(size[dim], 1024)
+        and has_log_softmax_origin()
+    ):
+
+        def dense_gather_fn(idx, reduction_idx):
+            idx = list(idx)
+            target = index_loader(idx)
+            if generate_assert(True):
+                ops.device_assert_async(
+                    ops.and_(
+                        ops.ge(target, ops.constant(0, index.get_dtype())),
+                        ops.lt(
+                            target,
+                            ops.index_expr(size[dim], index.get_dtype()),
+                        ),
+                    ),
+                    f"index out of bounds: 0 <= gather index < {size[dim]}",
+                )
+            rindex = ops.index_expr(reduction_idx[0], index.get_dtype())
+            idx[dim] = reduction_idx[0]
+            return ops.where(
+                ops.eq(target, rindex),
+                x_loader(idx),
+                ops.constant(0, x.get_dtype()),
+            )
+
+        result = Reduction.create(
+            reduction_type="sum",
+            input_node=x,
+            device=x_device,
+            dst_dtype=x.get_dtype(),
+            src_dtype=x.get_dtype(),
+            inner_fn=dense_gather_fn,
+            ranges=index.get_size(),
+            reduction_ranges=[size[dim]],
+        )
+        if isinstance(result.data.data, Reduction):  # type: ignore[attr-defined]
+            result.realize()
+        return result
 
     def fn(idx):
         idx = list(idx)
