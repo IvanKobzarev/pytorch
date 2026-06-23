@@ -47,9 +47,9 @@ from torch.fx.experimental.symbolic_shapes import (
     resolve_unbacked_bindings,
     RuntimeAssert,
     ShapeEnv,
+    statically_known_true,
     SympyBoolean,
     SymTypes,
-    statically_known_true,
 )
 from torch.fx.node import Node
 from torch.fx.passes.reinplace import _is_view_op
@@ -121,6 +121,7 @@ from .utils import (
     should_assume_input_aligned,
     should_fallback_by_default,
     SUPPORTED_MKLDNN_DEVICES,
+    sympy_product,
     ValueWithLineMap,
 )
 from .virtualized import NullHandler, V
@@ -1923,7 +1924,7 @@ class GraphLowering(torch.fx.Interpreter):
             return False
         input_numel = val.numel()
         worklist = [(n, user) for user in n.users]
-        seen: set[torch.fx.Node] = set()
+        seen: OrderedSet[torch.fx.Node] = OrderedSet()
         while worklist:
             parent, user = worklist.pop()
             if user in seen:
@@ -1940,14 +1941,94 @@ class GraphLowering(torch.fx.Interpreter):
         return False
 
     @classmethod
+    def _is_reused_reduction_pointwise_candidate(cls, n: torch.fx.Node) -> bool:
+        if n.target is torch.ops.aten.add.Tensor:
+            return True
+        if n.target is torch.ops.aten._to_copy.default:
+            input_node = n.args[0] if n.args else None
+            return (
+                isinstance(input_node, torch.fx.Node)
+                and input_node.target is torch.ops.aten.add.Tensor
+            )
+        return False
+
+    @classmethod
+    def _reused_reduction_pointwise_user_count(cls, n: torch.fx.Node) -> int:
+        users = OrderedSet(n.users)
+        if n.target is torch.ops.aten.add.Tensor and len(users) == 1:
+            only_user = next(iter(users))
+            if only_user.target is torch.ops.aten._to_copy.default:
+                return len(OrderedSet(only_user.users))
+        return len(users)
+
+    @classmethod
+    def _low_precision_cast_dtype(cls, n: torch.fx.Node) -> torch.dtype | None:
+        dtype = None
+        if n.target is torch.ops.prims.convert_element_type.default:
+            dtype = n.args[1] if len(n.args) > 1 else None
+        elif n.target is torch.ops.aten._to_copy.default:
+            dtype = n.kwargs.get("dtype")
+        if isinstance(dtype, torch.dtype) and dtype in (torch.float16, torch.bfloat16):
+            return dtype
+        return None
+
+    @classmethod
+    def _should_realize_reused_low_precision_cast_for_reduction(
+        cls, n: torch.fx.Node, result: object
+    ) -> bool:
+        if (
+            config.allow_peak_memory_increasing_fusion
+            or not config.rematerialize_reused_reduction_pointwise
+            or n.op != "call_function"
+        ):
+            return False
+        if cls._low_precision_cast_dtype(n) is None:
+            return False
+        if len(OrderedSet(n.users)) <= 1:
+            return False
+        if not isinstance(result, TensorBox):
+            return False
+        if not cls._user_reaches_reduction_like_output(n):
+            return False
+
+        input_node = n.args[0] if n.args else None
+        if not isinstance(input_node, torch.fx.Node):
+            return False
+        if input_node.target is torch.ops.aten.add.Tensor:
+            return False
+        input_val = input_node.meta.get("val")
+        val = n.meta.get("val")
+        if not isinstance(input_val, torch.Tensor) or not isinstance(val, torch.Tensor):
+            return False
+        if input_val.dtype.itemsize <= val.dtype.itemsize:
+            return False
+        try:
+            numel = V.graph.sizevars.optimization_hint(
+                sympy_product(val.shape), fallback=0
+            )
+            num_bytes = numel * val.element_size()
+        except Exception:
+            num_bytes = None
+        if num_bytes is not None and num_bytes <= config.small_memory_access_threshold:
+            return False
+
+        data = result.data
+        while not isinstance(data, StorageBox) and isinstance(
+            data, (ir.BaseView, ir.MutableBox)
+        ):
+            data = data.data
+
+        return isinstance(data, StorageBox) and isinstance(data.data, Pointwise)
+
+    @classmethod
     def _should_realize_reused_pointwise_for_reduction(
         cls, n: torch.fx.Node, result: object
     ) -> bool:
         if (
             config.allow_peak_memory_increasing_fusion
             or n.op != "call_function"
-            or n.target is not torch.ops.aten.add.Tensor
-            or len(OrderedSet(n.users)) <= 1
+            or not cls._is_reused_reduction_pointwise_candidate(n)
+            or cls._reused_reduction_pointwise_user_count(n) <= 1
             or not isinstance(result, TensorBox)
             or not cls._user_reaches_reduction_like_output(n)
         ):
@@ -1963,6 +2044,81 @@ class GraphLowering(torch.fx.Interpreter):
             isinstance(data, StorageBox)
             and isinstance(data.data, Pointwise)
             and data.data.inner_fn_opcount().nontrivial_read_count > 1
+        )
+
+    @classmethod
+    def _should_rematerialize_reused_pointwise_for_reduction(
+        cls, n: torch.fx.Node, result: object
+    ) -> bool:
+        if (
+            config.allow_peak_memory_increasing_fusion
+            or not config.rematerialize_reused_reduction_pointwise
+            or n.op != "call_function"
+            or n.target is not torch.ops.aten.add.Tensor
+            or n.meta.get("_inductor_disable_lazy_reduction_remat", False)
+        ):
+            return False
+        if cls._reused_reduction_pointwise_user_count(n) <= 1:
+            return False
+        if not isinstance(result, TensorBox):
+            return False
+        if not cls._user_reaches_reduction_like_output(n):
+            return False
+
+        val = n.meta.get("val")
+        if not isinstance(val, torch.Tensor):
+            return False
+        try:
+            numel = V.graph.sizevars.optimization_hint(
+                sympy_product(val.shape), fallback=0
+            )
+            num_bytes = numel * val.element_size()
+        except Exception:
+            num_bytes = None
+        if num_bytes is not None and num_bytes <= config.small_memory_access_threshold:
+            return False
+
+        data = result.data
+        while not isinstance(data, StorageBox) and isinstance(
+            data, (ir.BaseView, ir.MutableBox)
+        ):
+            data = data.data
+
+        if not isinstance(data, StorageBox) or not isinstance(data.data, Pointwise):
+            return False
+
+        if data.data.inner_fn_opcount().nontrivial_read_count <= 1:
+            return False
+        return True
+
+    @staticmethod
+    def _should_realize_large_chunked_pointwise_add(
+        n: torch.fx.Node, result: object
+    ) -> bool:
+        if (
+            config.allow_peak_memory_increasing_fusion
+            or n.op != "call_function"
+            or n.target is not torch.ops.aten.add.Tensor
+            or not isinstance(result, TensorBox)
+        ):
+            return False
+
+        data = result.data
+        while not isinstance(data, StorageBox) and isinstance(
+            data, (ir.BaseView, ir.MutableBox)
+        ):
+            data = data.data
+
+        if not isinstance(data, StorageBox) or not isinstance(data.data, Pointwise):
+            return False
+
+        # Chunking is intended to keep only a small number of large pieces live
+        # at once. If a lazy pointwise add chain accumulates multiple same-sized
+        # freeable reads, a later fused fan-in kernel can wait for all chunks and
+        # undo that lower peak memory plan. Realize the partial sum early enough
+        # to preserve the chunking boundary.
+        return data.has_large_same_sized_freeable_reads(
+            min_count=2, min_size=config.small_memory_access_threshold
         )
 
     def run_node(self, n: torch.fx.Node) -> object:
@@ -2175,10 +2331,33 @@ class GraphLowering(torch.fx.Interpreter):
             # Realize if (1) any user need inputs realized, or (2) there is
             # already too many reads and rematerializing can be bad.
             num_users = len(OrderedSet(n.users))
-            if num_users > 1 and isinstance(result, TensorBox):
-                if self._should_realize_reused_pointwise_for_reduction(n, result):
+            effective_num_users = self._reused_reduction_pointwise_user_count(n)
+            should_rematerialize_reused_pointwise = False
+            if max(num_users, effective_num_users) > 1 and isinstance(
+                result, TensorBox
+            ):
+                should_rematerialize_reused_pointwise = (
+                    self._should_rematerialize_reused_pointwise_for_reduction(n, result)
+                )
+                if (
+                    not should_rematerialize_reused_pointwise
+                    and self._should_realize_reused_pointwise_for_reduction(n, result)
+                ):
                     result = maybe_apply_channels_last_stride_order(result, n)
                     result.realize()
+                if (
+                    not should_rematerialize_reused_pointwise
+                    and self._should_realize_reused_low_precision_cast_for_reduction(
+                        n, result
+                    )
+                ):
+                    result = maybe_apply_channels_last_stride_order(result, n)
+                    name = result.realize()
+                    if name is not None:
+                        # A plain realize can still be internalized by fusion.
+                        # Keep this as a real boundary so rematerializing logits
+                        # does not create one large backward reduction kernel.
+                        V.graph.no_fuse_buffer_names.add(name)
 
                 for user in n.users:
                     if user.target in needs_realized_inputs:
@@ -2261,25 +2440,43 @@ class GraphLowering(torch.fx.Interpreter):
                 ):
                     _data = _data.data
 
-                if isinstance(_data, StorageBox) and _data.should_realize_on_reuse(
-                    len(n.users)
+                if (
+                    not should_rematerialize_reused_pointwise
+                    and isinstance(_data, StorageBox)
+                    and _data.should_realize_on_reuse(num_users)
                 ):
                     result = maybe_apply_channels_last_stride_order(result, n)
 
                 # TODO(jansel): introduce a store vs inline choice
-                result.mark_reuse(len(n.users))
+                if not should_rematerialize_reused_pointwise:
+                    result.mark_reuse(num_users)
 
             # Realize if the IRNode already has accumulated lots of reads
-            if isinstance(result, TensorBox) and result.has_exceeded_max_reads():
+            if (
+                not should_rematerialize_reused_pointwise
+                and isinstance(result, TensorBox)
+                and result.has_exceeded_max_reads()
+            ):
                 # Prevent excessive accumulation in a computed buffer, when
                 # there are multiple branches each with small number of memory
                 # reads, but they converge to a user.
                 result = maybe_apply_channels_last_stride_order(result, n)
                 result.realize_hint()
 
+            if (
+                not should_rematerialize_reused_pointwise
+                and self._should_realize_large_chunked_pointwise_add(n, result)
+            ):
+                result = maybe_apply_channels_last_stride_order(result, n)
+                result.realize()
+
             # Realize if a Pointwise has too much stuff to be inlined.
             # As this may cause RecursionError during Inductor's evaluation.
-            if isinstance(result, TensorBox) and isinstance(result.data, StorageBox):
+            if (
+                not should_rematerialize_reused_pointwise
+                and isinstance(result, TensorBox)
+                and isinstance(result.data, StorageBox)
+            ):
                 curr = result.data.data
                 if isinstance(curr, Pointwise):
                     # Use inner fn as a rough proxy. Good enough.

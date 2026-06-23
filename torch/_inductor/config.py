@@ -956,10 +956,17 @@ loop_index_inversion_in_fusion: bool = True
 score_fusion_memory_threshold = 10
 
 # Allow choices that Inductor's peak-memory heuristics would otherwise block.
-# This is intentionally on by default so existing fusion behavior stays unchanged
-# unless a caller explicitly opts into peak-memory-aware restrictions.
+# This disables peak-memory-biased fusion blockers and related lowering-time
+# realizations, which is useful for speed experiments on workloads with enough
+# memory headroom.
 allow_peak_memory_increasing_fusion = (
     os.environ.get("TORCHINDUCTOR_ALLOW_PEAK_MEMORY_INCREASING_FUSION", "1") == "1"
+)
+
+# Experimental: keep large reused pointwise add outputs feeding reductions
+# rematerializable instead of forcing a full-buffer store.
+rematerialize_reused_reduction_pointwise = (
+    os.environ.get("TORCHINDUCTOR_REMATERIALIZE_REUSED_REDUCTION_POINTWISE", "0") == "1"
 )
 
 # For Triton Templates, select fastest of best template + epilogue vs best template + separate epilogue kernel

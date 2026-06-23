@@ -631,6 +631,11 @@ class InductorChoices:
                     "Fusion materializes outputs across an extern branch."
                 )
                 return False
+            if scheduler.fusion_would_collapse_large_chunked_inputs(node1, node2):
+                WhyNoFuse(node1, node2)(
+                    "Fusion collapses large chunked inputs and may increase peak memory."
+                )
+                return False
 
         if (
             config.max_fusion_unique_io_buffers is not None
@@ -654,6 +659,18 @@ class InductorChoices:
     ) -> bool:
         """Hook for heuristics to prevent vertical (producer/consumer) fusions"""
         if not config.allow_peak_memory_increasing_fusion:
+            if scheduler.fusion_would_extend_large_inputs(
+                node1, node2, shared_data_score
+            ):
+                WhyNoFuse(node1, node2)(
+                    "Fusion extends the live ranges of large producer inputs."
+                )
+                return False
+            if scheduler.fusion_would_collapse_large_chunked_inputs(node1, node2):
+                WhyNoFuse(node1, node2)(
+                    "Fusion collapses large chunked inputs and may increase peak memory."
+                )
+                return False
             if scheduler.fusion_would_materialize_late_outputs_from_shared_producer(
                 node1, node2, shared_data_score
             ):
@@ -684,6 +701,11 @@ class InductorChoices:
             )
             return False
         if not config.allow_peak_memory_increasing_fusion:
+            if scheduler.fusion_would_collapse_large_chunked_inputs(node1, node2):
+                WhyNoFuse(node1, node2)(
+                    "Fusion collapses large chunked inputs and may increase peak memory."
+                )
+                return False
             if scheduler.fusion_would_materialize_disjoint_branches(
                 node1, node2, shared_data_score
             ):

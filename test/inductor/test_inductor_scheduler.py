@@ -641,6 +641,84 @@ class TestScheduler(TestCase):
         # Assert: Fusion should be allowed (4 unique buffers <= 5 threshold)
         self.assertFalse(result)
 
+    def test_fusion_would_collapse_large_chunked_inputs_prevents_fusion(self):
+        scheduler, node1, node2 = self._create_chunked_input_scheduler(
+            input_size=128 * 1024 * 1024,
+        )
+
+        with patch(
+            "torch._inductor.codegen.wrapper.buffer_reuse_key",
+            side_effect=lambda node: node.reuse_key,
+        ):
+            self.assertTrue(
+                Scheduler.fusion_would_collapse_large_chunked_inputs(
+                    scheduler, node1, node2
+                )
+            )
+
+    def test_fusion_would_collapse_large_chunked_inputs_allows_external_user(self):
+        scheduler, node1, node2 = self._create_chunked_input_scheduler(
+            input_size=128 * 1024 * 1024,
+            extra_chunk_user="later",
+        )
+
+        with patch(
+            "torch._inductor.codegen.wrapper.buffer_reuse_key",
+            side_effect=lambda node: node.reuse_key,
+        ):
+            self.assertFalse(
+                Scheduler.fusion_would_collapse_large_chunked_inputs(
+                    scheduler, node1, node2
+                )
+            )
+
+    def test_fusion_would_collapse_large_chunked_inputs_requires_same_reuse_key(self):
+        scheduler, node1, node2 = self._create_chunked_input_scheduler(
+            input_size=128 * 1024 * 1024,
+            same_reuse_key=False,
+        )
+
+        with patch(
+            "torch._inductor.codegen.wrapper.buffer_reuse_key",
+            side_effect=lambda node: node.reuse_key,
+        ):
+            self.assertFalse(
+                Scheduler.fusion_would_collapse_large_chunked_inputs(
+                    scheduler, node1, node2
+                )
+            )
+
+    def test_fusion_would_collapse_large_chunked_inputs_fallback_key(self):
+        scheduler, node1, node2 = self._create_chunked_input_scheduler(
+            input_size=128 * 1024 * 1024,
+        )
+
+        with patch(
+            "torch._inductor.codegen.wrapper.buffer_reuse_key",
+            side_effect=NotImplementedError,
+        ):
+            self.assertTrue(
+                Scheduler.fusion_would_collapse_large_chunked_inputs(
+                    scheduler, node1, node2
+                )
+            )
+
+    def test_fusion_would_collapse_large_chunked_inputs_keeps_mutation_renames(self):
+        scheduler, node1, node2 = self._create_chunked_input_scheduler(
+            input_size=128 * 1024 * 1024,
+            mutation_renamed=True,
+        )
+
+        with patch(
+            "torch._inductor.codegen.wrapper.buffer_reuse_key",
+            side_effect=lambda node: node.reuse_key,
+        ):
+            self.assertTrue(
+                Scheduler.fusion_would_collapse_large_chunked_inputs(
+                    scheduler, node1, node2
+                )
+            )
+
     def test_fusion_would_materialize_disjoint_branches_prevents_fusion(self):
         scheduler = Mock(spec=Scheduler)
         scheduler.mutation_renames = {}
@@ -826,6 +904,22 @@ class TestScheduler(TestCase):
         check = scheduler.fusion_would_materialize_outputs_across_extern_branch
         check.assert_called_once_with(node1, node2)
 
+    @inductor_config.patch("allow_peak_memory_increasing_fusion", False)
+    def test_can_fuse_blocks_large_chunked_input_collapse(self):
+        scheduler = Mock(spec=Scheduler)
+        scheduler.can_fusion_increase_peak_memory = Mock(return_value=False)
+        scheduler.fusion_would_materialize_outputs_across_extern_branch = Mock(
+            return_value=False
+        )
+        scheduler.fusion_would_collapse_large_chunked_inputs = Mock(return_value=True)
+        node1 = self._create_mock_node(name="node1", reads=["A"], writes=["B"])
+        node2 = self._create_mock_node(name="node2", reads=["B", "C"], writes=["D"])
+
+        self.assertFalse(InductorChoices.can_fuse(scheduler, node1, node2, 1))
+
+        check = scheduler.fusion_would_collapse_large_chunked_inputs
+        check.assert_called_once_with(node1, node2)
+
     def test_can_fuse_allows_peak_memory_increasing_fusion_when_configured(self):
         scheduler = Mock(spec=Scheduler)
         scheduler.can_fusion_increase_peak_memory = Mock(return_value=False)
@@ -846,6 +940,7 @@ class TestScheduler(TestCase):
     def test_can_fuse_horizontal_blocks_disjoint_branch_materialization(self):
         scheduler = Mock(spec=Scheduler)
         scheduler.are_long_distant_nodes = Mock(return_value=False)
+        scheduler.fusion_would_collapse_large_chunked_inputs = Mock(return_value=False)
         scheduler.fusion_would_materialize_disjoint_branches = Mock(return_value=True)
         node1 = self._create_mock_node(name="node1", reads=["A"], writes=["B"])
         node2 = self._create_mock_node(name="node2", reads=["A"], writes=["C"])
@@ -862,12 +957,39 @@ class TestScheduler(TestCase):
         scheduler.fusion_would_materialize_disjoint_branches.assert_called_once_with(
             node1, node2, 1_000_000
         )
+        scheduler.fusion_would_collapse_large_chunked_inputs.assert_called_once_with(
+            node1, node2
+        )
+
+    @inductor_config.patch("allow_peak_memory_increasing_fusion", False)
+    def test_can_fuse_horizontal_blocks_large_chunked_input_collapse(self):
+        scheduler = Mock(spec=Scheduler)
+        scheduler.are_long_distant_nodes = Mock(return_value=False)
+        scheduler.fusion_would_collapse_large_chunked_inputs = Mock(return_value=True)
+        scheduler.fusion_would_materialize_disjoint_branches = Mock(return_value=False)
+        node1 = self._create_mock_node(name="node1", reads=["A"], writes=["B"])
+        node2 = self._create_mock_node(name="node2", reads=["C"], writes=["D"])
+
+        with patch(
+            "torch._inductor.choices.MixOrderReduction.can_fuse", return_value=False
+        ):
+            self.assertFalse(
+                InductorChoices.can_fuse_horizontal(
+                    scheduler, node1, node2, shared_data_score=1_000_000
+                )
+            )
+
+        scheduler.fusion_would_collapse_large_chunked_inputs.assert_called_once_with(
+            node1, node2
+        )
+        scheduler.fusion_would_materialize_disjoint_branches.assert_not_called()
 
     def test_can_fuse_horizontal_allows_peak_memory_increasing_fusion_when_configured(
         self,
     ):
         scheduler = Mock(spec=Scheduler)
         scheduler.are_long_distant_nodes = Mock(return_value=False)
+        scheduler.fusion_would_collapse_large_chunked_inputs = Mock(return_value=True)
         scheduler.fusion_would_materialize_disjoint_branches = Mock(return_value=True)
         node1 = self._create_mock_node(name="node1", reads=["A"], writes=["B"])
         node2 = self._create_mock_node(name="node2", reads=["A"], writes=["C"])
@@ -886,10 +1008,12 @@ class TestScheduler(TestCase):
             )
 
         scheduler.are_long_distant_nodes.assert_called_once_with(node1, node2)
+        scheduler.fusion_would_collapse_large_chunked_inputs.assert_not_called()
         scheduler.fusion_would_materialize_disjoint_branches.assert_not_called()
 
     def test_can_fuse_horizontal_keeps_mix_order_reduction_fast_path(self):
         scheduler = Mock(spec=Scheduler)
+        scheduler.fusion_would_collapse_large_chunked_inputs = Mock(return_value=True)
         scheduler.fusion_would_materialize_disjoint_branches = Mock(return_value=True)
         node1 = self._create_mock_node(name="node1", reads=["A"], writes=["B"])
         node2 = self._create_mock_node(name="node2", reads=["A"], writes=["C"])
@@ -904,6 +1028,7 @@ class TestScheduler(TestCase):
             )
 
         scheduler.fusion_would_materialize_disjoint_branches.assert_not_called()
+        scheduler.fusion_would_collapse_large_chunked_inputs.assert_not_called()
 
     @inductor_config.patch("allow_peak_memory_increasing_fusion", False)
     def test_reused_add_reaching_reduction_like_output_realizes(self):
@@ -1008,6 +1133,154 @@ class TestScheduler(TestCase):
             )
         )
 
+    @inductor_config.patch(
+        {
+            "allow_peak_memory_increasing_fusion": False,
+            "rematerialize_reused_reduction_pointwise": True,
+        }
+    )
+    def test_reused_add_reduction_rematerializes_when_enabled(self):
+        def fn(a, b, c):
+            add = torch.ops.aten.add.Tensor(a, b)
+            return add * c, add.sum(dim=1, keepdim=True)
+
+        gm = make_fx(fn)(torch.randn(4, 8), torch.randn(4, 8), torch.randn(4, 8))
+        add = next(n for n in gm.graph.nodes if n.target is torch.ops.aten.add.Tensor)
+        add.meta["val"] = torch.empty((4096, 4096), device="meta")
+
+        self.assertTrue(
+            GraphLowering._should_rematerialize_reused_pointwise_for_reduction(
+                add, self._create_reused_pointwise_result()
+            )
+        )
+
+    def test_reused_add_reduction_rematerialization_respects_configs(self):
+        def fn(a, b, c):
+            add = torch.ops.aten.add.Tensor(a, b)
+            return add * c, add.sum(dim=1, keepdim=True)
+
+        gm = make_fx(fn)(torch.randn(4, 8), torch.randn(4, 8), torch.randn(4, 8))
+        add = next(n for n in gm.graph.nodes if n.target is torch.ops.aten.add.Tensor)
+        add.meta["val"] = torch.empty((4096, 4096), device="meta")
+        result = self._create_reused_pointwise_result()
+
+        with inductor_config.patch("rematerialize_reused_reduction_pointwise", False):
+            self.assertFalse(
+                GraphLowering._should_rematerialize_reused_pointwise_for_reduction(
+                    add, result
+                )
+            )
+        with inductor_config.patch(
+            {
+                "allow_peak_memory_increasing_fusion": True,
+                "rematerialize_reused_reduction_pointwise": True,
+            }
+        ):
+            self.assertFalse(
+                GraphLowering._should_rematerialize_reused_pointwise_for_reduction(
+                    add, result
+                )
+            )
+
+    @inductor_config.patch(
+        {
+            "allow_peak_memory_increasing_fusion": False,
+            "rematerialize_reused_reduction_pointwise": True,
+        }
+    )
+    def test_reused_low_precision_cast_reduction_realizes(self):
+        def fn(a, b, c):
+            mul = torch.ops.aten.mul.Tensor(a, b)
+            cast = torch.ops.aten._to_copy.default(mul, dtype=torch.bfloat16)
+            return cast + c, cast.sum(dim=1, keepdim=True)
+
+        gm = make_fx(fn)(
+            torch.randn(4, 8),
+            torch.randn(4, 8),
+            torch.randn(4, 8, dtype=torch.bfloat16),
+        )
+        mul = next(n for n in gm.graph.nodes if n.target is torch.ops.aten.mul.Tensor)
+        cast = next(
+            n for n in gm.graph.nodes if n.target is torch.ops.aten._to_copy.default
+        )
+        mul.meta["val"] = torch.empty((4096, 4096), dtype=torch.float32, device="meta")
+        cast.meta["val"] = torch.empty(
+            (4096, 4096), dtype=torch.bfloat16, device="meta"
+        )
+
+        self.assertTrue(
+            GraphLowering._should_realize_reused_low_precision_cast_for_reduction(
+                cast, self._create_reused_pointwise_result()
+            )
+        )
+
+    @inductor_config.patch("allow_peak_memory_increasing_fusion", False)
+    def test_large_chunked_pointwise_add_realizes(self):
+        def fn(a, b, c):
+            return torch.ops.aten.add.Tensor(torch.ops.aten.add.Tensor(a, b), c)
+
+        gm = make_fx(fn)(torch.randn(4, 8), torch.randn(4, 8), torch.randn(4, 8))
+        add = next(n for n in gm.graph.nodes if n.target is torch.ops.aten.add.Tensor)
+        result = self._create_reused_pointwise_result(
+            read_buffers=["chunk0", "chunk1", "partial"]
+        )
+        chunk0 = self._mock_dep("chunk0")
+        chunk1 = self._mock_dep("chunk1")
+        partial = self._mock_dep("partial")
+        result.data.get_reads = Mock(return_value=OrderedSet([chunk0, chunk1, partial]))
+        graph = Mock()
+        graph.name = ""
+        graph.get_dep_size_hint = Mock(
+            side_effect=lambda dep: {
+                "chunk0": 128 * 1024 * 1024,
+                "chunk1": 128 * 1024 * 1024,
+                "partial": 256 * 1024 * 1024,
+            }[dep.name]
+        )
+
+        with V.set_graph_handler(graph):
+            self.assertTrue(
+                GraphLowering._should_realize_large_chunked_pointwise_add(add, result)
+            )
+
+    def test_large_chunked_pointwise_add_respects_peak_memory_config(self):
+        def fn(a, b):
+            return torch.ops.aten.add.Tensor(a, b)
+
+        gm = make_fx(fn)(torch.randn(4, 8), torch.randn(4, 8))
+        add = next(n for n in gm.graph.nodes if n.target is torch.ops.aten.add.Tensor)
+        result = self._create_reused_pointwise_result(read_buffers=["chunk0", "chunk1"])
+
+        with inductor_config.patch("allow_peak_memory_increasing_fusion", True):
+            self.assertFalse(
+                GraphLowering._should_realize_large_chunked_pointwise_add(add, result)
+            )
+
+    @inductor_config.patch("allow_peak_memory_increasing_fusion", False)
+    def test_large_chunked_pointwise_add_requires_same_sized_reads(self):
+        def fn(a, b):
+            return torch.ops.aten.add.Tensor(a, b)
+
+        gm = make_fx(fn)(torch.randn(4, 8), torch.randn(4, 8))
+        add = next(n for n in gm.graph.nodes if n.target is torch.ops.aten.add.Tensor)
+        result = self._create_reused_pointwise_result(read_buffers=["chunk0", "chunk1"])
+        chunk0 = self._mock_dep("chunk0")
+        chunk1 = self._mock_dep("chunk1")
+        result.data.get_reads = Mock(return_value=OrderedSet([chunk0, chunk1]))
+        graph = Mock()
+        graph.name = ""
+        graph.get_dep_size_hint = Mock(
+            side_effect=lambda dep: {
+                "chunk0": 128 * 1024 * 1024,
+                "chunk1": 64 * 1024 * 1024,
+            }[dep.name]
+        )
+
+        with V.set_graph_handler(graph):
+            self.assertFalse(
+                GraphLowering._should_realize_large_chunked_pointwise_add(add, result)
+            )
+
     @inductor_config.patch("allow_peak_memory_increasing_fusion", False)
     def test_reused_add_realization_unwraps_mutablebox(self):
         def fn(a, b, c):
@@ -1022,6 +1295,24 @@ class TestScheduler(TestCase):
         self.assertTrue(
             GraphLowering._should_realize_reused_pointwise_for_reduction(add, result)
         )
+
+    def test_reused_indirect_pointwise_realizes(self):
+        result = self._create_reused_pointwise_result(
+            used_ops=OrderedSet(["load", "indirect_indexing"]),
+            nontrivial_read_count=2,
+            read_buffers=["indices", "weight"],
+        )
+
+        self.assertTrue(result.data.should_realize_on_reuse(users=2))
+
+    def test_reused_indirect_pointwise_requires_multiple_nontrivial_reads(self):
+        result = self._create_reused_pointwise_result(
+            used_ops=OrderedSet(["load", "indirect_indexing"]),
+            nontrivial_read_count=1,
+            read_buffers=["indices", "weight"],
+        )
+
+        self.assertFalse(result.data.should_realize_on_reuse(users=2))
 
     def test_output_metadata_shrink_is_reduction_like_without_tag(self):
         graph = torch.fx.Graph()
@@ -1367,9 +1658,60 @@ class TestScheduler(TestCase):
             )
         )
 
+    def test_fusion_would_extend_large_inputs_prevents_fusion(self):
+        scheduler, producer, consumer = self._create_large_input_extension_scheduler(
+            input_size=128 * 1024 * 1024,
+            late_input_order=20,
+        )
+
+        self.assertTrue(
+            Scheduler.fusion_would_extend_large_inputs(
+                scheduler, producer, consumer, shared_data_score=4
+            )
+        )
+
+    def test_fusion_would_extend_large_inputs_requires_later_consumer_input(self):
+        scheduler, producer, consumer = self._create_large_input_extension_scheduler(
+            input_size=128 * 1024 * 1024,
+            late_input_order=0,
+        )
+
+        self.assertFalse(
+            Scheduler.fusion_would_extend_large_inputs(
+                scheduler, producer, consumer, shared_data_score=4
+            )
+        )
+
+    def test_fusion_would_extend_large_inputs_allows_shared_input_user(self):
+        scheduler, producer, consumer = self._create_large_input_extension_scheduler(
+            input_size=128 * 1024 * 1024,
+            late_input_order=20,
+            extra_input_user="other_user",
+        )
+
+        self.assertFalse(
+            Scheduler.fusion_would_extend_large_inputs(
+                scheduler, producer, consumer, shared_data_score=4
+            )
+        )
+
+    def test_fusion_would_extend_large_inputs_allows_small_inputs(self):
+        scheduler, producer, consumer = self._create_large_input_extension_scheduler(
+            input_size=1024,
+            late_input_order=20,
+        )
+
+        self.assertFalse(
+            Scheduler.fusion_would_extend_large_inputs(
+                scheduler, producer, consumer, shared_data_score=4
+            )
+        )
+
     @inductor_config.patch("allow_peak_memory_increasing_fusion", False)
     def test_can_fuse_vertical_blocks_late_output_materialization(self):
         scheduler = Mock(spec=Scheduler)
+        scheduler.fusion_would_extend_large_inputs = Mock(return_value=False)
+        scheduler.fusion_would_collapse_large_chunked_inputs = Mock(return_value=False)
         scheduler.fusion_would_materialize_late_outputs_from_shared_producer = Mock(
             return_value=True
         )
@@ -1383,11 +1725,68 @@ class TestScheduler(TestCase):
         )
         check = scheduler.fusion_would_materialize_late_outputs_from_shared_producer
         check.assert_called_once_with(node1, node2, 100)
+        scheduler.fusion_would_collapse_large_chunked_inputs.assert_called_once_with(
+            node1, node2
+        )
+
+    @inductor_config.patch("allow_peak_memory_increasing_fusion", False)
+    def test_can_fuse_vertical_blocks_large_input_extension(self):
+        scheduler = Mock(spec=Scheduler)
+        scheduler.fusion_would_extend_large_inputs = Mock(return_value=True)
+        scheduler.fusion_would_collapse_large_chunked_inputs = Mock(return_value=False)
+        scheduler.fusion_would_materialize_late_outputs_from_shared_producer = Mock(
+            return_value=False
+        )
+        node1 = self._create_mock_node(name="node1", reads=["A"], writes=["B"])
+        node2 = self._create_mock_node(name="node2", reads=["B"], writes=["C"])
+
+        self.assertFalse(
+            InductorChoices.can_fuse_vertical(
+                scheduler, node1, node2, shared_data_score=100
+            )
+        )
+        scheduler.fusion_would_extend_large_inputs.assert_called_once_with(
+            node1, node2, 100
+        )
+        late_output_guard = (
+            scheduler.fusion_would_materialize_late_outputs_from_shared_producer
+        )
+        late_output_guard.assert_not_called()
+        scheduler.fusion_would_collapse_large_chunked_inputs.assert_not_called()
+
+    @inductor_config.patch("allow_peak_memory_increasing_fusion", False)
+    def test_can_fuse_vertical_blocks_large_chunked_input_collapse(self):
+        scheduler = Mock(spec=Scheduler)
+        scheduler.fusion_would_extend_large_inputs = Mock(return_value=False)
+        scheduler.fusion_would_collapse_large_chunked_inputs = Mock(return_value=True)
+        scheduler.fusion_would_materialize_late_outputs_from_shared_producer = Mock(
+            return_value=False
+        )
+        node1 = self._create_mock_node(name="node1", reads=["A"], writes=["B"])
+        node2 = self._create_mock_node(name="node2", reads=["B"], writes=["C"])
+
+        self.assertFalse(
+            InductorChoices.can_fuse_vertical(
+                scheduler, node1, node2, shared_data_score=100
+            )
+        )
+        scheduler.fusion_would_extend_large_inputs.assert_called_once_with(
+            node1, node2, 100
+        )
+        scheduler.fusion_would_collapse_large_chunked_inputs.assert_called_once_with(
+            node1, node2
+        )
+        late_output_guard = (
+            scheduler.fusion_would_materialize_late_outputs_from_shared_producer
+        )
+        late_output_guard.assert_not_called()
 
     def test_can_fuse_vertical_allows_peak_memory_increasing_fusion_when_configured(
         self,
     ):
         scheduler = Mock(spec=Scheduler)
+        scheduler.fusion_would_extend_large_inputs = Mock(return_value=True)
+        scheduler.fusion_would_collapse_large_chunked_inputs = Mock(return_value=True)
         scheduler.fusion_would_materialize_late_outputs_from_shared_producer = Mock(
             return_value=True
         )
@@ -1401,8 +1800,12 @@ class TestScheduler(TestCase):
                 )
             )
 
-        check = scheduler.fusion_would_materialize_late_outputs_from_shared_producer
-        check.assert_not_called()
+        scheduler.fusion_would_extend_large_inputs.assert_not_called()
+        scheduler.fusion_would_collapse_large_chunked_inputs.assert_not_called()
+        late_output_guard = (
+            scheduler.fusion_would_materialize_late_outputs_from_shared_producer
+        )
+        late_output_guard.assert_not_called()
 
     def test_wrapper_reuse_uses_active_peak_limit(self):
         alloc_line, free_line, graph = self._create_wrapper_reuse_test_lines(
@@ -1578,19 +1981,36 @@ class TestScheduler(TestCase):
         )
 
     def _create_reused_pointwise_result(
-        self, nontrivial_read_count: int = 2
+        self,
+        nontrivial_read_count: int = 2,
+        used_ops=None,
+        read_buffers: list[str] | None = None,
+        num_ops: int = 0,
     ) -> ir.TensorBox:
-        pointwise = self._create_mock_pointwise_result(nontrivial_read_count)
+        pointwise = self._create_mock_pointwise_result(
+            nontrivial_read_count, used_ops, read_buffers, num_ops
+        )
         return ir.TensorBox(ir.StorageBox(pointwise))
 
     def _create_mock_pointwise_result(
-        self, nontrivial_read_count: int = 2
+        self,
+        nontrivial_read_count: int = 2,
+        used_ops=None,
+        read_buffers: list[str] | None = None,
+        num_ops: int = 0,
     ) -> ir.Pointwise:
         pointwise = object.__new__(ir.Pointwise)
+        object.__setattr__(pointwise, "device", torch.device("cuda"))
+        opcount = Mock(
+            nontrivial_read_count=nontrivial_read_count,
+            num_ops=num_ops,
+            used_ops=used_ops or OrderedSet(),
+            read_buffers=read_buffers or [],
+        )
         object.__setattr__(
             pointwise,
             "inner_fn_opcount",
-            Mock(return_value=Mock(nontrivial_read_count=nontrivial_read_count)),
+            Mock(return_value=opcount),
         )
         return pointwise
 
@@ -1673,7 +2093,9 @@ class TestScheduler(TestCase):
         return user
 
     def _create_wrapper_reuse_test_lines(
-        self, overall_peak_memory: int, peak_between: int
+        self,
+        overall_peak_memory: int,
+        peak_between: int,
     ) -> tuple[object, object, Mock]:
         nodes = [Mock(region="region"), Mock(region="region"), Mock(region="region")]
         scheduler = Mock()
@@ -1806,9 +2228,7 @@ class TestScheduler(TestCase):
             Scheduler._materialized_external_outputs.__get__(scheduler, Scheduler)
         )
         scheduler._materialized_external_output_orders = (
-            Scheduler._materialized_external_output_orders.__get__(
-                scheduler, Scheduler
-            )
+            Scheduler._materialized_external_output_orders.__get__(scheduler, Scheduler)
         )
         scheduler._output_node_order = Scheduler._output_node_order.__get__(
             scheduler, Scheduler
@@ -1846,15 +2266,130 @@ class TestScheduler(TestCase):
         producer.min_order = 0
         producer.max_order = 0
         consumer.min_order = (
-            producer_other_user_order + 1
-            if consumer_order is None
-            else consumer_order
+            producer_other_user_order + 1 if consumer_order is None else consumer_order
         )
         consumer.max_order = consumer.min_order
         scheduler.nodes = [producer, consumer, *scheduler.name_to_fused_node.values()]
         producer.get_operation_names = Mock(return_value=OrderedSet(["producer_op"]))
         consumer.ancestors = OrderedSet(["producer_op"])
         return scheduler, producer, consumer
+
+    def _create_large_input_extension_scheduler(
+        self,
+        input_size: int,
+        late_input_order: int,
+        extra_input_user: str | None = None,
+    ) -> tuple[Mock, Mock, Mock]:
+        scheduler = Mock(spec=Scheduler)
+        scheduler.mutation_renames = {}
+        scheduler.dep_size_hint = Mock(
+            side_effect=lambda dep: {
+                "large_input": input_size,
+                "producer_output": 4,
+                "late_input": 4,
+            }[dep.name]
+        )
+
+        producer = self._create_mock_node(
+            name="producer", reads=["large_input"], writes=["producer_output"]
+        )
+        consumer = self._create_mock_node(
+            name="consumer", reads=["producer_output", "late_input"], writes=["out"]
+        )
+        producer.min_order = 10
+        producer.max_order = 10
+        consumer.min_order = 30
+        consumer.max_order = 30
+        producer.get_operation_names = Mock(return_value=OrderedSet(["producer_op"]))
+        consumer.ancestors = OrderedSet(["producer_op"])
+
+        input_users = [self._mock_buffer_user("producer", node=producer)]
+        if extra_input_user is not None:
+            input_users.append(self._mock_buffer_user(extra_input_user, order=25))
+
+        late_input_producer = Mock(spec=BaseSchedulerNode)
+        late_input_producer.get_name = Mock(return_value="late_input_producer")
+        late_input_producer.max_order = late_input_order
+
+        large_input_buf = Mock()
+        large_input_buf.defining_op = None
+        large_input_buf.users = input_users
+
+        late_input_buf = Mock()
+        late_input_buf.defining_op = late_input_producer
+        late_input_buf.users = [self._mock_buffer_user("consumer", node=consumer)]
+
+        scheduler.name_to_buf = {
+            "large_input": large_input_buf,
+            "late_input": late_input_buf,
+        }
+        return scheduler, producer, consumer
+
+    def _create_chunked_input_scheduler(
+        self,
+        input_size: int,
+        extra_chunk_user: str | None = None,
+        same_reuse_key: bool = True,
+        mutation_renamed: bool = False,
+    ) -> tuple[Mock, Mock, Mock]:
+        scheduler = Mock(spec=Scheduler)
+        chunk_reads = [
+            f"chunk{i}_alias" if mutation_renamed else f"chunk{i}" for i in range(4)
+        ]
+        scheduler.mutation_renames = (
+            {f"chunk{i}_alias": f"chunk{i}" for i in range(4)}
+            if mutation_renamed
+            else {}
+        )
+        scheduler.mutation_real_name = (
+            {f"chunk{i}": f"chunk{i}_alias" for i in range(4)}
+            if mutation_renamed
+            else {}
+        )
+        scheduler.dep_size_hint = Mock(
+            side_effect=lambda dep: dict.fromkeys(chunk_reads, input_size)[dep.name]
+        )
+
+        node1 = self._create_mock_node(
+            name="node1", reads=chunk_reads[:2], writes=["tmp"]
+        )
+        node2 = self._create_mock_node(
+            name="node2", reads=["tmp", *chunk_reads[2:]], writes=["out"]
+        )
+
+        def make_chunk_buffer(
+            name: str,
+            order: int,
+            user_node: Mock,
+            reuse_key: object,
+        ) -> Mock:
+            producer = Mock(spec=BaseSchedulerNode)
+            producer.max_order = order
+            storage = Mock()
+            storage.has_tensor_output = Mock(return_value=True)
+            storage.reuse_key = reuse_key
+            storage.get_device = Mock(return_value=torch.device("cuda:0"))
+            storage.get_dtype = Mock(return_value=torch.bfloat16)
+
+            buf = Mock()
+            buf.defining_op = producer
+            buf.node = storage
+            buf.users = [self._mock_buffer_user(user_node.get_name(), node=user_node)]
+            if extra_chunk_user is not None and name in {"chunk0", "chunk1"}:
+                buf.users.append(self._mock_buffer_user(extra_chunk_user, order=30))
+            return buf
+
+        scheduler.name_to_buf = {}
+        for i in range(4):
+            user_node = node1 if i < 2 else node2
+            reuse_group = "same" if same_reuse_key or i < 2 else "different"
+            scheduler.name_to_buf[f"chunk{i}"] = make_chunk_buffer(
+                f"chunk{i}",
+                i * 10,
+                user_node,
+                ("dev", "dtype", reuse_group, True, i),
+            )
+        return scheduler, node1, node2
 
     def _create_materialized_output_scheduler(
         self,

@@ -10413,6 +10413,23 @@ class StorageBox(MutableBox):
             and max_size == min_size
         )
 
+    def has_large_same_sized_freeable_reads(
+        self, *, min_count: int, min_size: int
+    ) -> bool:
+        from torch._inductor.utils import is_nonfreeable_buffers
+
+        counts: dict[int, int] = {}
+        for dep in self.get_reads():
+            if is_nonfreeable_buffers(dep):
+                continue
+            size = V.graph.get_dep_size_hint(dep)
+            if size <= min_size:
+                continue
+            counts[size] = counts.get(size, 0) + 1
+            if counts[size] >= min_count:
+                return True
+        return False
+
     def has_exceeded_max_reads(self) -> bool:
         realize_acc_reads_threshold = config.realize_acc_reads_threshold
         if realize_acc_reads_threshold is None:
@@ -10444,9 +10461,9 @@ class StorageBox(MutableBox):
         that is used multiple times.
         """
         if users > 1 and isinstance(self.data, (Pointwise, Reduction)):
+            opcount = self.data.inner_fn_opcount()
             if is_cpu(self.data):
                 # Heuristic for realizing reused result of heavy ops on cpu
-                opcount = self.data.inner_fn_opcount()
                 heavy_ops = [
                     "exp",
                     "log",
@@ -10466,9 +10483,19 @@ class StorageBox(MutableBox):
                     and opcount.num_ops > max(0, realize_threshold - 2)
                 ):
                     return True
+            if (
+                isinstance(self.data, Pointwise)
+                and graph_reuse
+                and "indirect_indexing" in opcount.used_ops
+                and opcount.nontrivial_read_count > 1
+            ):
+                return True
             if self.has_large_inner_fn():
                 return True
-            return graph_reuse and self.num_reads() > config.realize_reads_threshold
+            return (
+                graph_reuse
+                and len(opcount.read_buffers) > config.realize_reads_threshold
+            )
         return False
 
     def mark_reuse(self, users: int, *, graph_reuse: bool = True) -> None:

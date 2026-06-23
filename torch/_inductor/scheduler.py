@@ -6889,6 +6889,113 @@ class Scheduler:
 
         return len(unique_io_buffers) > threshold
 
+    def fusion_would_collapse_large_chunked_inputs(
+        self, node1: BaseSchedulerNode, node2: BaseSchedulerNode
+    ) -> bool:
+        """Return true when fusion would join chunked large inputs back together."""
+        if (
+            node1.is_reduction()
+            or node2.is_reduction()
+            or node1.is_template()
+            or node2.is_template()
+        ):
+            return False
+
+        from .codegen.wrapper import buffer_reuse_key
+
+        fused_node_names = OrderedSet(
+            [node1.get_name(), node2.get_name()]
+            + [node.get_name() for node in node1.get_nodes()]
+            + [node.get_name() for node in node2.get_nodes()]
+        )
+        fused_write_names = OrderedSet(
+            self.mutation_renames.get(write.name, write.name)
+            for node in itertools.chain(node1.get_nodes(), node2.get_nodes())
+            for write in node.read_writes.writes
+        )
+        # Large same-shaped temporary inputs produced at different points are
+        # often deliberate chunks. Fusing their consumers into one fan-in kernel
+        # keeps every chunk live until the final chunk is available, undoing the
+        # lower peak memory that chunking was meant to provide.
+        read_counts_by_reuse_key: defaultdict[Any, int] = defaultdict(int)
+        seen_reads: OrderedSet[str] = OrderedSet()
+        for read in itertools.chain(node1.read_writes.reads, node2.read_writes.reads):
+            read_name = self.mutation_renames.get(read.name, read.name)
+            if read_name in seen_reads or read_name in fused_write_names:
+                continue
+            seen_reads.add(read_name)
+
+            # Mutation-renamed reads are still physical inputs whose live ranges
+            # can be stretched by a fan-in fusion. Keep them visible to this
+            # anti-fusion heuristic so we do not undo chunking that was meant to
+            # lower peak memory. The canonical name and seen_reads avoid
+            # double-counting aliases.
+            dep_name = read_name
+            graph_name = getattr(V.graph, "name", None)
+            if graph_name:
+                dep_name = dep_name.removeprefix(graph_name + "_")
+            if dep_name.startswith(
+                ("primals_", "arg", "fwd_rng_state", "bwd_rng_state", "tangents")
+            ):
+                continue
+
+            buf = self.name_to_buf.get(read_name)
+            if buf is not None and any(
+                not user.is_weak and user.get_name() not in fused_node_names
+                for user in buf.users
+            ):
+                continue
+
+            input_bytes = self.dep_size_hint(read)
+            if buf is not None:
+                try:
+                    storage_size = V.graph.get_allocation_storage_size(buf.node)
+                    input_bytes = V.graph.sizevars.optimization_hint(
+                        storage_size, fallback=0
+                    ) * get_dtype_size(buf.node.get_dtype())
+                except (
+                    AssertionError,
+                    AttributeError,
+                    NotImplementedError,
+                    TypeError,
+                    ValueError,
+                ):
+                    pass
+            if input_bytes <= config.small_memory_access_threshold:
+                continue
+
+            try:
+                # Ignore stream assignment here. Chunks may be produced on
+                # different streams, but fusing their consumers still forces all
+                # same-sized chunks to stay live at the same point.
+                if buf is None:
+                    raise NotImplementedError
+                reuse_key = buffer_reuse_key(buf.node)[:-1]
+            except (AssertionError, AttributeError, NotImplementedError, ValueError):
+                # Opaque extern outputs may not have a normal allocation layout
+                # yet. Still group them conservatively by the visible access
+                # shape so fusion does not undo chunking meant to lower peak
+                # memory.
+                try:
+                    dtype = None if buf is None else buf.node.get_dtype()
+                except (AssertionError, AttributeError, NotImplementedError):
+                    dtype = None
+                try:
+                    device = None if buf is None else buf.node.get_device()
+                except (AssertionError, AttributeError, NotImplementedError):
+                    device = None
+                reuse_key = ("large_chunked_input", device, dtype, input_bytes)
+
+            read_counts_by_reuse_key[reuse_key] += 1
+
+        for read_count in read_counts_by_reuse_key.values():
+            # Combining two large chunks is the intended local chunk operation.
+            # Fusing past that boundary starts stitching chunk operations back
+            # together, which is exactly the pattern that undoes chunking.
+            if read_count >= 3:
+                return True
+        return False
+
     def fusion_would_materialize_disjoint_branches(
         self,
         node1: BaseSchedulerNode,
@@ -7091,6 +7198,64 @@ class Scheduler:
                     _,
                     later_users,
                 ) in materialized_outputs
+            ):
+                return True
+        return False
+
+    def fusion_would_extend_large_inputs(
+        self,
+        producer: BaseSchedulerNode,
+        consumer: BaseSchedulerNode,
+        shared_data_score: int,
+    ) -> bool:
+        if (
+            shared_data_score <= 0
+            or producer.is_template()
+            or consumer.is_template()
+            or not (producer.get_operation_names() & consumer.ancestors)
+        ):
+            return False
+
+        fused_node_names = OrderedSet(
+            [node.get_name() for node in producer.get_nodes()]
+            + [node.get_name() for node in consumer.get_nodes()]
+        )
+        producer_write_names = OrderedSet(
+            self.mutation_renames.get(write.name, write.name)
+            for write in producer.read_writes.writes
+        )
+
+        has_later_consumer_input = False
+        for read in consumer.read_writes.reads:
+            read_name = self.mutation_renames.get(read.name, read.name)
+            if read_name in producer_write_names:
+                continue
+            buf = self.name_to_buf.get(read_name)
+            if buf is None or buf.defining_op is None:
+                continue
+            if buf.defining_op.max_order > producer.max_order:
+                has_later_consumer_input = True
+                break
+        if not has_later_consumer_input:
+            return False
+
+        for read in producer.read_writes.reads:
+            read_name = self.mutation_renames.get(read.name, read.name)
+            buf = self.name_to_buf.get(read_name)
+            if buf is None or any(
+                not user.is_weak and user.get_name() not in fused_node_names
+                for user in buf.users
+            ):
+                continue
+            if read_name in self.mutation_renames or read_name in getattr(
+                self, "mutation_real_name", {}
+            ):
+                continue
+
+            input_bytes = self.dep_size_hint(read)
+            if (
+                input_bytes > config.small_memory_access_threshold
+                and input_bytes >= shared_data_score
             ):
                 return True
         return False

@@ -481,7 +481,7 @@ class MemoryPlanningState:
     def get_best(
         self,
         key: ReuseKey,
-        key_fn: Callable[[FreeIfNotReusedLine], object],
+        key_fn: Callable[[FreeIfNotReusedLine], tuple[bool, int, int]],
         *,
         max_candidates: int | None = None,
     ) -> tuple[int, FreeIfNotReusedLine]:
