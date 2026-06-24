@@ -893,6 +893,7 @@ class TestScheduler(TestCase):
     def test_can_fuse_blocks_cross_extern_branch_materialization(self):
         scheduler = Mock(spec=Scheduler)
         scheduler.can_fusion_increase_peak_memory = Mock(return_value=False)
+        scheduler.fusion_would_raise_peak_by_memory_curve = Mock(return_value=False)
         scheduler.fusion_would_materialize_outputs_across_extern_branch = Mock(
             return_value=True
         )
@@ -905,9 +906,28 @@ class TestScheduler(TestCase):
         check.assert_called_once_with(node1, node2)
 
     @inductor_config.patch("allow_peak_memory_increasing_fusion", False)
+    def test_can_fuse_blocks_peak_memory_curve_increase(self):
+        scheduler = Mock(spec=Scheduler)
+        scheduler.can_fusion_increase_peak_memory = Mock(return_value=False)
+        scheduler.fusion_would_raise_peak_by_memory_curve = Mock(return_value=True)
+        scheduler.fusion_would_materialize_outputs_across_extern_branch = Mock(
+            return_value=False
+        )
+        node1 = self._create_mock_node(name="node1", reads=["A"], writes=["B"])
+        node2 = self._create_mock_node(name="node2", reads=["B"], writes=["C"])
+
+        self.assertFalse(InductorChoices.can_fuse(scheduler, node1, node2, 1))
+
+        scheduler.fusion_would_raise_peak_by_memory_curve.assert_called_once_with(
+            node1, node2
+        )
+        scheduler.fusion_would_materialize_outputs_across_extern_branch.assert_not_called()
+
+    @inductor_config.patch("allow_peak_memory_increasing_fusion", False)
     def test_can_fuse_blocks_large_chunked_input_collapse(self):
         scheduler = Mock(spec=Scheduler)
         scheduler.can_fusion_increase_peak_memory = Mock(return_value=False)
+        scheduler.fusion_would_raise_peak_by_memory_curve = Mock(return_value=False)
         scheduler.fusion_would_materialize_outputs_across_extern_branch = Mock(
             return_value=False
         )
@@ -1280,6 +1300,17 @@ class TestScheduler(TestCase):
             self.assertFalse(
                 GraphLowering._should_realize_large_chunked_pointwise_add(add, result)
             )
+
+    def test_no_fuse_boundary_records_realized_name(self):
+        graph = Mock()
+        graph.no_fuse_buffer_names = OrderedSet()
+        result = Mock(spec=ir.TensorBox)
+        result.realize = Mock(return_value="buf0")
+
+        with V.set_graph_handler(graph):
+            GraphLowering._realize_as_no_fuse_boundary(result)
+
+        self.assertEqual(graph.no_fuse_buffer_names, OrderedSet(["buf0"]))
 
     @inductor_config.patch("allow_peak_memory_increasing_fusion", False)
     def test_reused_add_realization_unwraps_mutablebox(self):
@@ -1707,6 +1738,86 @@ class TestScheduler(TestCase):
             )
         )
 
+    def _create_peak_curve_scheduler(
+        self, *, mid_size: int
+    ) -> tuple[Scheduler, Mock, Mock]:
+        def make_buffer(name: str, size: int) -> Mock:
+            buf = Mock()
+            buf.get_name = Mock(return_value=name)
+            buf.node = Mock()
+            buf.node.get_numel = Mock(return_value=size)
+            buf.node.get_dtype = Mock(return_value=torch.uint8)
+            return buf
+
+        def make_node(
+            name: str, order: int, reads: list[str], writes: dict[str, int]
+        ) -> Mock:
+            node = self._create_mock_node(name=name, reads=reads, writes=list(writes))
+            node.min_order = order
+            node.max_order = order
+            node.get_outputs = Mock(
+                return_value=[
+                    make_buffer(buf_name, buf_size)
+                    for buf_name, buf_size in writes.items()
+                ]
+            )
+            return node
+
+        large_prod = make_node("large_prod", 0, [], {"large_input": 100})
+        producer = make_node("producer", 1, ["large_input"], {"mid": mid_size})
+        peak = make_node("peak", 2, [], {"peak_tmp": 1000})
+        consumer = make_node("consumer", 3, ["mid"], {"out": 1})
+
+        scheduler = Scheduler.__new__(Scheduler)
+        scheduler.nodes = [large_prod, producer, peak, consumer]
+        scheduler._fusion_peak_nodes = OrderedSet(scheduler.nodes)
+        scheduler.mutation_renames = {}
+        scheduler.dep_size_hint = Mock(
+            side_effect=lambda dep: {
+                "large_input": 100,
+                "mid": mid_size,
+            }.get(dep.name, 1)
+        )
+        return scheduler, producer, consumer
+
+    @inductor_config.patch("small_memory_access_threshold", 16)
+    def test_fusion_memory_curve_blocks_peak_increase(self):
+        scheduler, producer, consumer = self._create_peak_curve_scheduler(mid_size=1)
+
+        def size_hint(value, fallback=0):
+            return value
+
+        graph = Mock()
+        graph.get_output_names = Mock(return_value=[])
+        graph.get_allocation_storage_size = Mock(side_effect=NotImplementedError)
+        graph.sizevars = Mock()
+        graph.sizevars.optimization_hint = Mock(side_effect=size_hint)
+        with V.set_graph_handler(graph):
+            self.assertTrue(
+                Scheduler.fusion_would_raise_peak_by_memory_curve(
+                    scheduler, producer, consumer
+                )
+            )
+
+    @inductor_config.patch("small_memory_access_threshold", 16)
+    def test_fusion_memory_curve_allows_peak_neutral_tradeoff(self):
+        scheduler, producer, consumer = self._create_peak_curve_scheduler(mid_size=2000)
+
+        def size_hint(value, fallback=0):
+            return value
+
+        graph = Mock()
+        graph.get_output_names = Mock(return_value=[])
+        graph.get_allocation_storage_size = Mock(side_effect=NotImplementedError)
+        graph.sizevars = Mock()
+        graph.sizevars.optimization_hint = Mock(side_effect=size_hint)
+        with V.set_graph_handler(graph):
+            self.assertFalse(
+                Scheduler.fusion_would_raise_peak_by_memory_curve(
+                    scheduler, producer, consumer
+                )
+            )
+
     @inductor_config.patch("allow_peak_memory_increasing_fusion", False)
     def test_can_fuse_vertical_blocks_late_output_materialization(self):
         scheduler = Mock(spec=Scheduler)
@@ -1753,6 +1864,39 @@ class TestScheduler(TestCase):
         )
         late_output_guard.assert_not_called()
         scheduler.fusion_would_collapse_large_chunked_inputs.assert_not_called()
+
+    @inductor_config.patch("small_memory_access_threshold", 16)
+    def test_fusion_would_extend_large_inputs_keeps_mutation_aliases(self):
+        scheduler = Mock(spec=Scheduler)
+        scheduler.mutation_renames = {}
+        scheduler.mutation_real_name = {"state": "state"}
+        scheduler.dep_size_hint = Mock(
+            side_effect=lambda dep: {"state": 200, "mid": 1, "later": 200}[dep.name]
+        )
+
+        state_buf = self._create_mock_buffer_users(["producer"])
+        later_buf = self._create_mock_buffer_users(["consumer"])
+        later_buf.defining_op = Mock(max_order=2)
+        scheduler.name_to_buf = {
+            "state": state_buf,
+            "later": later_buf,
+        }
+
+        producer = self._create_mock_node(
+            name="producer", reads=["state"], writes=["mid"]
+        )
+        producer.max_order = 1
+        producer.get_operation_names = Mock(return_value=OrderedSet(["producer"]))
+        consumer = self._create_mock_node(
+            name="consumer", reads=["mid", "later"], writes=["out"]
+        )
+        consumer.ancestors = OrderedSet(["producer"])
+
+        self.assertTrue(
+            Scheduler.fusion_would_extend_large_inputs(
+                scheduler, producer, consumer, shared_data_score=100
+            )
+        )
 
     @inductor_config.patch("allow_peak_memory_increasing_fusion", False)
     def test_can_fuse_vertical_blocks_large_chunked_input_collapse(self):

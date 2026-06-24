@@ -169,6 +169,14 @@ class _LocalEntry(NamedTuple):
     node: BaseSchedulerNode
 
 
+class _FusionPeakBufferInfo(NamedTuple):
+    size: int
+    start: int
+    end: int
+    readers: OrderedSet[BaseSchedulerNode]
+    is_graph_output: bool
+
+
 @dataclasses.dataclass(slots=True)
 class ComboKernelMemoryContext:
     """Shared state used by the memory-aware combo gate.
@@ -4223,6 +4231,15 @@ class Scheduler:
         self.create_foreach_nodes()
         self.nodes = self.topological_sort_schedule(self.nodes)
         self.logged_slow_fusion = OrderedSet[tuple[str, str]]()
+        self._fusion_peak_nodes: OrderedSet[BaseSchedulerNode] | None = None
+        self._fusion_peak_curve_cache: (
+            tuple[
+                tuple[BaseSchedulerNode, ...],
+                list[int],
+                dict[str, _FusionPeakBufferInfo],
+            ]
+            | None
+        ) = None
         if config._pre_fusion_custom_pass is not None:
             self.nodes = config._pre_fusion_custom_pass(self.nodes)
 
@@ -6297,27 +6314,37 @@ class Scheduler:
                 possible_fusions, deferred_prologue_fusions
             )
 
-        self._try_fusion_pairs(
-            possible_fusions,
-            pending_fusions,
-            template_fusion_nodes,
-            fused_nodes,
-            is_reorder_round,
-        )
-        self._finish_pending_fusions(fused_nodes, pending_fusions)
-
-        self._evaluate_pending_template_fusions(template_fusion_nodes, fused_nodes)
-        template_fusion_nodes.clear()
-
-        if deferred_prologue_fusions:
+        old_fusion_peak_nodes = self._fusion_peak_nodes
+        old_fusion_peak_curve_cache = self._fusion_peak_curve_cache
+        self._fusion_peak_nodes = fused_nodes
+        self._fusion_peak_curve_cache = None
+        try:
             self._try_fusion_pairs(
-                deferred_prologue_fusions,
+                possible_fusions,
                 pending_fusions,
                 template_fusion_nodes,
                 fused_nodes,
                 is_reorder_round,
             )
+            self._finish_pending_fusions(fused_nodes, pending_fusions)
+
             self._evaluate_pending_template_fusions(template_fusion_nodes, fused_nodes)
+            template_fusion_nodes.clear()
+
+            if deferred_prologue_fusions:
+                self._try_fusion_pairs(
+                    deferred_prologue_fusions,
+                    pending_fusions,
+                    template_fusion_nodes,
+                    fused_nodes,
+                    is_reorder_round,
+                )
+                self._evaluate_pending_template_fusions(
+                    template_fusion_nodes, fused_nodes
+                )
+        finally:
+            self._fusion_peak_nodes = old_fusion_peak_nodes
+            self._fusion_peak_curve_cache = old_fusion_peak_curve_cache
 
         nodes = sorted(fused_nodes, key=lambda x: x.min_order)
         nodes = self.topological_sort_schedule(nodes)
@@ -6913,6 +6940,7 @@ class Scheduler:
             for node in itertools.chain(node1.get_nodes(), node2.get_nodes())
             for write in node.read_writes.writes
         )
+
         # Large same-shaped temporary inputs produced at different points are
         # often deliberate chunks. Fusing their consumers into one fan-in kernel
         # keeps every chunk live until the final chunk is available, undoing the
@@ -7138,6 +7166,231 @@ class Scheduler:
                 outputs.append((output_bytes, snode.max_order, user_orders, users))
         return outputs
 
+    def _ordered_fusion_peak_nodes(self) -> tuple[BaseSchedulerNode, ...]:
+        nodes = list(getattr(self, "_fusion_peak_nodes", None) or self.nodes)
+        return tuple(
+            sorted(nodes, key=lambda n: (n.min_order, n.max_order, n.get_name()))
+        )
+
+    def _fusion_graph_outputs(self) -> OrderedSet[str]:
+        try:
+            return OrderedSet(V.graph.get_output_names())
+        except Exception:
+            return OrderedSet()
+
+    def _fusion_buffer_size_hint(self, buf: SchedulerBuffer) -> int:
+        try:
+            storage_size = V.graph.get_allocation_storage_size(buf.node)
+            numel = V.graph.sizevars.optimization_hint(storage_size, fallback=0)
+            return int(numel) * get_dtype_size(buf.node.get_dtype())
+        except Exception:
+            pass
+
+        try:
+            numel = V.graph.sizevars.optimization_hint(buf.node.get_numel(), fallback=0)
+            return int(numel) * get_dtype_size(buf.node.get_dtype())
+        except Exception:
+            return 0
+
+    def _fusion_peak_buffer_infos(
+        self, nodes: tuple[BaseSchedulerNode, ...]
+    ) -> tuple[list[int], dict[str, _FusionPeakBufferInfo]]:
+        node_to_step = {node: step for step, node in enumerate(nodes)}
+        graph_outputs = self._fusion_graph_outputs()
+        read_users: dict[str, OrderedSet[BaseSchedulerNode]] = defaultdict(OrderedSet)
+        read_sizes: dict[str, int] = defaultdict(int)
+
+        for node in nodes:
+            for read in node.read_writes.reads:
+                read_name = self.mutation_renames.get(read.name, read.name)
+                read_users[read_name].add(node)
+                try:
+                    read_sizes[read_name] = max(
+                        read_sizes[read_name], int(self.dep_size_hint(read))
+                    )
+                except Exception:
+                    pass
+
+        buffer_infos: dict[str, _FusionPeakBufferInfo] = {}
+
+        def add_info(
+            name: str,
+            size: int,
+            start: int,
+            readers: OrderedSet[BaseSchedulerNode],
+            is_graph_output: bool,
+        ) -> None:
+            if size <= 0 or not (0 <= start < len(nodes)):
+                return
+            end = max((node_to_step[user] for user in readers), default=start)
+            if is_graph_output:
+                end = max(end, len(nodes) - 1)
+            prev = buffer_infos.get(name)
+            if prev is not None:
+                start = min(start, prev.start)
+                end = max(end, prev.end)
+                size = max(size, prev.size)
+                readers = prev.readers | readers
+                is_graph_output = is_graph_output or prev.is_graph_output
+            buffer_infos[name] = _FusionPeakBufferInfo(
+                size=size,
+                start=start,
+                end=end,
+                readers=readers,
+                is_graph_output=is_graph_output,
+            )
+
+        for node in nodes:
+            start = node_to_step[node]
+            for buf in node.get_outputs():
+                name = self.mutation_renames.get(buf.get_name(), buf.get_name())
+                add_info(
+                    name,
+                    self._fusion_buffer_size_hint(buf),
+                    start,
+                    read_users.get(name, OrderedSet()),
+                    name in graph_outputs,
+                )
+
+        for name, readers in read_users.items():
+            if name in buffer_infos:
+                continue
+            add_info(name, read_sizes[name], 0, readers, name in graph_outputs)
+
+        delta = [0] * (len(nodes) + 1)
+        for info in buffer_infos.values():
+            delta[info.start] += info.size
+            if info.end + 1 < len(delta):
+                delta[info.end + 1] -= info.size
+
+        curve: list[int] = []
+        current = 0
+        for step in range(len(nodes)):
+            current += delta[step]
+            curve.append(current)
+        return curve, buffer_infos
+
+    def _fusion_peak_curve_and_buffer_infos(
+        self, nodes: tuple[BaseSchedulerNode, ...]
+    ) -> tuple[list[int], dict[str, _FusionPeakBufferInfo]]:
+        cache = getattr(self, "_fusion_peak_curve_cache", None)
+        if cache is not None and cache[0] == nodes:
+            return cache[1], cache[2]
+
+        curve, buffer_infos = self._fusion_peak_buffer_infos(nodes)
+        self._fusion_peak_curve_cache = (nodes, curve, buffer_infos)
+        return curve, buffer_infos
+
+    @staticmethod
+    def _add_fusion_interval_delta(
+        deltas: list[tuple[int, int, int]],
+        start: int,
+        end: int,
+        size: int,
+        num_steps: int,
+    ) -> None:
+        if size == 0:
+            return
+        start = max(start, 0)
+        end = min(end, num_steps - 1)
+        if start <= end:
+            deltas.append((start, end, size))
+
+    @staticmethod
+    def _peak_after_fusion_interval_deltas(
+        curve: list[int], deltas: list[tuple[int, int, int]]
+    ) -> int:
+        if not curve:
+            return 0
+        delta_curve = [0] * (len(curve) + 1)
+        for start, end, size in deltas:
+            delta_curve[start] += size
+            if end + 1 < len(delta_curve):
+                delta_curve[end + 1] -= size
+        current_delta = 0
+        new_peak = 0
+        for step, value in enumerate(curve):
+            current_delta += delta_curve[step]
+            new_peak = max(new_peak, value + current_delta)
+        return new_peak
+
+    def fusion_would_raise_peak_by_memory_curve(
+        self,
+        node1: BaseSchedulerNode,
+        node2: BaseSchedulerNode,
+    ) -> bool:
+        if node1.is_template() or node2.is_template():
+            return False
+
+        nodes = self._ordered_fusion_peak_nodes()
+        if node1 not in nodes or node2 not in nodes:
+            return False
+
+        curve, buffer_infos = self._fusion_peak_curve_and_buffer_infos(nodes)
+        if not curve:
+            return False
+
+        old_peak = max(curve)
+        if old_peak <= 0:
+            return False
+
+        node_to_step = {node: step for step, node in enumerate(nodes)}
+        fused_step = max(node_to_step[node1], node_to_step[node2])
+        candidate_nodes = OrderedSet([node1, node2])
+        candidate_outputs = OrderedSet(
+            self.mutation_renames.get(buf.get_name(), buf.get_name())
+            for node in candidate_nodes
+            for buf in node.get_outputs()
+        )
+        deltas: list[tuple[int, int, int]] = []
+        min_size = config.small_memory_access_threshold
+
+        for name, info in buffer_infos.items():
+            if info.size <= min_size:
+                continue
+
+            if name in candidate_outputs:
+                external_read_steps = [
+                    node_to_step[user]
+                    for user in info.readers
+                    if user not in candidate_nodes
+                ]
+                if info.is_graph_output:
+                    external_read_steps.append(len(nodes) - 1)
+
+                self._add_fusion_interval_delta(
+                    deltas, info.start, info.end, -info.size, len(nodes)
+                )
+                if external_read_steps:
+                    new_end = max(external_read_steps)
+                    self._add_fusion_interval_delta(
+                        deltas, fused_step, new_end, info.size, len(nodes)
+                    )
+                continue
+
+            if not (info.readers & candidate_nodes):
+                continue
+
+            new_read_steps = [
+                fused_step if reader in candidate_nodes else node_to_step[reader]
+                for reader in info.readers
+            ]
+            if not new_read_steps:
+                continue
+            new_end = max(new_read_steps)
+            if info.is_graph_output:
+                new_end = max(new_end, len(nodes) - 1)
+            if new_end > info.end:
+                self._add_fusion_interval_delta(
+                    deltas, info.end + 1, new_end, info.size, len(nodes)
+                )
+
+        if not deltas:
+            return False
+
+        new_peak = self._peak_after_fusion_interval_deltas(curve, deltas)
+        return new_peak > old_peak
+
     def fusion_would_materialize_outputs_across_extern_branch(
         self,
         node1: BaseSchedulerNode,
@@ -7247,11 +7500,6 @@ class Scheduler:
                 for user in buf.users
             ):
                 continue
-            if read_name in self.mutation_renames or read_name in getattr(
-                self, "mutation_real_name", {}
-            ):
-                continue
-
             input_bytes = self.dep_size_hint(read)
             if (
                 input_bytes > config.small_memory_access_threshold

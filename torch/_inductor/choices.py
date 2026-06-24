@@ -624,6 +624,11 @@ class InductorChoices:
             return False
 
         if not config.allow_peak_memory_increasing_fusion:
+            if scheduler.fusion_would_raise_peak_by_memory_curve(node1, node2) is True:
+                WhyNoFuse(node1, node2)(
+                    "Fusion raises the estimated peak memory curve."
+                )
+                return False
             if scheduler.fusion_would_materialize_outputs_across_extern_branch(
                 node1, node2
             ):

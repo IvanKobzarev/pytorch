@@ -4,6 +4,7 @@ import collections
 import dataclasses
 import heapq
 import logging
+import os
 from typing import TYPE_CHECKING, TypedDict
 
 import torch
@@ -714,6 +715,7 @@ def topological_sort_lpmf(
     schedule: list[BaseSchedulerNode] = []
     num_iters: int = 0
     while num_iters < len(nodes) and nodes_to_schedule:
+
         def memory_key(node: BaseSchedulerNode) -> tuple[int, int, int]:
             return (
                 node.mpi_node.size if node.mpi_node.size > memory_gap else 0,
@@ -779,6 +781,109 @@ def topological_sort_lpmf(
         raise RuntimeError("Failed to schedule, while loop ran too long for lpmf")
 
     return schedule
+
+
+def shorten_large_buffer_lifetimes(
+    nodes: list[BaseSchedulerNode],
+    graph_outputs: OrderedSet[str],
+    *,
+    min_buffer_size: int = 64 * 1024 * 1024,
+    max_closure_nodes: int = 8,
+) -> list[BaseSchedulerNode]:
+    """Move a late single-consumer chain next to a large temporary producer."""
+
+    order = list(nodes)
+    position = {node: i for i, node in enumerate(order)}
+    candidates: list[tuple[int, int, BaseSchedulerNode, BaseSchedulerNode]] = []
+    debug_lines: list[str] | None = (
+        [] if os.environ.get("TORCHINDUCTOR_DEBUG_LARGE_LIFETIME") else None
+    )
+
+    def add_debug(line: str) -> None:
+        if debug_lines is not None:
+            debug_lines.append(line)
+
+    for producer in order:
+        producer_pos = position[producer]
+        for buf in producer.get_outputs():
+            buf_name = buf.get_name()
+            succ_nodes = buf.mpi_buffer.succ_nodes
+            if buf_name in graph_outputs or buf.mpi_buffer.size_free < min_buffer_size:
+                continue
+            late_succ_nodes = [
+                succ_node
+                for succ_node in succ_nodes
+                if position.get(succ_node, -1) > producer_pos + 1
+            ]
+            if len(late_succ_nodes) != 1:
+                continue
+            consumer = late_succ_nodes[0]
+            consumer_pos = position[consumer]
+            add_debug(
+                f"candidate size={buf.mpi_buffer.size_free} span={consumer_pos - producer_pos} "
+                f"buf={buf_name} producer={producer.get_name()} consumer={consumer.get_name()}"
+            )
+            candidates.append(
+                (
+                    buf.mpi_buffer.size_free,
+                    consumer_pos - producer_pos,
+                    producer,
+                    consumer,
+                )
+            )
+
+    for _, _, producer, consumer in sorted(
+        candidates, key=lambda x: (x[0] * x[1], x[0]), reverse=True
+    ):
+        producer_pos = position[producer]
+        consumer_pos = position[consumer]
+        closure: OrderedSet[BaseSchedulerNode] = OrderedSet()
+        stack = [consumer]
+        valid = True
+        while stack:
+            node = stack.pop()
+            if node in closure:
+                continue
+            node_pos = position[node]
+            if node_pos <= producer_pos:
+                add_debug(
+                    f"  skip pred before producer node={node.get_name()} pos={node_pos}"
+                )
+                continue
+            if node_pos > consumer_pos:
+                add_debug(
+                    f"  reject future pred node={node.get_name()} pos={node_pos} consumer_pos={consumer_pos}"
+                )
+                valid = False
+                break
+            closure.add(node)
+            if len(closure) > max_closure_nodes:
+                add_debug(
+                    f"  reject closure too large producer={producer.get_name()} consumer={consumer.get_name()} size={len(closure)}"
+                )
+                valid = False
+                break
+            stack.extend(node.mpi_node.pred_nodes)
+
+        if not valid or producer in closure or consumer not in closure:
+            continue
+
+        moved = [node for node in order if node in closure]
+        add_debug(
+            f"  accept producer={producer.get_name()} consumer={consumer.get_name()} closure={[node.get_name() for node in moved]}"
+        )
+        remaining = [node for node in order if node not in closure]
+        insert_at = remaining.index(producer) + 1
+        result = remaining[:insert_at] + moved + remaining[insert_at:]
+        if debug_lines is not None:
+            with open(os.environ["TORCHINDUCTOR_DEBUG_LARGE_LIFETIME"], "a") as f:
+                f.write("\n".join(debug_lines) + "\n")
+        return result
+
+    if debug_lines is not None:
+        with open(os.environ["TORCHINDUCTOR_DEBUG_LARGE_LIFETIME"], "a") as f:
+            f.write("\n".join(debug_lines) + "\n")
+    return order
 
 
 def topological_sort_bfs(nodes: list[BaseSchedulerNode]) -> list[BaseSchedulerNode]:
@@ -1103,6 +1208,34 @@ def reorder_for_peak_memory(
             "orm": {elem.method: elem.peak_memory for elem in peak_memory_diff_methods},
         },
     )
+
+    if not config.allow_peak_memory_increasing_fusion:
+        try:
+            best_so_far = min(peak_memory_diff_methods, key=lambda x: x.peak_memory)
+            order = shorten_large_buffer_lifetimes(best_so_far.order, graph_outputs)
+            peak_memory, _ = estimate_peak_memory(
+                order, name_to_freeable_input_buf, graph_outputs
+            )
+            peak_memory_diff_methods.append(
+                PeakMemoryResult(order, peak_memory, "shorten_large_buffer_lifetimes")
+            )
+            torch_log.info(
+                "shorten_large_buffer_lifetimes peak memory: %d", peak_memory
+            )
+            if debug_path := os.environ.get("TORCHINDUCTOR_DEBUG_LARGE_LIFETIME"):
+                with open(debug_path, "a") as f:
+                    f.write(
+                        "peak_methods "
+                        + ", ".join(
+                            f"{result.method}={result.peak_memory}"
+                            for result in peak_memory_diff_methods
+                        )
+                        + "\n"
+                    )
+        except Exception:
+            torch_log.exception("Failed to shorten large buffer lifetimes")
+            if not is_fbcode():  # TODO: remove after ensuring OSS side is safe
+                raise
 
     # get the optimal one
     best_result = min(peak_memory_diff_methods, key=lambda x: x.peak_memory)
