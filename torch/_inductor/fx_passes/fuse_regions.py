@@ -13,6 +13,7 @@ from typing import Any
 
 import torch
 import torch.fx as fx
+from torch._inductor import config
 from torch.fx._lazy_graph_module import _LazyGraphModule
 from torch.utils._ordered_set import OrderedSet
 
@@ -32,8 +33,15 @@ def _copy_placeholder_meta(
 ) -> None:
     if "val" in input_node.meta:
         placeholder.meta.update(input_node.meta)
+        placeholder.meta["val"] = _region_placeholder_val(placeholder.meta["val"])
     elif input_node.op == "get_attr" and isinstance(input_node.target, str):
         placeholder.meta["val"] = attrgetter(input_node.target)(owning_module)
+
+
+def _region_placeholder_val(value: Any) -> Any:
+    if isinstance(value, torch.Tensor) and value._is_view():
+        return value.clone()
+    return value
 
 
 def _getattr_or_none(module: fx.GraphModule, target: str) -> Any:
@@ -57,6 +65,17 @@ def _has_graph_module_arg(node: fx.Node) -> bool:
 
 def fuse_region_key(node: fx.Node) -> str | None:
     if node.op in ("placeholder", "output", "get_attr"):
+        return None
+    # Keep materializing view-backward scatters in the parent graph. Outlining
+    # them into chunk regions forces full base-shape gradients to cross region
+    # boundaries, which defeats chunking's peak-memory intent.
+    if node.op == "call_function" and (
+        node.target is torch.ops.aten.slice_backward.default
+        or (
+            node.meta.get("autograd_backward") is True
+            and node.target is torch.ops.aten.slice_scatter.default
+        )
+    ):
         return None
     if node.op == "call_function" and isinstance(
         node.target, torch._ops.HigherOrderOperator
@@ -167,6 +186,8 @@ def apply_fuse_region_annotations(graph: fx.Graph) -> None:
     regional_inductor callers, and turns each contiguous same-id run into one
     invoke_subgraph fuse region.
     """
+    if not config.fuse_region_outlining:
+        return
     groups = collect_fuse_region_groups(graph)
     if not groups:
         return
@@ -263,7 +284,7 @@ def mark_fuse_region(
         placeholder = subgraph.placeholder(f"arg_{len(boundary_args)}")
         _copy_placeholder_meta(placeholder, input_node, owning_module)
         if path:
-            placeholder.meta["val"] = meta_val
+            placeholder.meta["val"] = _region_placeholder_val(meta_val)
         boundary_args.append((input_node, path, meta_val))
         return placeholder
 

@@ -4087,6 +4087,13 @@ class PythonWrapperCodegen(CodeGen):
     def codegen_free(self, buffer):
         name = buffer.get_name()
 
+        if isinstance(buffer, ir.DonatedBuffer):
+            if not self.can_reuse(buffer):
+                return
+            self.freed.add(name)
+            self.writeline(FreeIfNotReusedLine(self, buffer))
+            return
+
         # can be freed but not reused
         if isinstance(buffer, (ir.InputBuffer, ir.TorchBindObject)):
             self.writeline(FreeLine(self, buffer))

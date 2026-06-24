@@ -254,6 +254,33 @@ allow_buffer_reuse = True
 # Allow reuse to extend a buffer lifetime across explicit fuse-region boundaries.
 allow_buffer_reuse_across_fuse_regions = False
 
+# Outline annotated FX nodes into invoke_subgraph fuse regions. Disabling this
+# keeps the graph structure intact and only propagates region ids to scheduler IR.
+fuse_region_outlining = (
+    os.environ.get("TORCHINDUCTOR_FUSE_REGION_OUTLINING", "1") == "1"
+)
+
+# For regional compilation, sink large view-backward accumulation tails out of
+# chunk regions so full base-shape gradients do not cross chunk boundaries.
+regional_inductor_sink_view_backward = (
+    os.environ.get("TORCHINDUCTOR_REGIONAL_INDUCTOR_SINK_VIEW_BACKWARD", "0") == "1"
+)
+
+# Allow regional Inductor subcompiles to donate large dead intermediate inputs
+# after proving no later overlapping alias use. This lets chunked regions reuse
+# a consumed activation buffer for an output instead of keeping both live.
+regional_inductor_donate_intermediate_view_inputs = (
+    os.environ.get(
+        "TORCHINDUCTOR_REGIONAL_INDUCTOR_DONATE_INTERMEDIATE_VIEW_INPUTS", "0"
+    )
+    == "1"
+)
+
+# Do not spend compile time or risk alias complexity on small buffers.
+regional_inductor_donate_intermediate_inputs_min_bytes = 1024 * 1024
+
+regional_inductor_donated_input_idxs: tuple[int, ...] = ()
+
 # Enable pooled allocations for non-output tensors
 memory_planning = os.environ.get("TORCHINDUCTOR_MEMORY_PLANNING", "0") == "1"
 

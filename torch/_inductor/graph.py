@@ -151,6 +151,26 @@ aten = torch.ops.aten
 
 _post_grad_graph_counter = itertools.count()
 
+
+def _get_node_fuse_region(node: torch.fx.Node) -> str | None:
+    custom = node.meta.get("custom")
+    if not isinstance(custom, dict):
+        return None
+
+    from .fx_passes.fuse_regions import FUSE_REGION
+
+    region = custom.get(FUSE_REGION)
+    if region is None:
+        compile_with_inductor = custom.get("compile_with_inductor")
+        if isinstance(compile_with_inductor, dict):
+            region = compile_with_inductor.get(FUSE_REGION)
+    if region is None:
+        return None
+    if not isinstance(region, str):
+        raise AssertionError(f"expected fuse_region to be str, got {region}")
+    return region
+
+
 if config.is_fbcode():
     from torch._inductor.fb.triton_kernel_metadata import (
         save_triton_kernel_perf_artifact,
@@ -1332,7 +1352,15 @@ class GraphLowering(torch.fx.Interpreter):
                 example
             )
 
-        if (
+        donated_input = (
+            bool(
+                self.current_node.meta.get("inductor_donated_input")
+                if self.current_node is not None
+                else False
+            )
+            or self.placeholder_idx in config.regional_inductor_donated_input_idxs
+        )
+        if donated_input or (
             self.is_backward
             and self.bw_donated_idxs
             and self.placeholder_idx in self.bw_donated_idxs
@@ -2121,6 +2149,12 @@ class GraphLowering(torch.fx.Interpreter):
             min_count=2, min_size=config.small_memory_access_threshold
         )
 
+    @staticmethod
+    def _realize_as_no_fuse_boundary(result: ir.IRNode) -> None:
+        name = result.realize()
+        if name is not None:
+            V.graph.no_fuse_buffer_names.add(name)
+
     def run_node(self, n: torch.fx.Node) -> object:
         """Lower and execute a single FX node into Inductor IR."""
 
@@ -2352,12 +2386,10 @@ class GraphLowering(torch.fx.Interpreter):
                     )
                 ):
                     result = maybe_apply_channels_last_stride_order(result, n)
-                    name = result.realize()
-                    if name is not None:
-                        # A plain realize can still be internalized by fusion.
-                        # Keep this as a real boundary so rematerializing logits
-                        # does not create one large backward reduction kernel.
-                        V.graph.no_fuse_buffer_names.add(name)
+                    # A plain realize can still be internalized by fusion.
+                    # Keep this as a real boundary so rematerializing logits
+                    # does not create one large backward reduction kernel.
+                    self._realize_as_no_fuse_boundary(result)
 
                 for user in n.users:
                     if user.target in needs_realized_inputs:
@@ -2468,7 +2500,9 @@ class GraphLowering(torch.fx.Interpreter):
                 and self._should_realize_large_chunked_pointwise_add(n, result)
             ):
                 result = maybe_apply_channels_last_stride_order(result, n)
-                result.realize()
+                # Keep this as a real boundary so fusion does not undo
+                # chunking that was introduced to lower peak memory.
+                self._realize_as_no_fuse_boundary(result)
 
             # Realize if a Pointwise has too much stuff to be inlined.
             # As this may cause RecursionError during Inductor's evaluation.
@@ -2482,6 +2516,20 @@ class GraphLowering(torch.fx.Interpreter):
                     # Use inner fn as a rough proxy. Good enough.
                     if curr.has_large_inner_fn(threshold=100):
                         result.realize()
+
+        fuse_region = None if config.fuse_region_outlining else _get_node_fuse_region(n)
+        if fuse_region is not None:
+            from .fx_passes.fuse_regions import FUSE_REGION
+
+            for op in self.operations[operation_watermark:]:
+                if not hasattr(op, "annotations"):
+                    continue
+                existing_region = op.annotations.get(FUSE_REGION)
+                if existing_region is not None and existing_region != fuse_region:
+                    raise AssertionError(
+                        f"expected one fuse_region per op, got {existing_region} and {fuse_region}"
+                    )
+                op.annotations[FUSE_REGION] = fuse_region
 
         assign_origin_node(result, n)
         self.register_users_of(result)
