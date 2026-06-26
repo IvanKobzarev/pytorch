@@ -8,6 +8,7 @@ different ids as fusion and non-adjacent buffer-reuse barriers.
 """
 
 # mypy: allow-untyped-defs
+from dataclasses import dataclass
 from operator import attrgetter, getitem
 from typing import Any
 
@@ -18,6 +19,12 @@ from torch.utils._ordered_set import OrderedSet
 
 
 FUSE_REGION = "fuse_region"
+
+
+@dataclass(frozen=True)
+class _OutlinedInvokeSubgraph:
+    region_node: fx.Node
+    replacements: tuple[fx.Node, ...]
 
 
 def _get_subgraph_name(gm: fx.GraphModule, name: str) -> str:
@@ -97,17 +104,21 @@ def _fuse_region_from_custom(custom: dict[str, Any]) -> str | None:
     return None
 
 
-def _strip_fuse_region_from_meta(meta: dict[str, Any]) -> None:
+def _strip_custom_keys_from_meta(meta: dict[str, Any], keys: tuple[str, ...]) -> None:
+    if not keys:
+        return
     custom = meta.get("custom")
     if not isinstance(custom, dict):
         return
 
     custom = custom.copy()
-    custom.pop(FUSE_REGION, None)
+    for key in keys:
+        custom.pop(key, None)
     compile_with_inductor = custom.get("compile_with_inductor")
     if isinstance(compile_with_inductor, dict):
         compile_with_inductor = compile_with_inductor.copy()
-        compile_with_inductor.pop(FUSE_REGION, None)
+        for key in keys:
+            compile_with_inductor.pop(key, None)
         custom["compile_with_inductor"] = compile_with_inductor
 
     if custom:
@@ -175,28 +186,30 @@ def apply_fuse_region_annotations(graph: fx.Graph) -> None:
     graph.lint()
 
 
-def mark_fuse_region(
+def _replacement_result(
+    outlined: _OutlinedInvokeSubgraph,
+) -> fx.Node | tuple[fx.Node, ...]:
+    if not outlined.replacements:
+        return outlined.region_node
+    if len(outlined.replacements) == 1:
+        return outlined.replacements[0]
+    return outlined.replacements
+
+
+def _outline_invoke_subgraph(
     graph: fx.Graph,
     nodes: list[fx.Node],
-    fuse_region_id: str | None = None,
-) -> fx.Node | tuple[fx.Node, ...]:
-    """
-    Outline FX nodes into an invoke_subgraph fusion region.
-
-    Inductor lowers the invoke_subgraph inline and annotates the produced IR
-    operations with one fusion-region id. Operations inside the region may fuse
-    with each other, but not with operations outside the region or with another
-    region id.
-    """
+    *,
+    region_name_prefix: str,
+    output_name_suffix: str,
+    always_return_tuple: bool = False,
+    strip_custom_keys: tuple[str, ...] = (),
+) -> _OutlinedInvokeSubgraph:
     owning_module = graph.owning_module
     if owning_module is None:
         raise AssertionError("expected graph to have an owning_module")
     if not nodes:
         raise AssertionError("expected non-empty nodes")
-    if fuse_region_id is not None and not isinstance(fuse_region_id, str):
-        raise AssertionError(
-            f"expected fuse_region_id to be None or str, got {type(fuse_region_id)}"
-        )
 
     node_set = OrderedSet(nodes)
     ordered_nodes = [node for node in graph.nodes if node in node_set]
@@ -255,7 +268,7 @@ def mark_fuse_region(
         and latest_input is not None
         and node_order[latest_input] >= node_order[first_external_user]
     ):
-        raise AssertionError("expected fuse_region boundary to be acyclic")
+        raise AssertionError("expected invoke_subgraph boundary to be acyclic")
 
     def add_boundary_arg(
         input_node: fx.Node, path: tuple[int, ...], meta_val: Any
@@ -288,7 +301,7 @@ def mark_fuse_region(
         if node in env:
             return env[node]
         if node in node_set:
-            raise AssertionError("expected fuse_region nodes to be topological")
+            raise AssertionError("expected invoke_subgraph nodes to be topological")
         if node in preserved_getattrs:
             if not isinstance(node.target, str):
                 raise AssertionError("expected get_attr target to be a string")
@@ -305,7 +318,7 @@ def mark_fuse_region(
     if len(subgraph_outputs) == 0:
         out = subgraph.output(())
         out.meta["val"] = ()
-    elif len(subgraph_outputs) == 1:
+    elif len(subgraph_outputs) == 1 and not always_return_tuple:
         out = subgraph.output(subgraph_outputs[0])
         if "val" in region_outputs[0].meta:
             out.meta["val"] = region_outputs[0].meta["val"]
@@ -315,7 +328,9 @@ def mark_fuse_region(
     subgraph.lint()
 
     subgraph_module = _LazyGraphModule(owning_module, subgraph)
-    region_name = f"fuse_region_{ordered_nodes[0].name}_{ordered_nodes[-1].name}"
+    first_name = ordered_nodes[0].name
+    last_name = ordered_nodes[-1].name
+    region_name = f"{region_name_prefix}_{first_name}_{last_name}"
     subgraph_attr_name = _get_subgraph_name(owning_module, region_name)
     setattr(owning_module, subgraph_attr_name, subgraph_module)
 
@@ -339,7 +354,9 @@ def mark_fuse_region(
                 source = graph.call_function(
                     getitem,
                     args=(source, idx),
-                    name=f"{input_node.name}_fuse_region_arg_{len(outer_args)}",
+                    name=(
+                        f"{input_node.name}_{output_name_suffix}_arg_{len(outer_args)}"
+                    ),
                 )
             insert_after = source
         if path:
@@ -359,11 +376,11 @@ def mark_fuse_region(
     replacements: list[fx.Node] = []
     if len(region_outputs) == 0:
         region_node.meta["val"] = ()
-    elif len(region_outputs) == 1:
+    elif len(region_outputs) == 1 and not always_return_tuple:
         replacement = region_node
         replacement.meta = region_outputs[0].meta.copy()
         replacement.meta.pop("eager_input_vals", None)
-        _strip_fuse_region_from_meta(replacement.meta)
+        _strip_custom_keys_from_meta(replacement.meta, strip_custom_keys)
         replacements.append(replacement)
     else:
         region_node.meta["val"] = tuple(node.meta.get("val") for node in region_outputs)
@@ -373,11 +390,11 @@ def mark_fuse_region(
                 replacement = graph.call_function(
                     getitem,
                     args=(region_node, idx),
-                    name=f"{output_node.name}_fuse_region",
+                    name=f"{output_node.name}_{output_name_suffix}",
                 )
             replacement.meta = output_node.meta.copy()
             replacement.meta.pop("eager_input_vals", None)
-            _strip_fuse_region_from_meta(replacement.meta)
+            _strip_custom_keys_from_meta(replacement.meta, strip_custom_keys)
             replacements.append(replacement)
             insert_after = replacement
 
@@ -390,10 +407,54 @@ def mark_fuse_region(
         graph.erase_node(node)
     graph.lint()
 
-    region_node.meta[FUSE_REGION] = (
+    return _OutlinedInvokeSubgraph(region_node, tuple(replacements))
+
+
+def mark_invoke_subgraph(
+    graph: fx.Graph,
+    nodes: list[fx.Node],
+    *,
+    region_name_prefix: str = "invoke_subgraph_region",
+    strip_custom_keys: tuple[str, ...] = (),
+) -> fx.Node:
+    """Outline FX nodes into an invoke_subgraph HOP and return the HOP node."""
+    return _outline_invoke_subgraph(
+        graph,
+        nodes,
+        region_name_prefix=region_name_prefix,
+        output_name_suffix=region_name_prefix,
+        always_return_tuple=True,
+        strip_custom_keys=strip_custom_keys,
+    ).region_node
+
+
+def mark_fuse_region(
+    graph: fx.Graph,
+    nodes: list[fx.Node],
+    fuse_region_id: str | None = None,
+) -> fx.Node | tuple[fx.Node, ...]:
+    """
+    Outline FX nodes into an invoke_subgraph fusion region.
+
+    Inductor lowers the invoke_subgraph inline and annotates the produced IR
+    operations with one fusion-region id. Operations inside the region may fuse
+    with each other, but not with operations outside the region or with another
+    region id.
+    """
+    if fuse_region_id is not None and not isinstance(fuse_region_id, str):
+        raise AssertionError(
+            f"expected fuse_region_id to be None or str, got {type(fuse_region_id)}"
+        )
+
+    outlined = _outline_invoke_subgraph(
+        graph,
+        nodes,
+        region_name_prefix="fuse_region",
+        output_name_suffix="fuse_region",
+        strip_custom_keys=(FUSE_REGION,),
+    )
+    region_name = outlined.region_node.name
+    outlined.region_node.meta[FUSE_REGION] = (
         region_name if fuse_region_id is None else fuse_region_id
     )
-
-    if not replacements:
-        return region_node
-    return replacements[0] if len(replacements) == 1 else tuple(replacements)
+    return _replacement_result(outlined)

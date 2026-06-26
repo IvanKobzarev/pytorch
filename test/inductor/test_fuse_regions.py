@@ -281,6 +281,40 @@ class TestFuseRegions(InductorTestCase):
         self.assertEqual(len(region_nodes), 1)
         self.assertEqual(region_nodes[0].meta[FUSE_REGION], "shared")
 
+    def test_mark_invoke_subgraph_does_not_set_fuse_region(self):
+        from torch._inductor.fx_passes.fuse_regions import (
+            FUSE_REGION,
+            mark_invoke_subgraph,
+        )
+
+        graph = Graph()
+        x = graph.placeholder("x")
+        add = graph.call_function(torch.ops.aten.add.Tensor, (x, 1))
+        relu = graph.call_function(torch.ops.aten.relu.default, (add,))
+        graph.output(relu)
+        gm = GraphModule(torch.nn.Module(), graph)
+
+        fake = torch.empty(4)
+        for node in (x, add, relu):
+            node.meta["val"] = fake
+
+        region_node = mark_invoke_subgraph(gm.graph, [add, relu])
+
+        self.assertEqual(region_node.target, torch.ops.higher_order.invoke_subgraph)
+        self.assertNotIn(FUSE_REGION, region_node.meta)
+        self.assertIsInstance(region_node.meta["val"], tuple)
+        self.assertEqual(len(region_node.meta["val"]), 1)
+        self.assertEqual(
+            len(
+                [
+                    node
+                    for node in gm.graph.nodes
+                    if node.op == "call_function" and node.target is getitem
+                ]
+            ),
+            1,
+        )
+
     def test_mark_fuse_region_rejects_invalid_region_id(self):
         from torch._inductor.fx_passes.fuse_regions import mark_fuse_region
 
