@@ -277,6 +277,89 @@ class TestOverlapPreservingBucketing(InductorTestCase):
             for dep in node.meta.get(META_OVERLAP_DEPS, ()):
                 self.assertIn(dep, live_nodes)
 
+    def test_subgraph_overlap_deps_wrap_hidden_region(self):
+        def func(a, b, c):
+            group_name = "0"
+            group_size = 1
+
+            ag = torch.ops._c10d_functional.all_gather_into_tensor(
+                a, group_size, group_name
+            )
+            mm = torch.mm(b, c)
+            relu = torch.relu(mm)
+            ag_out = torch.ops._c10d_functional.wait_tensor(ag)
+            return ag_out + relu
+
+        with FakeTensorMode():
+            a = torch.ones(4, 4, device=self.device)
+            b = torch.ones(4, 4, device=self.device) * 2
+            c = torch.ones(4, 4, device=self.device) * 3
+            traced = make_fx(func)(a, b, c)
+
+        (ag,) = traced.graph.find_nodes(
+            op="call_function",
+            target=torch.ops._c10d_functional.all_gather_into_tensor.default,
+        )
+        (mm,) = traced.graph.find_nodes(
+            op="call_function", target=torch.ops.aten.mm.default
+        )
+        (relu,) = traced.graph.find_nodes(
+            op="call_function", target=torch.ops.aten.relu.default
+        )
+
+        collective_info = build_collective_info(
+            traced.graph,
+            {ag: OrderedSet([mm, relu])},
+        )
+
+        from torch._inductor.fx_passes.control_dependencies import control_deps
+        from torch._inductor.fx_passes.overlap_preserving_bucketer import (
+            OverlapPreservingBucketer,
+        )
+
+        with torch._inductor.config.patch(
+            "aten_distributed_optimizations.insert_overlap_deps_impl",
+            "control_deps",
+        ):
+            bucketer = OverlapPreservingBucketer(
+                traced.graph,
+                collective_info,
+                OrderedSet(traced.graph.nodes),
+                collective_bucketing=False,
+                insert_overlap_deps=True,
+            )
+            bucketer.bucket_collectives()
+
+        control_dep_nodes = [
+            n
+            for n in traced.graph.nodes
+            if n.op == "call_function" and n.target is control_deps
+        ]
+        self.assertEqual(len(control_dep_nodes), 2)
+
+        region_control_dep = None
+        wait_control_dep = None
+        for node in control_dep_nodes:
+            subgraph_attr = node.args[1]
+            self.assertIsInstance(subgraph_attr, fx.Node)
+            subgraph = getattr(traced, subgraph_attr.target)
+            call_targets = [
+                n.target for n in subgraph.graph.nodes if n.op == "call_function"
+            ]
+            if torch.ops.aten.mm.default in call_targets:
+                region_control_dep = node
+                self.assertEqual(
+                    call_targets,
+                    [torch.ops.aten.mm.default, torch.ops.aten.relu.default],
+                )
+            elif torch.ops._c10d_functional.wait_tensor.default in call_targets:
+                wait_control_dep = node
+
+        self.assertIsNotNone(region_control_dep)
+        self.assertIsNotNone(wait_control_dep)
+        self.assertEqual(region_control_dep.args[0], (ag,))
+        self.assertIn(region_control_dep, wait_control_dep.args[0])
+
     def test_cant_bucket_nested_hiding_intervals(self):
         """
         Test that nested hiding intervals prevent bucketing.

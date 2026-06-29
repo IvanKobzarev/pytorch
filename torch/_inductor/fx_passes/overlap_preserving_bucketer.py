@@ -27,6 +27,7 @@ from torch._inductor.fx_passes.overlap_scheduling import (
 )
 from torch._inductor.fx_passes.utils import BitsetAncestors
 from torch._logging import trace_structured
+from torch._ops import HigherOrderOperator
 from torch.utils._ordered_set import OrderedSet
 
 
@@ -353,11 +354,57 @@ class OverlapPreservingBucketer:
                     filtered_deps[node] = filtered_node_deps
 
             if filtered_deps:
+                from torch._inductor import config
                 from torch._inductor.fx_passes.control_dependencies import (
+                    preserve_node_ordering,
                     preserve_node_ordering_from_config,
+                    preserve_node_ordering_with_region_subgraphs,
                 )
 
-                preserve_node_ordering_from_config(self.graph, filtered_deps)
+                impl = config.aten_distributed_optimizations.insert_overlap_deps_impl
+                if impl == "control_deps":
+                    regions = self._get_control_deps_regions()
+                    if regions:
+                        preserve_node_ordering_with_region_subgraphs(
+                            self.graph, filtered_deps, regions
+                        )
+                    else:
+                        preserve_node_ordering(self.graph, filtered_deps)
+                elif impl == "meta":
+                    preserve_node_ordering_from_config(self.graph, filtered_deps)
+                else:
+                    preserve_node_ordering_from_config(self.graph, filtered_deps)
+
+    def _get_control_deps_regions(self) -> list[list[fx.Node]]:
+        """Return contiguous hidden-compute regions for subgraph control_deps."""
+        regions: list[list[fx.Node]] = []
+        current: list[fx.Node] = []
+
+        def flush() -> None:
+            nonlocal current
+            if len(current) > 1:
+                regions.append(current)
+            current = []
+
+        for node in self.graph.nodes:
+            if self._can_wrap_in_control_deps_region(node):
+                current.append(node)
+            else:
+                flush()
+        flush()
+        return regions
+
+    def _can_wrap_in_control_deps_region(self, node: fx.Node) -> bool:
+        if node not in self.all_hiding_nodes or node._erased:
+            return False
+        if node.op != "call_function" or not callable(node.target):
+            return False
+        if is_collective_or_wait(node):
+            return False
+        # HOPs often own nested subgraphs.  The existing control_deps subgraph
+        # metadata update path only handles one wrapped HOP at a time, so keep
+        # them on the fallback per-node path.
+        return not isinstance(node.target, HigherOrderOperator)
 
     def bucket_collectives(self) -> None:
         """Run the full bucketing and dep application flow."""
