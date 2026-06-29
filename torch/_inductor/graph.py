@@ -453,6 +453,12 @@ class GraphLowering(torch.fx.Interpreter):
         # for void ops (e.g. record_event) that return None and therefore cannot
         # be referenced by name in subsequent control_deps ordering constraints.
         self._void_ctrl_dep_op_names: dict[torch.fx.Node, list[str]] = {}
+        self._fx_node_to_operation_names: dict[torch.fx.Node, OrderedSet[str]] = (
+            defaultdict(OrderedSet)
+        )
+        self.post_fusion_overlap_deps: dict[str, OrderedSet[str]] = defaultdict(
+            OrderedSet
+        )
 
         # Inplace padding may require Inductor to allocate slightly larger
         # tensor for padding.
@@ -1867,6 +1873,50 @@ class GraphLowering(torch.fx.Interpreter):
             if isinstance(ir_value, ir.TensorBox):
                 ir_value.realize()
 
+    def _record_post_fusion_overlap_deps(
+        self, n: torch.fx.Node, new_ops: Sequence[ir.Operation]
+    ) -> None:
+        if not new_ops:
+            return
+
+        from torch._inductor.fx_passes.control_dependencies import META_OVERLAP_DEPS
+
+        for op in new_ops:
+            if op.operation_name is None:
+                continue
+
+            origins = OrderedSet(
+                origin
+                for origin in op.get_origins()
+                if isinstance(origin, torch.fx.Node)
+            )
+            if not origins:
+                origins.add(n)
+            for origin in origins:
+                self._fx_node_to_operation_names[origin].add(op.operation_name)
+
+        for op in new_ops:
+            if op.operation_name is None:
+                continue
+
+            dep_nodes: OrderedSet[torch.fx.Node] = OrderedSet()
+            origins = OrderedSet(
+                origin
+                for origin in op.get_origins()
+                if isinstance(origin, torch.fx.Node)
+            )
+            if not origins:
+                origins.add(n)
+            for origin in origins:
+                origin_deps = origin.meta.get(META_OVERLAP_DEPS)
+                if origin_deps:
+                    dep_nodes.update(origin_deps)
+
+            for dep_node in dep_nodes:
+                self.post_fusion_overlap_deps[op.operation_name].update(
+                    self._fx_node_to_operation_names.get(dep_node, ())
+                )
+
     def run_node(self, n: torch.fx.Node) -> object:
         """Lower and execute a single FX node into Inductor IR."""
 
@@ -2186,6 +2236,7 @@ class GraphLowering(torch.fx.Interpreter):
 
         assign_origin_node(result, n)
         self.register_users_of(result)
+        self._record_post_fusion_overlap_deps(n, self.operations[operation_watermark:])
 
         new_unbacked_defs = OrderedSet[sympy.Symbol]()
         for buf in self.buffers[buffer_watermark:]:
