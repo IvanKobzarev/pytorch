@@ -31,6 +31,9 @@ from collections.abc import Callable
 
 import torch
 
+from torchtitan.experiments.graph_trainer.chunk_fuse_regions import (
+    annotate_auto_chunk_fuse_regions_pass,
+)
 from torchtitan.experiments.graph_trainer.cpu_offload import apply_cpu_offload_pass
 from torchtitan.experiments.graph_trainer.cudagraph import (
     cudagraph_pass,
@@ -66,6 +69,9 @@ from torchtitan.experiments.graph_trainer.remove_noop_passes import (
 )
 from torchtitan.experiments.graph_trainer.selective_activation_remat import (
     selective_activation_remat_pass,
+)
+from torchtitan.experiments.graph_trainer.subgraph_regions import (
+    apply_subgraph_region_annotations_pass,
 )
 from torchtitan.tools.logging import logger
 
@@ -162,6 +168,9 @@ def compile_time_passes(
                 max_peak_increase_gb=getattr(
                     compile_config, "ac_min_cut_max_peak_increase_gb", 0.0
                 ),
+                selection_mode=getattr(
+                    compile_config, "ac_min_cut_selection_mode", "budgeted"
+                ),
                 memory_estimator=getattr(
                     compile_config, "ac_min_cut_memory_estimator", "approximate"
                 ),
@@ -216,6 +225,8 @@ def compile_time_passes(
 
     inductor_compilation = config.compile.inductor_compilation
     if inductor_compilation == "full":
+        passes.append(apply_subgraph_region_annotations_pass)
+        passes.append(annotate_auto_chunk_fuse_regions_pass)
         # Compile the entire graph into optimized Triton kernels. Must
         # be terminal — the FX graph is no longer authoritative after
         # this pass, so insert_kernel_annotations_pass cannot follow.

@@ -8,14 +8,26 @@ import operator
 from unittest.mock import patch
 
 import torch
-from torch._inductor.fx_passes.fuse_regions import FUSE_REGION
+from torch._inductor.fx_passes.fuse_regions import (
+    FUSE_REGION,
+    apply_fuse_region_annotations,
+)
+from torch.fx.experimental.proxy_tensor import make_fx
 from torch.testing._internal.common_utils import TestCase
 
+from torchtitan.experiments.graph_trainer.chunk_fuse_regions import (
+    annotate_auto_chunk_fuse_regions_pass,
+)
 from torchtitan.experiments.graph_trainer.inductor_passes import (
     full_inductor_compilation_pass,
 )
 from torchtitan.experiments.graph_trainer.performance_passes import (
     annotate_rmsnorm_for_regional_inductor_pass,
+)
+from torchtitan.experiments.graph_trainer.subgraph_regions import (
+    SUBGRAPH_REGION,
+    apply_subgraph_region_annotations_pass,
+    subgraph,
 )
 
 
@@ -134,25 +146,232 @@ class TestFullInductorCompilationPass(TestCase):
         gm = torch.fx.GraphModule(torch.nn.Module(), graph)
         add.meta["custom"] = {FUSE_REGION: "source_region"}
 
+        cudagraph_path = (
+            "torchtitan.experiments.graph_trainer.cudagraph."
+            "is_cudagraph_compatible"
+        )
+        regional_inductor_path = (
+            "torchtitan.experiments.graph_trainer.inductor_passes."
+            "regional_inductor_pass"
+        )
         with (
-            patch(
-                "torchtitan.experiments.graph_trainer.cudagraph.is_cudagraph_compatible",
-                return_value=True,
-            ),
-            patch(
-                "torchtitan.experiments.graph_trainer.inductor_passes.regional_inductor_pass",
-                side_effect=lambda gm, example_inputs: gm,
-            ),
+            patch(cudagraph_path, return_value=True),
+            patch(regional_inductor_path, side_effect=lambda gm, example_inputs: gm),
         ):
             result = full_inductor_compilation_pass(gm, ())
 
         annotation = add.meta["custom"]["compile_with_inductor"]
+        self.assertEqual(add.meta["custom"][FUSE_REGION], "source_region")
         self.assertEqual(annotation[FUSE_REGION], "source_region")
         self.assertEqual(
             annotation["inductor_configs"],
             {"size_threshold_for_succ_based_strategy": 1},
         )
         self.assertTrue(result.meta["cudagraph_compatible"])
+
+
+class TestSubgraphRegionAnnotationsPass(TestCase):
+    def _set_tensor_meta(self, node, shape):
+        node.meta["val"] = torch.empty(shape, device="meta")
+        return node
+
+    def _build_region_gm(self, key):
+        graph = torch.fx.Graph()
+        x = graph.placeholder("x")
+        add = graph.call_function(torch.ops.aten.add.Tensor, args=(x, 1))
+        relu = graph.call_function(torch.ops.aten.relu.default, args=(add,))
+        sin = graph.call_function(torch.ops.aten.sin.default, args=(relu,))
+        graph.output(sin)
+        gm = torch.fx.GraphModule(torch.nn.Module(), graph)
+        for node in (x, add, relu, sin):
+            self._set_tensor_meta(node, (4,))
+        for node in (add, relu):
+            node.meta["custom"] = {key: "chunk"}
+        return gm
+
+    def _invoke_subgraph_nodes(self, gm):
+        return [
+            node
+            for node in gm.graph.nodes
+            if node.op == "call_function"
+            and node.target is torch.ops.higher_order.invoke_subgraph
+        ]
+
+    def _subgraph_placeholder_count(self, gm, invoke_node):
+        subgraph_name = invoke_node.args[0].target
+        submod = getattr(gm, subgraph_name)
+        return len(submod.graph.find_nodes(op="placeholder"))
+
+    def test_subgraph_region_outlines_without_fuse_region(self):
+        gm = self._build_region_gm(SUBGRAPH_REGION)
+
+        apply_subgraph_region_annotations_pass(gm, ())
+
+        invoke_nodes = self._invoke_subgraph_nodes(gm)
+        self.assertEqual(len(invoke_nodes), 1)
+        self.assertEqual(invoke_nodes[0].meta[SUBGRAPH_REGION], "chunk_fwd")
+        self.assertNotIn(FUSE_REGION, invoke_nodes[0].meta)
+        self.assertNotIn(FUSE_REGION, invoke_nodes[0].meta.get("custom", {}))
+
+    def test_subgraph_region_matches_fuse_region_boundary_shape(self):
+        fuse_gm = self._build_region_gm(FUSE_REGION)
+        subgraph_gm = self._build_region_gm(SUBGRAPH_REGION)
+
+        apply_fuse_region_annotations(fuse_gm.graph)
+        fuse_gm.recompile()
+        apply_subgraph_region_annotations_pass(subgraph_gm, ())
+
+        fuse_node = self._invoke_subgraph_nodes(fuse_gm)[0]
+        subgraph_node = self._invoke_subgraph_nodes(subgraph_gm)[0]
+        self.assertEqual(fuse_node.meta[FUSE_REGION], "chunk_fwd")
+        self.assertEqual(subgraph_node.meta[SUBGRAPH_REGION], "chunk_fwd")
+        self.assertEqual(len(fuse_node.args), len(subgraph_node.args))
+        self.assertEqual(
+            self._subgraph_placeholder_count(fuse_gm, fuse_node),
+            self._subgraph_placeholder_count(subgraph_gm, subgraph_node),
+        )
+
+    def test_subgraph_context_manager_annotation_is_consumed(self):
+        def fn(x):
+            y = torch.sin(x)
+            with subgraph("ctx"):
+                z = torch.relu(y + 1)
+            return z * 2
+
+        with torch.fx.traceback.preserve_node_meta():
+            gm = make_fx(fn)(torch.randn(4))
+
+        apply_subgraph_region_annotations_pass(gm, ())
+
+        invoke_nodes = self._invoke_subgraph_nodes(gm)
+        self.assertEqual(len(invoke_nodes), 1)
+        self.assertEqual(invoke_nodes[0].meta[SUBGRAPH_REGION], "ctx_fwd")
+
+
+class _ChunkedGmMixin:
+    def _set_tensor_meta(self, node, shape, *, dtype=torch.float32):
+        node.meta["val"] = torch.empty(shape, dtype=dtype, device="meta")
+        return node
+
+    def _set_body_meta(self, node, shape, source, *, dtype=torch.float32):
+        self._set_tensor_meta(node, shape, dtype=dtype)
+        node.meta["stack_trace"] = (
+            f'  File "/model.py", line {source}, in chunk_body\n'
+        )
+        return node
+
+    def _build_chunked_gm(self):
+        graph = torch.fx.Graph()
+        x = graph.placeholder("x")
+        w = graph.placeholder("w")
+        self._set_tensor_meta(x, (8, 4))
+        self._set_tensor_meta(w, (4, 16))
+
+        chunk_outputs = []
+        chunk_nodes = []
+        for start in (0, 4):
+            chunk = graph.call_function(
+                torch.ops.aten.slice.Tensor, args=(x, 0, start, start + 4)
+            )
+            self._set_tensor_meta(chunk, (4, 4))
+            mm = graph.call_function(torch.ops.aten.mm.default, args=(chunk, w))
+            relu = graph.call_function(torch.ops.aten.relu.default, args=(mm,))
+            add = graph.call_function(torch.ops.aten.add.Tensor, args=(relu, relu))
+            total = graph.call_function(torch.ops.aten.sum.default, args=(add,))
+            self._set_body_meta(mm, (4, 16), 10)
+            self._set_body_meta(relu, (4, 16), 11)
+            self._set_body_meta(add, (4, 16), 12)
+            self._set_body_meta(total, (), 13)
+            chunk_outputs.append(total)
+            chunk_nodes.append((chunk, mm, relu, add, total))
+
+        out = graph.call_function(torch.ops.aten.add.Tensor, args=tuple(chunk_outputs))
+        self._set_tensor_meta(out, ())
+        graph.output(out)
+        return torch.fx.GraphModule(torch.nn.Module(), graph), chunk_nodes
+
+
+class TestAnnotateAutoChunkFuseRegionsPass(_ChunkedGmMixin, TestCase):
+    def test_annotates_repeated_chunk_bodies(self):
+        gm, chunk_nodes = self._build_chunked_gm()
+
+        annotate_auto_chunk_fuse_regions_pass(gm, (), min_tensor_bytes=64)
+
+        regions = []
+        for chunk, mm, relu, add, total in chunk_nodes:
+            self.assertNotIn(FUSE_REGION, chunk.meta.get("custom", {}))
+            region = mm.meta["custom"][FUSE_REGION]
+            self.assertEqual(relu.meta["custom"][FUSE_REGION], region)
+            self.assertEqual(add.meta["custom"][FUSE_REGION], region)
+            self.assertNotIn(FUSE_REGION, total.meta.get("custom", {}))
+            regions.append(region)
+        self.assertNotEqual(regions[0], regions[1])
+
+    def test_does_not_annotate_repeated_non_chunked_bodies(self):
+        graph = torch.fx.Graph()
+        x = graph.placeholder("x")
+        w = graph.placeholder("w")
+        self._set_tensor_meta(x, (4, 4))
+        self._set_tensor_meta(w, (4, 16))
+
+        outputs = []
+        for _ in range(2):
+            mm = graph.call_function(torch.ops.aten.mm.default, args=(x, w))
+            relu = graph.call_function(torch.ops.aten.relu.default, args=(mm,))
+            self._set_body_meta(mm, (4, 16), 10)
+            self._set_body_meta(relu, (4, 16), 11)
+            outputs.append(relu)
+        out = graph.call_function(torch.ops.aten.add.Tensor, args=tuple(outputs))
+        self._set_tensor_meta(out, (4, 16))
+        graph.output(out)
+        gm = torch.fx.GraphModule(torch.nn.Module(), graph)
+
+        annotate_auto_chunk_fuse_regions_pass(gm, (), min_tensor_bytes=1)
+
+        for node in gm.graph.nodes:
+            self.assertNotIn(FUSE_REGION, node.meta.get("custom", {}))
+
+
+class TestSubgraphRegionsForChunking(_ChunkedGmMixin, TestCase):
+    def _invoke_subgraph_nodes(self, gm):
+        return [
+            node
+            for node in gm.graph.nodes
+            if node.op == "call_function"
+            and node.target is torch.ops.higher_order.invoke_subgraph
+        ]
+
+    def test_explicit_subgraph_regions_outline_chunk_bodies(self):
+        gm, chunk_nodes = self._build_chunked_gm()
+        for idx, (_, mm, relu, add, total) in enumerate(chunk_nodes):
+            for node in (mm, relu, add, total):
+                node.meta["custom"] = {SUBGRAPH_REGION: f"chunk_{idx}"}
+
+        apply_subgraph_region_annotations_pass(gm, ())
+
+        invoke_nodes = self._invoke_subgraph_nodes(gm)
+        self.assertEqual(len(invoke_nodes), 2)
+        self.assertEqual(
+            [node.meta[SUBGRAPH_REGION] for node in invoke_nodes],
+            ["chunk_0_fwd", "chunk_1_fwd"],
+        )
+        for node in invoke_nodes:
+            self.assertNotIn(FUSE_REGION, node.meta)
+
+    def test_auto_chunk_fuse_regions_skip_explicit_subgraphs(self):
+        gm, chunk_nodes = self._build_chunked_gm()
+        for idx, (_, mm, relu, add, total) in enumerate(chunk_nodes):
+            for node in (mm, relu, add, total):
+                node.meta["custom"] = {SUBGRAPH_REGION: f"chunk_{idx}"}
+
+        apply_subgraph_region_annotations_pass(gm, ())
+        annotate_auto_chunk_fuse_regions_pass(gm, (), min_tensor_bytes=64)
+
+        for module in gm.modules():
+            if not isinstance(module, torch.fx.GraphModule):
+                continue
+            for node in module.graph.nodes:
+                self.assertNotIn(FUSE_REGION, node.meta.get("custom", {}))
 
 
 if __name__ == "__main__":

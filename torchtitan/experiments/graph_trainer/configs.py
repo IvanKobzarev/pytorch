@@ -96,6 +96,18 @@ class GraphTrainerCompileConfig(CompileConfig):
     debugging and tuning knob for broad candidate pools with very large
     activations."""
 
+    ac_min_cut_selection_mode: Literal["budgeted", "compile_like", "chain_cut"] = (
+        "budgeted"
+    )
+    """Selection strategy for min-cut AC:
+        budgeted: start from the current memory policy and greedily save useful
+            candidates while respecting ac_min_cut_max_peak_increase_gb.
+        compile_like: widen the recomputable pool, save only the byte-minimal
+            min-cut frontier, and recompute the rest of the closure. This more
+            closely matches AOTAutograd's partitioner and is experimental.
+        chain_cut: only rematerialize deterministic unsaveable softmax chains by
+            saving their anchor and recomputing the pre-softmax/log-softmax chain."""
+
     ac_save_final_layer_output: bool = True
     """When memory_policy=save_layer_inputs, also save the final transformer
     layer output boundary. This preserves the eager per-layer checkpointing

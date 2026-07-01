@@ -126,6 +126,17 @@ def regional_inductor_pass(
         return result
 
     with torch._guards.tracing(tracing_ctx):
+        # Compile chunk invoke_subgraph HOP bodies directly (compile_fx_inner, no make_fx
+        # re-trace) into boxed real calls. Must precede regional_inductor: its standalone_compile
+        # re-traces the region and cannot ingest a region still containing an invoke_subgraph HOP
+        # (the HOP's nested GraphModule arg trips make_fx's create_arg). Call the inner helper to
+        # get a plain GraphModule back (regional_inductor_invoke_subgraph wraps in boxed_nop).
+        from torch.fx.passes.regional_inductor_invoke_subgraph import (
+            _recursive_compile_invoke_subgraph_nodes,
+        )
+
+        with torch.fx.traceback.preserve_node_meta(enable=False):
+            gm = _recursive_compile_invoke_subgraph_nodes(gm)
         gm = regional_inductor(gm, example_inputs)
 
     # regional_inductor may switch to boxed calling convention; reset to
@@ -213,20 +224,6 @@ def _migrate_cpu_get_attrs_to_cuda(gm: torch.fx.GraphModule) -> None:
                 _assign_attr(attr.cuda(), module, node.target)
 
 
-def _strip_nested_fuse_region_metadata(gm: torch.fx.GraphModule) -> None:
-    for module in gm.modules():
-        if module is gm or not isinstance(module, torch.fx.GraphModule):
-            continue
-        for node in module.graph.nodes:
-            custom = node.meta.get("custom")
-            if not isinstance(custom, dict):
-                continue
-            custom.pop(FUSE_REGION, None)
-            compile_with_inductor = custom.get("compile_with_inductor")
-            if isinstance(compile_with_inductor, dict):
-                compile_with_inductor.pop(FUSE_REGION, None)
-
-
 def full_inductor_compilation_pass(
     gm: torch.fx.GraphModule, example_inputs: tuple
 ) -> torch.fx.GraphModule:
@@ -239,6 +236,10 @@ def full_inductor_compilation_pass(
     ``standalone_compile`` and gets c10d functionalization, PG unboxing,
     decompositions, and caching for free) instead of duplicating that prep
     around a direct ``compile_fx_inner`` call.
+
+    If a node already carries ``FUSE_REGION`` metadata, copy it into the
+    ``compile_with_inductor`` annotation so Inductor's post-grad pass can
+    preserve scheduler fusion and buffer-reuse barriers inside the full compile.
 
     The collapse hides cudagraph-incompatible ops (unpinned D2H copies,
     sm<10 ``_grouped_mm``) inside the opaque ``standalone_compile_inner``
@@ -263,7 +264,6 @@ def full_inductor_compilation_pass(
         "size_threshold_for_succ_based_strategy": 1,
     }
 
-    _strip_nested_fuse_region_metadata(gm)
     _migrate_cpu_get_attrs_to_cuda(gm)
     for module in gm.modules():
         if not isinstance(module, torch.fx.GraphModule):
@@ -272,8 +272,14 @@ def full_inductor_compilation_pass(
             if node.op in ("placeholder", "output"):
                 continue
             custom = node.meta.setdefault("custom", {})
-            compile_annotation = {"inductor_configs": full_inductor_configs}
+            # Preserve a pre-tagged compile_with_inductor (e.g. a chunk's
+            # distinct inductor_region set by the GT adapter) so it becomes its
+            # own boxed standalone region instead of being folded into the one
+            # default region.
+            if "compile_with_inductor" in custom:
+                continue
             region = custom.get(FUSE_REGION)
+            compile_annotation = {"inductor_configs": full_inductor_configs}
             if isinstance(region, str):
                 compile_annotation[FUSE_REGION] = region
             custom["compile_with_inductor"] = compile_annotation

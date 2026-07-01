@@ -126,11 +126,17 @@ _HARD_POLICIES = (
 )
 _GB = 1e9
 _COST_EPS = 1e-12
-_MemoryEstimator: TypeAlias = Literal["approximate", "exact"]
 _SaveScope: TypeAlias = Literal["min_cut", "all"]
+_SelectionMode: TypeAlias = Literal["budgeted", "compile_like", "chain_cut"]
+_MemoryEstimator: TypeAlias = Literal["approximate", "exact"]
 
 _MEMORY_ESTIMATORS: tuple[_MemoryEstimator, ...] = ("approximate", "exact")
 _SAVE_SCOPES: tuple[_SaveScope, ...] = ("min_cut", "all")
+_SELECTION_MODES: tuple[_SelectionMode, ...] = (
+    "budgeted",
+    "compile_like",
+    "chain_cut",
+)
 _PEAK_PROGRESS_TOLERANCE_BYTES = 1 << 20
 _PEAK_PROGRESS_RANKING_MIN_EXCESS_RATIO = 0.01
 _MIN_NONPOSITIVE_BUDGET_BROAD_ONLY_CANDIDATES = 0
@@ -1502,6 +1508,11 @@ def _validate_save_scope(save_scope: _SaveScope) -> None:
         raise ValueError(f"unknown ac_min_cut_save_scope: {save_scope!r}")
 
 
+def _validate_selection_mode(selection_mode: _SelectionMode) -> None:
+    if selection_mode not in _SELECTION_MODES:
+        raise ValueError(f"unknown ac_min_cut_selection_mode: {selection_mode!r}")
+
+
 def _target_peak_from_budget(
     baseline_peak: int,
     peak_budget_gb: float,
@@ -2694,6 +2705,95 @@ def _optimize_under_peak_budget(
     )
 
 
+def _apply_compile_like_min_cut(
+    gm: fx.GraphModule,
+    example_inputs: tuple | None,
+    runtime_estimator: Callable[[fx.Node], float],
+) -> _BudgetedOptimizationResult:
+    """Save only the byte-minimal frontier and recompute the remaining closure."""
+    baseline_peak, baseline_cost = _memory_profile_after_remat(
+        gm, example_inputs, runtime_estimator
+    )
+    candidates = _save_candidates(gm)
+    frontier = _min_cut(gm)
+    kept = frontier & candidates
+    _mark_must_save(kept)
+    final_peak, final_cost = _memory_profile_after_remat(
+        gm, example_inputs, runtime_estimator
+    )
+    logger.info(
+        "min_cut_ac compile_like: baseline=%.2fGB final=%.2fGB; "
+        "recompute %.4fms -> %.4fms; candidates=%d frontier=%d kept=%d",
+        baseline_peak / _GB,
+        final_peak / _GB,
+        baseline_cost,
+        final_cost,
+        len(candidates),
+        len(frontier),
+        len(kept),
+    )
+    _log_payload(
+        "compile_like_summary",
+        {
+            "baseline_peak_gb": _gb_value(baseline_peak),
+            "final_peak_gb": _gb_value(final_peak),
+            "baseline_recompute_cost_ms": round(baseline_cost, 6),
+            "final_recompute_cost_ms": round(final_cost, 6),
+            "candidate_count": len(candidates),
+            "candidate_digest": _node_digest(gm, candidates),
+            "candidate_bucket_counts": _bucket_counts(candidates),
+            "frontier_count": len(frontier),
+            "frontier_digest": _node_digest(gm, frontier),
+            "frontier_bucket_counts": _bucket_counts(frontier),
+            "frontier_sample": [
+                _node_log_payload(node)
+                for node in _ordered_nodes(gm, list(frontier))[:_LOG_SAMPLE_LIMIT]
+            ],
+            "kept": len(kept),
+            "kept_bytes": sum(_node_byte_size(node) for node in kept),
+            "kept_gb": _gb_value(sum(_node_byte_size(node) for node in kept)),
+            "kept_digest": _node_digest(gm, kept),
+            "kept_names": _node_names(gm, kept),
+            "kept_bucket_counts": _bucket_counts(kept),
+            "kept_module_counts": _module_counts(kept),
+        },
+    )
+    return _BudgetedOptimizationResult(
+        baseline_peak=baseline_peak,
+        final_peak=final_peak,
+        target_peak=baseline_peak,
+        target_met=final_peak <= baseline_peak,
+        filled_best_effort=False,
+        restored_reference=False,
+    )
+
+
+def _log_current_remat_profile(
+    gm: fx.GraphModule,
+    example_inputs: tuple | None,
+    runtime_estimator: Callable[[fx.Node], float],
+    event: str,
+) -> None:
+    peak, recompute_cost = _memory_profile_after_remat(
+        gm, example_inputs, runtime_estimator
+    )
+    logger.info(
+        "min_cut_ac %s: remat peak=%.2fGB recompute=%.4fms",
+        event,
+        peak / _GB,
+        recompute_cost,
+    )
+    _log_payload(
+        event,
+        {
+            "remat_peak_gb": _gb_value(peak),
+            "recompute_cost_ms": round(recompute_cost, 6),
+            "graph": _graph_identity_payload(gm),
+            "candidate_eligibility": _candidate_eligibility_payload(gm),
+        },
+    )
+
+
 def _log_save_summary(gm: fx.GraphModule) -> None:
     """Log the final forward-activation save/recompute split."""
     saved_n = recompute_n = 0
@@ -2744,6 +2844,7 @@ def min_cut_ac_pass(
     example_inputs: tuple | None = None,
     *,
     max_peak_increase_gb: float | None = 0.0,
+    selection_mode: _SelectionMode = "budgeted",
     memory_estimator: _MemoryEstimator = "approximate",
     save_scope: _SaveScope = "min_cut",
     min_broad_candidate_gb: float | None = None,
@@ -2762,6 +2863,10 @@ def min_cut_ac_pass(
         max_peak_increase_gb: peak budget in GB relative to the pre-min-cut
             reference policy. None means no hard peak requirement. Negative
             values require peak reduction; 0 means no peak regression.
+        selection_mode: "budgeted" uses GraphTrainer's peak-budgeted greedy
+            refinement. "compile_like" saves only the byte-minimal min-cut
+            frontier and recomputes the rest of the widened closure. "chain_cut"
+            only rematerializes deterministic unsaveable softmax chains.
         memory_estimator: "approximate" (memory curve with
             per-candidate exact peak checks), or "exact" (per-candidate remat).
         save_scope: "min_cut" or "all".
@@ -2784,6 +2889,7 @@ def min_cut_ac_pass(
             roofline estimator.
     """
     runtime_estimator = runtime_estimator or default_runtime_estimator
+    _validate_selection_mode(selection_mode)
 
     if decompose_log_softmax:
         _decompose_log_softmax_for_min_cut(gm)
@@ -2799,6 +2905,7 @@ def min_cut_ac_pass(
         "pass_start",
         {
             "max_peak_increase_gb": max_peak_increase_gb,
+            "selection_mode": selection_mode,
             "memory_estimator": memory_estimator,
             "save_scope": save_scope,
             "decompose_log_softmax": decompose_log_softmax,
@@ -2817,11 +2924,18 @@ def min_cut_ac_pass(
             "candidate_eligibility": _candidate_eligibility_payload(gm),
         },
     )
+    compile_like = selection_mode == "compile_like"
+    chain_cut = selection_mode == "chain_cut"
     reference_peak = None
-    widened = (
+    widened = compile_like or chain_cut or (
         relax_relaxable_must_saves or allow_allowed_saves or allow_unsaveable_recomputes
     )
-    if widened and (max_peak_increase_gb is not None):
+    if (
+        widened
+        and (max_peak_increase_gb is not None)
+        and not compile_like
+        and not chain_cut
+    ):
         reference_peak, _ = _memory_profile_after_remat(
             gm, example_inputs, runtime_estimator
         )
@@ -2832,11 +2946,11 @@ def min_cut_ac_pass(
                 "reason": "pre_relax_or_allow_budget_anchor",
             },
         )
-    if relax_relaxable_must_saves:
+    if compile_like or relax_relaxable_must_saves:
         ac_relax_relaxable_must_saves(gm, example_inputs)
-    if allow_allowed_saves:
+    if compile_like or allow_allowed_saves:
         ac_allow_allowed_saves(gm, example_inputs)
-    if allow_unsaveable_recomputes:
+    if compile_like or chain_cut or allow_unsaveable_recomputes:
         ac_allow_unsaveable_recomputes(gm, example_inputs)
     if widened:
         _log_payload(
@@ -2846,22 +2960,29 @@ def min_cut_ac_pass(
                 "candidate_eligibility": _candidate_eligibility_payload(gm),
             },
         )
-    _optimize_under_peak_budget(
-        gm,
-        example_inputs,
-        max_peak_increase_gb,
-        memory_estimator,
-        save_scope,
-        runtime_estimator,
-        reference_peak=reference_peak,
-        fallback_tags=pre_widen_tags if widened else None,
-        min_broad_candidate_bytes=min_broad_candidate_bytes
-        if save_scope == "all"
-        else None,
-        max_broad_candidate_bytes=max_broad_candidate_bytes
-        if save_scope == "all"
-        else None,
-    )
+    if compile_like:
+        _apply_compile_like_min_cut(gm, example_inputs, runtime_estimator)
+    elif chain_cut:
+        _log_current_remat_profile(
+            gm, example_inputs, runtime_estimator, "chain_cut_summary"
+        )
+    else:
+        _optimize_under_peak_budget(
+            gm,
+            example_inputs,
+            max_peak_increase_gb,
+            memory_estimator,
+            save_scope,
+            runtime_estimator,
+            reference_peak=reference_peak,
+            fallback_tags=pre_widen_tags if widened else None,
+            min_broad_candidate_bytes=min_broad_candidate_bytes
+            if save_scope == "all"
+            else None,
+            max_broad_candidate_bytes=max_broad_candidate_bytes
+            if save_scope == "all"
+            else None,
+        )
 
     _log_save_summary(gm)
     gm.recompile()
