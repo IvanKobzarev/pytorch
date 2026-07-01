@@ -483,6 +483,10 @@ intra_node_bw: int | None = None
 # None = auto-detect from GPU generation; set to override.
 inter_node_bw: int | None = None
 
+# Number of GPUs per physical node for distributed communication topology.
+# None = infer from LOCAL_WORLD_SIZE or visible CUDA devices.
+gpus_per_node: int | None = None
+
 # unit: GB/s, uni-directional CPU<>GPU bandwidth
 # default value is PCIe; modify for your hardware or measured bandwidth
 cpu_gpu_bw = 50.0

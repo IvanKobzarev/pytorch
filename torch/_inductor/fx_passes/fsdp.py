@@ -530,7 +530,11 @@ def pre_bucket_fsdp_collectives(
     rs_count_after = _count_fsdp(_find_reduce_scatters(gm.graph))
     ar_count_after = _count_fsdp(_find_all_reduces(gm.graph))
 
-    gpus_per_node = torch.cuda.device_count() if torch.cuda.is_available() else 8
+    from torch._inductor.comm_analysis import (  # pyrefly: ignore [missing-module-attribute]
+        get_gpus_per_node,
+    )
+
+    gpus_per_node = get_gpus_per_node()
     nNodes = math.ceil(group_size / gpus_per_node) if group_size is not None else 1
 
     # Verbose: log per-collective sizes after bucketing

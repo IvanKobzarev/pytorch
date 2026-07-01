@@ -7,14 +7,39 @@ from torch._inductor.standalone_compile import AOTCompiledArtifact
 from torch.compiler._cache import CacheArtifactManager
 from torch.fx._compatibility import compatibility
 from torch.fx.passes.regional_inductor import (
+    _boxed_dummy_wrapper,
     _disable_remat_for_regional_subcompile,
-    _dummy_wrapper,
 )
 
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["regional_inductor_invoke_subgraph"]
+
+
+class _FakeAwareCompiledRegion:
+    """
+    Wraps an inductor-compiled invoke_subgraph body for embedding in an OUTER graph
+    that is itself sent through AOTAutograd/inductor (GraphTrainer's nested regional
+    compile). AOTAutograd's collect_metadata_analysis traces the outer graph with
+    fake tensors; executing the real compiled Triton artifact there dereferences the
+    fake inputs' (null) data pointers and fails. Under an active FakeTensorMode we
+    replay the original body on the fake inputs to propagate output metadata, and
+    dispatch to the compiled artifact only at real runtime.
+    """
+
+    def __init__(
+        self, compiled_fn: AOTCompiledArtifact, submod: torch.fx.GraphModule
+    ) -> None:
+        self.compiled_fn = compiled_fn
+        self.submod = submod
+
+    def call_boxed(self, args: list[object]) -> object:
+        fake_mode = torch._guards.detect_fake_mode(args)
+        if fake_mode is not None:
+            with fake_mode:
+                return torch.fx.Interpreter(self.submod).run(*args)
+        return self.compiled_fn.call_boxed(args)
 
 
 def _compile_submod(
@@ -74,6 +99,18 @@ def _compile_submod(
             # compile_fx can mutate gm
             gm = copy.deepcopy(submod)
 
+            # compile_fn (compile_fx_inner) assumes an already-decomposed body, as produced by the
+            # standard dynamo->aot->inductor flow. A make_fx-traced body (e.g. GraphTrainer's joint
+            # graph) can still carry raw ops such as aten._to_copy that are in inductor's decomp
+            # table, which trips make_fallback ("both a fallback and a decomp"). Decompose the body
+            # to inductor's expected form first. The body is a leaf (no nested invoke_subgraph HOP),
+            # so this re-trace is safe -- unlike re-tracing the outer graph, which trips create_arg
+            # on the HOP's nested GraphModule arg.
+            from torch._inductor.decomposition import select_decomp_table
+            from torch.fx.experimental.proxy_tensor import make_fx
+
+            gm = make_fx(gm, decomposition_table=select_decomp_table())(*fake_inputs)
+
             compiled_fn = compile_fn(gm, fake_inputs)
             return compiled_fn
 
@@ -81,14 +118,15 @@ def _compile_submod(
     if not isinstance(compiled_fn, AOTCompiledArtifact):
         raise AssertionError(f"Expected AOTCompiledArtifact, got {type(compiled_fn)}")
 
-    # _dummy_wrapper is to make call_function happy
-    compiled_submod = _dummy_wrapper(compiled_fn)
+    compiled_submod = _boxed_dummy_wrapper(
+        _FakeAwareCompiledRegion(compiled_fn, submod)
+    )
     for node in subgraph_users:
         with gm.graph.inserting_after(node):
             new_node = gm.graph.call_function(
                 # exclude graph nodes input args
                 compiled_submod,
-                args=node.args[2:],
+                args=(list(node.args[2:]),),
                 kwargs=node.kwargs,
             )
             new_node.meta = node.meta

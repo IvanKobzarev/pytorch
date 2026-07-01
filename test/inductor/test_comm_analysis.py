@@ -1,7 +1,9 @@
 # Owner(s): ["module: inductor"]
 
+import os
 import sys
 import warnings
+from unittest import mock
 
 import torch
 import torch.distributed as dist
@@ -22,6 +24,79 @@ except ImportError:
 
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch.testing._internal.common_utils import run_tests, TestCase
+
+
+class TestCommTopologyDetection(TestCase):
+    def test_local_world_size_handles_masked_local_ranks(self):
+        import torch._inductor.config as inductor_config
+        from torch._inductor import comm_analysis
+
+        with (
+            inductor_config.patch(gpus_per_node=None),
+            mock.patch.dict(
+                os.environ,
+                {"LOCAL_WORLD_SIZE": "8", "WORLD_SIZE": "8", "LOCAL_RANK": "0"},
+                clear=True,
+            ),
+            mock.patch.object(torch.cuda, "is_available", return_value=True),
+            mock.patch.object(torch.cuda, "device_count", return_value=1),
+        ):
+            self.assertEqual(comm_analysis.get_gpus_per_node(), 8)
+
+    def test_loopback_single_visible_gpu_launch_is_single_node(self):
+        import torch._inductor.config as inductor_config
+        from torch._inductor import comm_analysis
+
+        with (
+            inductor_config.patch(gpus_per_node=None),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "WORLD_SIZE": "8",
+                    "LOCAL_RANK": "0",
+                    "MASTER_ADDR": "127.0.0.1",
+                },
+                clear=True,
+            ),
+            mock.patch.object(torch.cuda, "is_available", return_value=True),
+            mock.patch.object(torch.cuda, "device_count", return_value=1),
+            mock.patch.object(
+                comm_analysis,
+                "get_gpu_type",
+                return_value=comm_analysis.NVIDIA_GPU_TYPE.HOPPER,
+            ),
+            mock.patch.object(comm_analysis, "_has_nvlink", return_value=True),
+        ):
+            self.assertEqual(comm_analysis.get_gpus_per_node(), 8)
+            self.assertEqual(
+                comm_analysis.detect_interconnect(8),
+                comm_analysis.InterconnectType.NVLINK_H100,
+            )
+
+    def test_single_visible_gpu_non_loopback_launch_stays_multi_node(self):
+        import torch._inductor.config as inductor_config
+        from torch._inductor import comm_analysis
+
+        with (
+            inductor_config.patch(gpus_per_node=None),
+            mock.patch.dict(
+                os.environ,
+                {"WORLD_SIZE": "8", "LOCAL_RANK": "0", "MASTER_ADDR": "host0"},
+                clear=True,
+            ),
+            mock.patch.object(torch.cuda, "is_available", return_value=True),
+            mock.patch.object(torch.cuda, "device_count", return_value=1),
+            mock.patch.object(
+                comm_analysis,
+                "get_gpu_type",
+                return_value=comm_analysis.NVIDIA_GPU_TYPE.HOPPER,
+            ),
+        ):
+            self.assertEqual(comm_analysis.get_gpus_per_node(), 1)
+            self.assertEqual(
+                comm_analysis.detect_interconnect(8),
+                comm_analysis.InterconnectType.IB_NDR,
+            )
 
 
 def _get_all_gather_node(group_size, group_name):

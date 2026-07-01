@@ -2,6 +2,7 @@ import functools
 import logging
 import math
 import operator
+import os
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any
@@ -96,25 +97,9 @@ _GPU_TO_INTER: dict[NVIDIA_GPU_TYPE, InterconnectType] = {
 
 @functools.lru_cache
 def _has_nvlink() -> bool:
-    """Detect NVLink via nvidia-smi topology, falling back to peer access check."""
-    import subprocess
-
+    """Detect whether local GPUs can use a high-bandwidth peer path."""
     if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
         return True  # Single GPU: interconnect irrelevant
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "topo", "-m"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            # Check GPU-GPU section (before Legend) for "NV" links
-            topo = result.stdout.split("Legend")[0]
-            return "NV" in topo
-    except (subprocess.TimeoutExpired, OSError):
-        pass
-    # Fallback: peer access generally implies NVLink on datacenter GPUs
     try:
         return torch.cuda.can_device_access_peer(0, 1)
     except (AssertionError, RuntimeError):
@@ -148,9 +133,67 @@ def get_gpu_type() -> NVIDIA_GPU_TYPE:
         return NVIDIA_GPU_TYPE.AMPERE
 
 
+def _int_env(name: str) -> int | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _positive_int_env(name: str) -> int | None:
+    int_value = _int_env(name)
+    if int_value is None:
+        return None
+    return int_value if int_value > 0 else None
+
+
+def _is_loopback_master_addr(master_addr: str) -> bool:
+    return master_addr in (
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "0.0.0.0",
+    ) or master_addr.startswith("127.")
+
+
+def get_gpus_per_node() -> int:
+    """Infer local GPU count for distributed communication topology models."""
+    config_gpus_per_node = torch._inductor.config.gpus_per_node
+    if config_gpus_per_node is not None:
+        if config_gpus_per_node <= 0:
+            raise ValueError(
+                "torch._inductor.config.gpus_per_node must be a positive integer"
+            )
+        return config_gpus_per_node
+
+    local_world_size = _positive_int_env("LOCAL_WORLD_SIZE")
+    if local_world_size is not None:
+        return local_world_size
+
+    visible_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 8
+    if visible_gpus == 1:
+        world_size = _positive_int_env("WORLD_SIZE")
+        local_rank = _int_env("LOCAL_RANK")
+        master_addr = os.environ.get("MASTER_ADDR")
+        if (
+            world_size is not None
+            and local_rank is not None
+            and local_rank >= 0
+            and local_rank < world_size
+            and master_addr is not None
+            and _is_loopback_master_addr(master_addr)
+        ):
+            return world_size
+
+    return max(visible_gpus, 1)
+
+
 def detect_interconnect(group_size: int) -> InterconnectType:
     """Auto-detect interconnect type from GPU generation and group topology."""
-    gpus_per_node = torch.cuda.device_count() if torch.cuda.is_available() else 8
+    gpus_per_node = get_gpus_per_node()
     gpu_gen = get_gpu_type()
     if math.ceil(group_size / gpus_per_node) == 1:
         if not _has_nvlink():
@@ -502,7 +545,7 @@ def _nccl_algo_time(
     ncclTopoGetAlgoTime from NCCL tuning.cc. Returns -1 if the
     (algo, proto) combination is disabled for this configuration.
     """
-    gpus_per_node = torch.cuda.device_count() if torch.cuda.is_available() else 8
+    gpus_per_node = get_gpus_per_node()
     nNodes = math.ceil(group_size / gpus_per_node)
     nRanks = group_size
     compCapIndex = get_gpu_type()
