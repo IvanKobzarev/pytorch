@@ -126,17 +126,25 @@ def regional_inductor_pass(
         return result
 
     with torch._guards.tracing(tracing_ctx):
-        # Compile chunk invoke_subgraph HOP bodies directly (compile_fx_inner, no make_fx
-        # re-trace) into boxed real calls. Must precede regional_inductor: its standalone_compile
-        # re-traces the region and cannot ingest a region still containing an invoke_subgraph HOP
-        # (the HOP's nested GraphModule arg trips make_fx's create_arg). Call the inner helper to
-        # get a plain GraphModule back (regional_inductor_invoke_subgraph wraps in boxed_nop).
+        # Only precompile invoke_subgraph HOPs that explicitly request nested
+        # Inductor compilers. HOPs that only carry partitioner metadata should
+        # survive so the normal Inductor invoke_subgraph lowering handles them.
         from torch.fx.passes.regional_inductor_invoke_subgraph import (
+            _needs_inductor_compile,
             _recursive_compile_invoke_subgraph_nodes,
         )
 
-        with torch.fx.traceback.preserve_node_meta(enable=False):
-            gm = _recursive_compile_invoke_subgraph_nodes(gm)
+        has_nested_compile_hop = any(
+            _needs_inductor_compile(node)
+            for module in gm.modules()
+            if isinstance(module, torch.fx.GraphModule)
+            for node in module.graph.find_nodes(
+                op="call_function", target=torch.ops.higher_order.invoke_subgraph
+            )
+        )
+        if has_nested_compile_hop:
+            with torch.fx.traceback.preserve_node_meta(enable=False):
+                gm = _recursive_compile_invoke_subgraph_nodes(gm)
         gm = regional_inductor(gm, example_inputs)
 
     # regional_inductor may switch to boxed calling convention; reset to

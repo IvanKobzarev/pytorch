@@ -162,3 +162,34 @@ def apply_subgraph_region_annotations_pass(
     if outlined_regions:
         logger.info("Outlined %d annotated subgraph regions", outlined_regions)
     return gm
+
+
+def apply_invoke_subgraph_min_cut_pass(
+    gm: torch.fx.GraphModule,
+    example_inputs: tuple | None = None,
+    *,
+    static_input_indices: list[int] | None = None,
+) -> torch.fx.GraphModule:
+    """Run AOTAutograd's invoke_subgraph partitioner on traced fw/bw HOP pairs.
+
+    GraphTrainer's aot_fx_trace path already has one explicit fwd+loss+bwd graph,
+    so it bypasses AOTAutograd stage2 where torch.compile normally calls
+    run_joint_graph_passes_on_hops. Invoke it here for nested_compile_region-style
+    HOPs produced during tracing while preserving the invoke_subgraph boundaries.
+    """
+    from torch._functorch._aot_autograd.graph_compile import (
+        run_joint_graph_passes_on_hops,
+    )
+    from torch._higher_order_ops.utils import get_dummy_aot_autograd_config
+    from torch._inductor.compile_fx import partition_fn
+
+    result = run_joint_graph_passes_on_hops(
+        gm,
+        example_inputs,
+        get_dummy_aot_autograd_config(),
+        default_partition_fn=partition_fn,
+        static_input_indices=static_input_indices,
+    )
+    if result is not gm:
+        logger.info("Partitioned invoke_subgraph HOP regions with AOT min-cut")
+    return result
