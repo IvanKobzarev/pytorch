@@ -953,6 +953,11 @@ class AllocateLine(MemoryPlanningLine):
             return True
         if free_line.scheduler_node_index + 1 == self.scheduler_node_index:
             return True
+        min_size = config.large_buffer_reuse_threshold_bytes
+        max_size = config.large_buffer_reuse_max_threshold_bytes
+        apply_large_buffer_policy = bool(
+            min_size and size >= min_size and (not max_size or size < max_size)
+        )
         if not config.allow_buffer_reuse_across_fuse_regions:
             scheduler = V.graph.scheduler
             free_region = scheduler.get_fuse_region(
@@ -966,6 +971,8 @@ class AllocateLine(MemoryPlanningLine):
         overall_peak_memory = self.wrapper.estimate_peak.overall_peak_memory
         peak_memory_in_range = self.wrapper.estimate_peak.peak_between(free_line, self)
         new_peak_memory = size + peak_memory_in_range
+        if apply_large_buffer_policy:
+            return False
         return new_peak_memory <= overall_peak_memory
 
     def plan(self, state: MemoryPlanningState) -> MemoryPlanningLine:

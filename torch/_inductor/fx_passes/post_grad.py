@@ -1,9 +1,11 @@
 # mypy: allow-untyped-decorators
 # mypy: allow-untyped-defs
+import copy
 import functools
 import itertools
 import logging
 import operator
+import os
 from collections import Counter, defaultdict
 from collections.abc import Callable, Sequence
 from typing import Any, TypeVar
@@ -62,7 +64,7 @@ from ..virtualized import V
 from .b2b_gemm import B2B_GEMM_PASS
 from .control_dependencies import control_deps, preserve_node_ordering
 from .ddp_fusion import fuse_ddp_communication
-from .fuse_regions import apply_fuse_region_annotations
+from .fuse_regions import FUSE_REGION, apply_fuse_region_annotations
 from .group_batch_fusion import group_batch_fusion_passes, POST_GRAD_FUSIONS
 from .micro_pipeline_tp import micro_pipeline_tp_pass
 from .pre_grad import is_same_dict, save_inductor_dict
@@ -82,12 +84,1244 @@ log = logging.getLogger(__name__)
 aten = torch.ops.aten
 prims = torch.ops.prims
 
+REORDER_FOR_PEAK_MEMORY = "_inductor_reorder_for_peak_memory"
+
 # First pass_patterns[0] are applied, then [1], then [2]
 pass_patterns = [
     PatternMatcherPass(),
     PatternMatcherPass(),
     PatternMatcherPass(),
 ]
+
+
+def _estimate_tensor_metadata_bytes(value: object) -> int:
+    if hasattr(value, "shape") and hasattr(value, "dtype"):
+        numel = 1
+        for dim in value.shape:
+            try:
+                dim = int(dim)
+            except (TypeError, ValueError):
+                return 0
+            numel *= dim
+        return numel * value.dtype.itemsize
+    return 0
+
+
+def _estimate_fx_value_bytes(value: object) -> int:
+    bytes = _estimate_tensor_metadata_bytes(value)
+    if bytes:
+        return bytes
+    if isinstance(value, (tuple, list)):
+        return sum(_estimate_fx_value_bytes(item) for item in value)
+    return 0
+
+
+def reorder_graph_for_peak_memory(gm: torch.fx.GraphModule) -> None:
+    placeholders: list[torch.fx.Node] = []
+    output_node: torch.fx.Node | None = None
+    nodes: list[torch.fx.Node] = []
+    for node in gm.graph.nodes:
+        if node.op == "placeholder":
+            placeholders.append(node)
+        elif node.op == "output":
+            output_node = node
+        else:
+            nodes.append(node)
+
+    if output_node is None or len(nodes) < 2:
+        return
+
+    node_set = set(nodes)
+    original_index = {node: idx for idx, node in enumerate(nodes)}
+    output_bytes = {}
+    for node in nodes:
+        bytes = _estimate_fx_value_bytes(node.meta.get("val"))
+        if not bytes:
+            bytes = _estimate_fx_value_bytes(node.meta.get("example_value"))
+        if not bytes:
+            bytes = _estimate_fx_value_bytes(node.meta.get("tensor_meta"))
+        output_bytes[node] = bytes
+    output_users = set(output_node.all_input_nodes)
+    remaining_uses = {
+        node: sum(1 for user in node.users if user in node_set or user is output_node)
+        for node in itertools.chain(placeholders, nodes)
+    }
+    unscheduled_deps = {
+        node: sum(1 for dep in node.all_input_nodes if dep in node_set)
+        for node in nodes
+    }
+    ready = [node for node in nodes if unscheduled_deps[node] == 0]
+    scheduled: list[torch.fx.Node] = []
+
+    while ready:
+
+        def priority(node: torch.fx.Node) -> tuple[int, int, int, int]:
+            freed_bytes = sum(
+                output_bytes.get(dep, 0)
+                for dep in node.all_input_nodes
+                if dep in remaining_uses and remaining_uses[dep] == 1
+            )
+            return (
+                output_bytes[node] - freed_bytes,
+                output_bytes[node],
+                0 if node in output_users else 1,
+                original_index[node],
+            )
+
+        node = min(ready, key=priority)
+        ready.remove(node)
+        scheduled.append(node)
+
+        for dep in node.all_input_nodes:
+            if dep in remaining_uses:
+                remaining_uses[dep] -= 1
+
+        for user in node.users:
+            if user not in unscheduled_deps:
+                continue
+            unscheduled_deps[user] -= 1
+            if unscheduled_deps[user] == 0:
+                ready.append(user)
+
+    if len(scheduled) != len(nodes):
+        return
+
+    new_graph = torch.fx.Graph()
+    env: dict[torch.fx.Node, torch.fx.Node] = {}
+
+    for node in placeholders:
+        new_node = new_graph.placeholder(node.name, type_expr=node.type)
+        new_node.meta = copy.copy(node.meta)
+        env[node] = new_node
+
+    for node in scheduled:
+        new_node = new_graph.node_copy(node, lambda n: env[n])
+        new_node.meta = copy.copy(node.meta)
+        env[node] = new_node
+
+    new_graph.output(torch.fx.node.map_arg(output_node.args[0], lambda n: env[n]))
+    new_graph.lint()
+    gm.graph = new_graph
+    gm.recompile()
+
+
+def _custom_meta(node: torch.fx.Node, key: str) -> Any:
+    custom = node.meta.get("custom", {})
+    if isinstance(custom, dict):
+        return custom.get(key)
+    return None
+
+
+def _is_grad_accumulating_hop_role(role: Any) -> bool:
+    return role in {"bw_grad_accum", "fw_bw_grad_accum"}
+
+
+def _is_invoke_subgraph_hop(node: torch.fx.Node) -> bool:
+    return (
+        node.op == "call_function"
+        and node.target == torch.ops.higher_order.invoke_subgraph
+    )
+
+
+def _is_large_bw_grad_accum_hop_output(
+    node: torch.fx.Node, min_bytes: int
+) -> bool:
+    if not (
+        node.op == "call_function"
+        and node.target is operator.getitem
+        and len(node.args) == 2
+        and isinstance(node.args[0], torch.fx.Node)
+        and isinstance(node.args[1], int)
+    ):
+        return False
+
+    source = node.args[0]
+    return (
+        _is_invoke_subgraph_hop(source)
+        and _is_grad_accumulating_hop_role(_custom_meta(source, "region_role"))
+        and _estimate_fx_value_bytes(node.meta.get("val")) >= min_bytes
+    )
+
+
+def _is_bw_grad_accum_hop(node: torch.fx.Node) -> bool:
+    return (
+        _is_invoke_subgraph_hop(node)
+        and _is_grad_accumulating_hop_role(_custom_meta(node, "region_role"))
+    )
+
+
+def _get_invoke_subgraph_attr(node: torch.fx.Node) -> torch.fx.Node | None:
+    if not (_is_invoke_subgraph_hop(node) and len(node.args) >= 2):
+        return None
+    attr = node.args[0]
+    if (
+        isinstance(attr, torch.fx.Node)
+        and attr.op == "get_attr"
+        and isinstance(attr.target, str)
+    ):
+        return attr
+    return None
+
+
+def _get_hop_subgraph_attr(node: torch.fx.Node) -> torch.fx.Node | None:
+    if not _is_bw_grad_accum_hop(node):
+        return None
+    return _get_invoke_subgraph_attr(node)
+
+
+def _hop_output_values(gm: torch.fx.GraphModule) -> tuple[Any, ...] | None:
+    output_nodes = gm.graph.find_nodes(op="output")
+    if len(output_nodes) != 1:
+        return None
+    outputs = output_nodes[0].args[0]
+    if isinstance(outputs, tuple):
+        return outputs
+    if isinstance(outputs, list):
+        return tuple(outputs)
+    return (outputs,)
+
+
+def _unique_subgraph_name(gm: torch.fx.GraphModule, base: str) -> str:
+    safe_base = "".join(c if c.isalnum() or c == "_" else "_" for c in base)
+    name = safe_base
+    idx = 0
+    while hasattr(gm, name):
+        idx += 1
+        name = f"{safe_base}_{idx}"
+    return name
+
+
+def _fx_value_signature(value: object) -> tuple[Any, ...]:
+    if isinstance(value, (tuple, list)):
+        return (type(value).__name__, tuple(_fx_value_signature(v) for v in value))
+    return (
+        getattr(value, "dtype", None),
+        tuple(getattr(value, "shape", ())),
+        tuple(value.stride()) if hasattr(value, "stride") else None,
+        getattr(value, "device", None),
+    )
+
+
+def _graph_structure_key(gm: torch.fx.GraphModule) -> tuple[Any, ...]:
+    node_names: dict[torch.fx.Node, int] = {}
+    entries = []
+
+    def normalize(arg: object) -> object:
+        if isinstance(arg, torch.fx.Node):
+            return ("node", node_names[arg])
+        if isinstance(arg, tuple):
+            return ("tuple", tuple(normalize(v) for v in arg))
+        if isinstance(arg, list):
+            return ("list", tuple(normalize(v) for v in arg))
+        if isinstance(arg, dict):
+            return ("dict", tuple((k, normalize(v)) for k, v in sorted(arg.items())))
+        return ("const", repr(arg))
+
+    for idx, node in enumerate(gm.graph.nodes):
+        node_names[node] = idx
+        entries.append(
+            (
+                node.op,
+                repr(node.target),
+                normalize(node.args),
+                normalize(node.kwargs),
+                _fx_value_signature(node.meta.get("val")),
+            )
+        )
+    return tuple(entries)
+
+
+def _clone_hop_with_accumulated_output(
+    subgraph: torch.fx.GraphModule,
+    output_idx: int,
+    add_node: torch.fx.Node,
+    local_node: torch.fx.Node,
+    accum_node: torch.fx.Node,
+) -> torch.fx.GraphModule | None:
+    outputs = _hop_output_values(subgraph)
+    if outputs is None or output_idx >= len(outputs):
+        return None
+
+    new_graph = torch.fx.Graph()
+    val_map: dict[torch.fx.Node, torch.fx.Node] = {}
+    for ph in subgraph.graph.find_nodes(op="placeholder"):
+        new_ph = new_graph.placeholder(ph.name)
+        new_ph.meta = copy.copy(ph.meta)
+        val_map[ph] = new_ph
+
+    accum_ph = new_graph.placeholder("accumulated_hop_output")
+    accum_ph.meta = copy.copy(accum_node.meta)
+    copied_outputs = new_graph.graph_copy(subgraph.graph, val_map)
+    if not isinstance(copied_outputs, (tuple, list)):
+        copied_outputs = (copied_outputs,)
+    copied_outputs = list(copied_outputs)
+
+    if output_idx >= len(copied_outputs):
+        return None
+
+    if add_node.args[0] is local_node:
+        add_args = (copied_outputs[output_idx], accum_ph)
+    elif add_node.args[1] is local_node:
+        add_args = (accum_ph, copied_outputs[output_idx])
+    else:
+        return None
+
+    accumulated_output = new_graph.call_function(
+        add_node.target,
+        args=add_args,
+        kwargs=dict(add_node.kwargs),
+    )
+    accumulated_output.meta = copy.copy(add_node.meta)
+    copied_outputs[output_idx] = accumulated_output
+    new_graph.output(tuple(copied_outputs))
+
+    new_subgraph = torch.fx.GraphModule(copy.deepcopy(subgraph), new_graph)
+    new_subgraph.meta = copy.copy(subgraph.meta)
+    new_subgraph.graph.lint()
+    new_subgraph.recompile()
+    reorder_graph_for_peak_memory(new_subgraph)
+    return new_subgraph
+
+
+def fold_hop_output_reductions_for_peak_memory(
+    gm: torch.fx.GraphModule,
+) -> None:
+    min_bytes = 64 << 20
+    folded = 0
+    accumulated_subgraph_cache: dict[tuple[Any, ...], tuple[str, str]] = {}
+
+    while True:
+        order = {node: idx for idx, node in enumerate(gm.graph.nodes)}
+        changed = False
+        for local_node in list(gm.graph.nodes):
+            if not _is_large_bw_grad_accum_hop_output(local_node, min_bytes):
+                continue
+
+            hop_node = local_node.args[0]
+            output_idx = local_node.args[1]
+            if not (
+                isinstance(hop_node, torch.fx.Node)
+                and isinstance(output_idx, int)
+                and _is_bw_grad_accum_hop(hop_node)
+            ):
+                continue
+
+            add_users = [
+                user
+                for user in local_node.users
+                if _is_large_tensor_add(user, min_bytes)
+                and local_node in user.all_input_nodes
+            ]
+            if len(add_users) != 1:
+                continue
+            add_node = add_users[0]
+
+            if len(add_node.args) < 2:
+                continue
+            if add_node.args[0] is local_node:
+                accum_node = add_node.args[1]
+            elif add_node.args[1] is local_node:
+                accum_node = add_node.args[0]
+            else:
+                continue
+            if not isinstance(accum_node, torch.fx.Node):
+                continue
+            if order.get(accum_node, len(order)) >= order[hop_node]:
+                continue
+
+            attr_node = _get_hop_subgraph_attr(hop_node)
+            if attr_node is None:
+                continue
+            subgraph = getattr(gm, attr_node.target, None)
+            if not isinstance(subgraph, torch.fx.GraphModule):
+                continue
+
+            old_name = str(hop_node.args[1])
+            local_is_lhs = add_node.args[0] is local_node
+            cache_key = (
+                _graph_structure_key(subgraph),
+                output_idx,
+                repr(add_node.target),
+                local_is_lhs,
+                _fx_value_signature(accum_node.meta.get("val")),
+            )
+            cached_subgraph = accumulated_subgraph_cache.get(cache_key)
+            if cached_subgraph is None:
+                new_subgraph = _clone_hop_with_accumulated_output(
+                    subgraph, output_idx, add_node, local_node, accum_node
+                )
+                if new_subgraph is None:
+                    continue
+
+                new_attr_name = _unique_subgraph_name(
+                    gm, f"{attr_node.target}_accumulate_output_{output_idx}"
+                )
+                gm.register_module(new_attr_name, new_subgraph)
+                new_hop_name = f"{old_name}_accumulate_output_{output_idx}"
+                accumulated_subgraph_cache[cache_key] = (
+                    new_attr_name,
+                    new_hop_name,
+                )
+            else:
+                new_attr_name, new_hop_name = cached_subgraph
+
+            with gm.graph.inserting_before(hop_node):
+                new_attr = gm.graph.get_attr(new_attr_name)
+                new_attr.meta = copy.copy(attr_node.meta)
+                new_hop = gm.graph.call_function(
+                    hop_node.target,
+                    args=(
+                        new_attr,
+                        new_hop_name,
+                        *hop_node.args[2:],
+                        accum_node,
+                    ),
+                    kwargs=dict(hop_node.kwargs),
+                )
+                new_hop.meta = copy.copy(hop_node.meta)
+                new_hop.meta.pop("eager_input_vals", None)
+
+            hop_node.replace_all_uses_with(new_hop)
+            add_node.replace_all_uses_with(local_node)
+            gm.graph.erase_node(add_node)
+            gm.graph.erase_node(hop_node)
+            if not attr_node.users:
+                gm.graph.erase_node(attr_node)
+
+            folded += 1
+            changed = True
+            break
+
+        if not changed:
+            break
+
+    if not folded:
+        return
+
+    gm.graph.lint()
+    gm.recompile()
+    trace_structured(
+        "artifact",
+        metadata_fn=lambda: {
+            "name": "fold_hop_output_reductions_for_peak_memory",
+            "encoding": "json",
+        },
+        payload_fn=lambda: {"folded": folded},
+    )
+
+
+def _is_large_tensor_add(node: torch.fx.Node, min_bytes: int) -> bool:
+    return (
+        node.op == "call_function"
+        and node.target == torch.ops.aten.add.Tensor
+        and _estimate_fx_value_bytes(node.meta.get("val")) >= min_bytes
+    )
+
+
+def reorder_hop_output_reductions_for_peak_memory(
+    gm: torch.fx.GraphModule,
+) -> None:
+    min_bytes = 64 << 20
+    nodes = list(gm.graph.nodes)
+    hop_outputs = {
+        node for node in nodes if _is_large_bw_grad_accum_hop_output(node, min_bytes)
+    }
+    if not hop_outputs:
+        return
+
+    reduction_nodes: OrderedSet[torch.fx.Node] = OrderedSet()
+    changed = True
+    while changed:
+        changed = False
+        for node in nodes:
+            if node in reduction_nodes or not _is_large_tensor_add(node, min_bytes):
+                continue
+            if any(
+                dep in hop_outputs or dep in reduction_nodes
+                for dep in node.all_input_nodes
+            ):
+                reduction_nodes.add(node)
+                changed = True
+
+    if not reduction_nodes:
+        return
+
+    moved = 0
+    for node in reduction_nodes:
+        deps = [dep for dep in node.all_input_nodes if dep.graph is gm.graph]
+        if not deps:
+            continue
+        order = {n: idx for idx, n in enumerate(gm.graph.nodes)}
+        anchor = max(deps, key=lambda dep: order[dep])
+        if order[anchor] + 1 != order[node]:
+            anchor.append(node)
+            moved += 1
+
+    if not moved:
+        return
+
+    gm.graph.lint()
+    gm.recompile()
+    trace_structured(
+        "artifact",
+        metadata_fn=lambda: {
+            "name": "reorder_hop_output_reductions_for_peak_memory",
+            "encoding": "json",
+        },
+        payload_fn=lambda: {
+            "moved": moved,
+            "hop_outputs": len(hop_outputs),
+            "reduction_nodes": len(reduction_nodes),
+            "reductions": [node.name for node in reduction_nodes],
+        },
+    )
+
+
+def reorder_bw_grad_accum_hop_outputs_for_peak_memory(
+    gm: torch.fx.GraphModule,
+) -> None:
+    changed = 0
+
+    for hop_node in list(gm.graph.nodes):
+        if not _is_bw_grad_accum_hop(hop_node):
+            continue
+        attr_node = _get_hop_subgraph_attr(hop_node)
+        if attr_node is None:
+            continue
+        subgraph = getattr(gm, attr_node.target, None)
+        if not isinstance(subgraph, torch.fx.GraphModule):
+            continue
+
+        outputs = _hop_output_values(subgraph)
+        if outputs is None or len(outputs) < 2:
+            continue
+
+        output_sizes = [
+            _estimate_fx_value_bytes(getattr(out, "meta", {}).get("val"))
+            for out in outputs
+        ]
+        order = sorted(range(len(outputs)), key=lambda idx: (output_sizes[idx], idx))
+        if order == list(range(len(outputs))):
+            continue
+
+        old_to_new = {old_idx: new_idx for new_idx, old_idx in enumerate(order)}
+        output_node = subgraph.graph.find_nodes(op="output")[0]
+        output_node.args = (tuple(outputs[idx] for idx in order),)
+        subgraph.graph.lint()
+        subgraph.recompile()
+
+        vals = hop_node.meta.get("val")
+        if isinstance(vals, tuple) and len(vals) == len(outputs):
+            hop_node.meta["val"] = tuple(vals[idx] for idx in order)
+
+        for user in list(hop_node.users):
+            source = (
+                user.args[0]
+                if (
+                    user.op == "call_function"
+                    and user.target is operator.getitem
+                    and len(user.args) == 2
+                    and isinstance(user.args[1], int)
+                )
+                else None
+            )
+            if source is not hop_node:
+                continue
+            new_idx = old_to_new[user.args[1]]
+            user.args = (hop_node, new_idx)
+            if isinstance(hop_node.meta.get("val"), tuple):
+                user.meta["val"] = hop_node.meta["val"][new_idx]
+
+        changed += 1
+
+    if not changed:
+        return
+
+    gm.graph.lint()
+    gm.recompile()
+    trace_structured(
+        "artifact",
+        metadata_fn=lambda: {
+            "name": "reorder_bw_grad_accum_hop_outputs_for_peak_memory",
+            "encoding": "json",
+        },
+        payload_fn=lambda: {"changed": changed},
+    )
+
+
+def _collect_node_ancestors(
+    roots: Sequence[torch.fx.Node],
+) -> OrderedSet[torch.fx.Node]:
+    result: OrderedSet[torch.fx.Node] = OrderedSet()
+
+    def visit(node: torch.fx.Node) -> None:
+        if node in result:
+            return
+        for dep in node.all_input_nodes:
+            visit(dep)
+        if node.op != "placeholder":
+            result.add(node)
+
+    for root in roots:
+        visit(root)
+    return result
+
+
+def _copy_nodes_to_graph(
+    src_nodes: OrderedSet[torch.fx.Node],
+    src_to_dst: dict[torch.fx.Node, torch.fx.Node],
+    dst_graph: torch.fx.Graph,
+) -> bool:
+    for node in src_nodes:
+        if node in src_to_dst:
+            continue
+        if any(dep not in src_to_dst for dep in node.all_input_nodes):
+            return False
+        new_node = dst_graph.node_copy(node, lambda n: src_to_dst[n])
+        new_node.meta = copy.copy(node.meta)
+        src_to_dst[node] = new_node
+    return True
+
+
+def _placeholder_indices_for_nodes(
+    placeholders: Sequence[torch.fx.Node],
+    nodes: OrderedSet[torch.fx.Node],
+    outputs: Sequence[torch.fx.Node],
+) -> list[int]:
+    used: set[torch.fx.Node] = set()
+    for output in outputs:
+        if output.op == "placeholder":
+            used.add(output)
+    for node in nodes:
+        for dep in node.all_input_nodes:
+            if dep.op == "placeholder":
+                used.add(dep)
+    return [idx for idx, ph in enumerate(placeholders) if ph in used]
+
+
+def _node_is_small_vector(node: torch.fx.Node, max_bytes: int) -> bool:
+    val = node.meta.get("val")
+    shape = getattr(val, "shape", None)
+    return (
+        shape is not None
+        and len(shape) == 1
+        and 0 < _estimate_fx_value_bytes(val) <= max_bytes
+    )
+
+
+def _node_is_large_bf16_tensor(node: torch.fx.Node, min_bytes: int) -> bool:
+    val = node.meta.get("val")
+    return (
+        getattr(val, "dtype", None) is torch.bfloat16
+        and _estimate_fx_value_bytes(val) >= min_bytes
+    )
+
+
+def _match_large_rmsnorm_xhat(
+    node: torch.fx.Node,
+    min_bytes: int,
+) -> tuple[torch.fx.Node, torch.fx.Node] | None:
+    if not (
+        node.op == "call_function"
+        and node.target == torch.ops.aten.mul.Tensor
+        and len(node.args) >= 2
+        and len(node.users) > 1
+        and _estimate_fx_value_bytes(node.meta.get("val")) >= min_bytes
+        and getattr(node.meta.get("val"), "dtype", None) is torch.float32
+    ):
+        return None
+
+    args = node.args[:2]
+    for convert_arg, other_arg in (args, tuple(reversed(args))):
+        if not (
+            isinstance(convert_arg, torch.fx.Node)
+            and convert_arg.op == "call_function"
+            and convert_arg.target == torch.ops.prims.convert_element_type.default
+            and len(convert_arg.args) >= 2
+            and convert_arg.args[1] is torch.float32
+            and isinstance(convert_arg.args[0], torch.fx.Node)
+            and getattr(convert_arg.args[0].meta.get("val"), "dtype", None)
+            is torch.bfloat16
+            and isinstance(other_arg, torch.fx.Node)
+            and other_arg.op == "call_function"
+            and other_arg.target == torch.ops.aten.rsqrt.default
+        ):
+            continue
+
+        src_shape = getattr(convert_arg.args[0].meta.get("val"), "shape", None)
+        rsqrt_shape = getattr(other_arg.meta.get("val"), "shape", None)
+        if src_shape is None or rsqrt_shape is None:
+            continue
+        if len(src_shape) != 2 or tuple(rsqrt_shape) != (src_shape[0], 1):
+            continue
+        return convert_arg, other_arg
+
+    return None
+
+
+def clone_large_rmsnorm_xhat_for_peak_memory(gm: torch.fx.GraphModule) -> None:
+    min_bytes = 64 << 20
+    changed = 0
+
+    for node in list(gm.graph.nodes):
+        matched = _match_large_rmsnorm_xhat(node, min_bytes)
+        if matched is None:
+            continue
+        convert_node, rsqrt_node = matched
+        users = [
+            user
+            for user in list(node.users)
+            if user.op != "output" and user.graph is gm.graph
+        ]
+        if len(users) != len(node.users):
+            continue
+
+        for user in users:
+            with gm.graph.inserting_before(user):
+                new_convert = gm.graph.call_function(
+                    convert_node.target,
+                    args=convert_node.args,
+                    kwargs=dict(convert_node.kwargs),
+                )
+                new_convert.meta = copy.copy(convert_node.meta)
+                if node.args[0] is convert_node:
+                    new_args = (new_convert, rsqrt_node, *node.args[2:])
+                else:
+                    new_args = (rsqrt_node, new_convert, *node.args[2:])
+                new_node = gm.graph.call_function(
+                    node.target,
+                    args=new_args,
+                    kwargs=dict(node.kwargs),
+                )
+                new_node.meta = copy.copy(node.meta)
+            user.replace_input_with(node, new_node)
+
+        if not node.users:
+            gm.graph.erase_node(node)
+        if not convert_node.users:
+            gm.graph.erase_node(convert_node)
+        changed += 1
+
+    if not changed:
+        return
+
+    gm.graph.lint()
+    gm.recompile()
+    trace_structured(
+        "artifact",
+        metadata_fn=lambda: {
+            "name": "clone_large_rmsnorm_xhat_for_peak_memory",
+            "encoding": "json",
+        },
+        payload_fn=lambda: {"changed": changed},
+    )
+
+
+def _maybe_padded_row_major_metadata_val(value: object) -> object | None:
+    if not (
+        config.comprehensive_padding
+        and getattr(value, "dtype", None) is torch.bfloat16
+        and hasattr(value, "shape")
+        and hasattr(value, "stride")
+    ):
+        return None
+
+    try:
+        shape = tuple(int(dim) for dim in value.shape)  # type: ignore[attr-defined]
+        stride = tuple(int(dim) for dim in value.stride())  # type: ignore[attr-defined]
+    except (TypeError, ValueError):
+        return None
+
+    if len(shape) != 2 or stride != (shape[1], 1):
+        return None
+
+    align = config.padding_alignment_bytes // value.dtype.itemsize  # type: ignore[attr-defined]
+    row_stride = shape[1]
+    if row_stride <= config.padding_stride_threshold or row_stride % align == 0:
+        return None
+
+    padded_stride = ((row_stride + align - 1) // align * align, 1)
+    fake_mode = getattr(value, "fake_mode", None)
+    if fake_mode is not None:
+        with fake_mode:
+            return value.new_empty_strided(shape, padded_stride)  # type: ignore[attr-defined]
+
+    device = getattr(value, "device", None)
+    if getattr(device, "type", None) == "meta":
+        return torch.empty_strided(
+            shape,
+            padded_stride,
+            dtype=value.dtype,  # type: ignore[attr-defined]
+            device=device,
+        )
+
+    return None
+
+
+def _set_metadata_val_and_stride(
+    node: torch.fx.Node, value: object, stride: tuple[int, ...]
+) -> None:
+    node.meta["val"] = value
+    if "example_value" in node.meta:
+        node.meta["example_value"] = value
+
+    tensor_meta = node.meta.get("tensor_meta")
+    if hasattr(tensor_meta, "_replace"):
+        node.meta["tensor_meta"] = tensor_meta._replace(stride=stride)
+
+
+def _split_bw_grad_accum_subgraph(
+    subgraph: torch.fx.GraphModule,
+) -> tuple[
+    torch.fx.GraphModule,
+    torch.fx.GraphModule,
+    list[int],
+    list[int],
+    list[int],
+    list[int],
+] | None:
+    outputs = _hop_output_values(subgraph)
+    if outputs is None or len(outputs) < 3:
+        return None
+    if not all(isinstance(output, torch.fx.Node) for output in outputs):
+        return None
+
+    small_output_max_bytes = 8 << 20
+    large_bridge_min_bytes = 64 << 20
+    small_output_indices = [
+        idx
+        for idx, output in enumerate(outputs)
+        if isinstance(output, torch.fx.Node)
+        and _node_is_small_vector(output, small_output_max_bytes)
+    ]
+    if not small_output_indices:
+        return None
+
+    large_output_indices = [
+        idx for idx in range(len(outputs)) if idx not in small_output_indices
+    ]
+    if len(large_output_indices) < 2:
+        return None
+
+    small_outputs = [outputs[idx] for idx in small_output_indices]
+    large_outputs = [outputs[idx] for idx in large_output_indices]
+    small_ancestors = _collect_node_ancestors(small_outputs)
+    large_ancestor_sets = [
+        set(_collect_node_ancestors([output])) for output in large_outputs
+    ]
+    common_large_ancestors = set.intersection(*large_ancestor_sets)
+    graph_order = {node: idx for idx, node in enumerate(subgraph.graph.nodes)}
+    bridge_candidates = [
+        node
+        for node in common_large_ancestors
+        if node not in small_ancestors
+        and _node_is_large_bf16_tensor(node, large_bridge_min_bytes)
+    ]
+    if not bridge_candidates:
+        return None
+
+    bridge = max(bridge_candidates, key=lambda node: graph_order[node])
+    early_outputs = [bridge, *small_outputs]
+    early_nodes = _collect_node_ancestors(early_outputs)
+
+    late_nodes = _collect_node_ancestors(large_outputs)
+    for node in list(late_nodes):
+        if node in early_nodes:
+            late_nodes.remove(node)
+
+    placeholders = list(subgraph.graph.find_nodes(op="placeholder"))
+
+    early_input_indices = _placeholder_indices_for_nodes(
+        placeholders, early_nodes, early_outputs
+    )
+    early_graph = torch.fx.Graph()
+    early_map: dict[torch.fx.Node, torch.fx.Node] = {}
+    for idx in early_input_indices:
+        ph = placeholders[idx]
+        new_ph = early_graph.placeholder(ph.name, type_expr=ph.type)
+        new_ph.meta = copy.copy(ph.meta)
+        early_map[ph] = new_ph
+    if not _copy_nodes_to_graph(early_nodes, early_map, early_graph):
+        return None
+
+    padded_bridge_val = _maybe_padded_row_major_metadata_val(bridge.meta.get("val"))
+    if padded_bridge_val is not None:
+        _set_metadata_val_and_stride(
+            early_map[bridge],
+            padded_bridge_val,
+            padded_bridge_val.stride(),  # type: ignore[attr-defined]
+        )
+    early_graph.output(tuple(early_map[output] for output in early_outputs))
+
+    late_input_indices = _placeholder_indices_for_nodes(
+        placeholders, late_nodes, large_outputs
+    )
+    late_graph = torch.fx.Graph()
+    late_map: dict[torch.fx.Node, torch.fx.Node] = {}
+    for idx in late_input_indices:
+        ph = placeholders[idx]
+        new_ph = late_graph.placeholder(ph.name, type_expr=ph.type)
+        new_ph.meta = copy.copy(ph.meta)
+        late_map[ph] = new_ph
+    bridge_ph = late_graph.placeholder(f"{bridge.name}_bridge")
+    bridge_ph.meta = copy.copy(bridge.meta)
+    if padded_bridge_val is not None:
+        _set_metadata_val_and_stride(
+            bridge_ph,
+            padded_bridge_val,
+            padded_bridge_val.stride(),  # type: ignore[attr-defined]
+        )
+    late_map[bridge] = bridge_ph
+
+    for node in late_nodes:
+        for dep in node.all_input_nodes:
+            if dep in early_nodes and dep is not bridge:
+                return None
+    if not _copy_nodes_to_graph(late_nodes, late_map, late_graph):
+        return None
+    late_graph.output(tuple(late_map[output] for output in large_outputs))
+
+    early_gm = torch.fx.GraphModule(copy.deepcopy(subgraph), early_graph)
+    early_gm.meta = copy.copy(subgraph.meta)
+    early_gm.meta["region_role"] = "bw_grad_accum_early"
+    early_gm.graph.lint()
+    early_gm.recompile()
+
+    late_gm = torch.fx.GraphModule(copy.deepcopy(subgraph), late_graph)
+    late_gm.meta = copy.copy(subgraph.meta)
+    late_gm.meta["region_role"] = "bw_grad_accum_late"
+    late_gm.graph.lint()
+    late_gm.recompile()
+
+    return (
+        early_gm,
+        late_gm,
+        small_output_indices,
+        large_output_indices,
+        early_input_indices,
+        late_input_indices,
+    )
+
+
+def split_bw_grad_accum_hops_for_peak_memory(gm: torch.fx.GraphModule) -> None:
+    changed = 0
+    split_subgraph_cache: dict[
+        tuple[Any, ...],
+        tuple[
+            str,
+            str,
+            tuple[Any, ...],
+            tuple[Any, ...],
+            list[int],
+            list[int],
+            list[int],
+            list[int],
+        ],
+    ] = {}
+
+    for hop_node in list(gm.graph.nodes):
+        if not _is_bw_grad_accum_hop(hop_node):
+            continue
+        attr_node = _get_hop_subgraph_attr(hop_node)
+        if attr_node is None:
+            continue
+        subgraph = getattr(gm, attr_node.target, None)
+        if not isinstance(subgraph, torch.fx.GraphModule):
+            continue
+
+        cache_key = (_graph_structure_key(subgraph),)
+        cached_split = split_subgraph_cache.get(cache_key)
+        if cached_split is None:
+            split = _split_bw_grad_accum_subgraph(subgraph)
+            if split is None:
+                continue
+            (
+                early_gm,
+                late_gm,
+                small_indices,
+                large_indices,
+                early_input_indices,
+                late_input_indices,
+            ) = split
+
+            early_name = _unique_subgraph_name(gm, f"{attr_node.target}_early")
+            late_name = _unique_subgraph_name(gm, f"{attr_node.target}_late")
+            gm.register_module(early_name, early_gm)
+            gm.register_module(late_name, late_gm)
+
+            early_vals = tuple(
+                output.meta["val"] if isinstance(output, torch.fx.Node) else None
+                for output in _hop_output_values(early_gm) or ()
+            )
+            late_vals = tuple(
+                output.meta["val"] if isinstance(output, torch.fx.Node) else None
+                for output in _hop_output_values(late_gm) or ()
+            )
+            split_subgraph_cache[cache_key] = (
+                early_name,
+                late_name,
+                early_vals,
+                late_vals,
+                small_indices,
+                large_indices,
+                early_input_indices,
+                late_input_indices,
+            )
+        else:
+            (
+                early_name,
+                late_name,
+                early_vals,
+                late_vals,
+                small_indices,
+                large_indices,
+                early_input_indices,
+                late_input_indices,
+            ) = cached_split
+
+        getitem_users: dict[int, torch.fx.Node] = {}
+        unsupported_user = False
+        for user in list(hop_node.users):
+            source = (
+                user.args[0]
+                if (
+                    user.op == "call_function"
+                    and user.target is operator.getitem
+                    and len(user.args) == 2
+                    and isinstance(user.args[1], int)
+                )
+                else None
+            )
+            if source is not hop_node or user.args[1] in getitem_users:
+                unsupported_user = True
+                break
+            getitem_users[user.args[1]] = user
+        if unsupported_user:
+            continue
+
+        replacement_by_output_idx: dict[int, torch.fx.Node] = {}
+        hop_inputs = hop_node.args[2:]
+        early_inputs = tuple(hop_inputs[idx] for idx in early_input_indices)
+        late_inputs = tuple(hop_inputs[idx] for idx in late_input_indices)
+
+        with gm.graph.inserting_before(hop_node):
+            early_attr = gm.graph.get_attr(early_name)
+            early_attr.meta = copy.copy(attr_node.meta)
+            early_hop = gm.graph.call_function(
+                hop_node.target,
+                args=(early_attr, early_name, *early_inputs),
+                kwargs=dict(hop_node.kwargs),
+            )
+            early_hop.meta = copy.copy(hop_node.meta)
+            early_hop.meta["val"] = early_vals
+            early_hop.meta.pop("eager_input_vals", None)
+            early_hop.meta.setdefault("custom", {})
+            early_hop.meta["custom"]["region_role"] = "bw_grad_accum_early"
+
+            early_getitems = []
+            for idx, output_val in enumerate(early_vals):
+                getitem_node = gm.graph.call_function(
+                    operator.getitem,
+                    args=(early_hop, idx),
+                )
+                getitem_node.meta = copy.copy(early_hop.meta)
+                getitem_node.meta["val"] = output_val
+                early_getitems.append(getitem_node)
+
+            late_attr = gm.graph.get_attr(late_name)
+            late_attr.meta = copy.copy(attr_node.meta)
+            late_hop = gm.graph.call_function(
+                hop_node.target,
+                args=(late_attr, late_name, *late_inputs, early_getitems[0]),
+                kwargs=dict(hop_node.kwargs),
+            )
+            late_hop.meta = copy.copy(hop_node.meta)
+            late_hop.meta["val"] = late_vals
+            late_hop.meta.pop("eager_input_vals", None)
+            late_hop.meta.setdefault("custom", {})
+            late_hop.meta["custom"]["region_role"] = "bw_grad_accum_late"
+
+            for late_output_idx, output_val in enumerate(late_vals):
+                getitem_node = gm.graph.call_function(
+                    operator.getitem,
+                    args=(late_hop, late_output_idx),
+                )
+                getitem_node.meta = copy.copy(late_hop.meta)
+                getitem_node.meta["val"] = output_val
+                replacement_by_output_idx[large_indices[late_output_idx]] = getitem_node
+
+            for early_output_idx, old_output_idx in enumerate(small_indices, start=1):
+                replacement_by_output_idx[old_output_idx] = early_getitems[
+                    early_output_idx
+                ]
+
+        for output_idx, old_getitem in getitem_users.items():
+            replacement = replacement_by_output_idx.get(output_idx)
+            if replacement is None:
+                unsupported_user = True
+                break
+            old_getitem.replace_all_uses_with(replacement)
+        if unsupported_user:
+            continue
+
+        for old_getitem in getitem_users.values():
+            if not old_getitem.users:
+                gm.graph.erase_node(old_getitem)
+        if not hop_node.users:
+            gm.graph.erase_node(hop_node)
+        if not attr_node.users:
+            gm.graph.erase_node(attr_node)
+        changed += 1
+
+    if not changed:
+        return
+
+    gm.graph.lint()
+    gm.recompile()
+    trace_structured(
+        "artifact",
+        metadata_fn=lambda: {
+            "name": "split_bw_grad_accum_hops_for_peak_memory",
+            "encoding": "json",
+        },
+        payload_fn=lambda: {"changed": changed},
+    )
+
+
+def annotate_hop_outer_fw_bw_fuse_regions(gm: torch.fx.GraphModule) -> None:
+    if not any(
+        _is_invoke_subgraph_hop(node) and _custom_meta(node, "region_id") is not None
+        for node in gm.graph.nodes
+    ):
+        return
+
+    bw_nodes = {
+        node
+        for node in gm.graph.nodes
+        if node.meta.get("autograd_backward") is True
+    }
+
+    fw_count = 0
+    bw_count = 0
+    for node in gm.graph.nodes:
+        if node.op in ("placeholder", "output", "get_attr"):
+            continue
+        if _is_invoke_subgraph_hop(node):
+            continue
+        if FUSE_REGION in node.meta:
+            continue
+        if node in bw_nodes:
+            node.meta[FUSE_REGION] = "hop_outer_bw"
+            bw_count += 1
+        else:
+            node.meta[FUSE_REGION] = "hop_outer_fw"
+            fw_count += 1
+
+    if not fw_count and not bw_count:
+        return
+
+    trace_structured(
+        "artifact",
+        metadata_fn=lambda: {
+            "name": "annotate_hop_outer_fw_bw_fuse_regions",
+            "encoding": "json",
+        },
+        payload_fn=lambda: {
+            "fw_count": fw_count,
+            "bw_count": bw_count,
+        },
+    )
+
+
+def _is_all_gather_into_tensor_node(node: torch.fx.Node) -> bool:
+    return (
+        node.op == "call_function"
+        and node.target
+        is torch.ops._c10d_functional.all_gather_into_tensor.default
+    )
+
+
+def _is_wait_tensor_node(node: torch.fx.Node) -> bool:
+    return (
+        node.op == "call_function"
+        and node.target is torch.ops._c10d_functional.wait_tensor.default
+    )
+
+
+def _is_large_bf16_multiuse_tensor(node: torch.fx.Node, min_bytes: int) -> bool:
+    val = node.meta.get("val")
+    if getattr(val, "dtype", None) is not torch.bfloat16:
+        return False
+    if _estimate_fx_value_bytes(val) < min_bytes:
+        return False
+    return sum(1 for user in node.users if user.op != "output") > 1
+
+
+def delay_hop_outer_fw_all_gathers_for_peak_memory(
+    gm: torch.fx.GraphModule,
+    *,
+    min_dep_bytes: int = 1 << 30,
+) -> None:
+    if not any(
+        _is_invoke_subgraph_hop(node) and _custom_meta(node, "region_id") is not None
+        for node in gm.graph.nodes
+    ):
+        return
+
+    nodes = list(gm.graph.nodes)
+    order = {node: idx for idx, node in enumerate(nodes)}
+    last_hop_idx = max(
+        order[node]
+        for node in nodes
+        if _is_invoke_subgraph_hop(node) and _custom_meta(node, "region_id") is not None
+    )
+    additional_deps_map: dict[torch.fx.Node, OrderedSet[torch.fx.Node]] = {}
+
+    for node in nodes:
+        if not _is_all_gather_into_tensor_node(node):
+            continue
+        if order[node] <= last_hop_idx:
+            continue
+        users = [user for user in node.users if user in order]
+        if not users:
+            continue
+        first_user_idx = min(order[user] for user in users)
+        if first_user_idx <= order[node] + 1:
+            continue
+
+        users_before_wait = [
+            user
+            for user in users
+            if order[user] == first_user_idx and _is_wait_tensor_node(user)
+        ]
+        if not users_before_wait:
+            continue
+
+        candidates = [
+            candidate
+            for candidate in nodes[order[node] + 1 : first_user_idx]
+            if _is_large_bf16_multiuse_tensor(candidate, min_dep_bytes)
+        ]
+        if not candidates:
+            continue
+
+        additional_deps_map[node] = OrderedSet([candidates[0]])
+
+    if not additional_deps_map:
+        return
+
+    preserve_node_ordering(gm.graph, additional_deps_map)
+    stable_topological_sort(gm.graph)
+    gm.graph.lint()
+    gm.recompile()
+    trace_structured(
+        "artifact",
+        metadata_fn=lambda: {
+            "name": "delay_hop_outer_fw_all_gathers_for_peak_memory",
+            "encoding": "json",
+        },
+        payload_fn=lambda: {"changed": len(additional_deps_map)},
+    )
 
 
 def _remove_profiler_ops(graph: torch.fx.Graph) -> None:
@@ -303,6 +1537,11 @@ def post_grad_passes(gm: torch.fx.GraphModule, is_inference: bool):
         move_constructors_to_gpu
     )
 
+    if gm.meta.get(REORDER_FOR_PEAK_MEMORY):
+        GraphTransformObserver(gm, "reorder_for_peak_memory").apply_gm_pass(
+            reorder_graph_for_peak_memory
+        )
+
     fake_tensor_updater.incremental_update()
 
     for device, custom_backend_pass in custom_backend_passes.items():
@@ -472,6 +1711,33 @@ def post_grad_passes(gm: torch.fx.GraphModule, is_inference: bool):
     GraphTransformObserver(gm, "decompose_map_to_while_loop").apply_gm_pass(
         decompose_map_to_while_loop
     )
+
+    GraphTransformObserver(
+        gm, "fold_hop_output_reductions_for_peak_memory"
+    ).apply_gm_pass(fold_hop_output_reductions_for_peak_memory)
+    GraphTransformObserver(
+        gm, "reorder_hop_output_reductions_for_peak_memory"
+    ).apply_gm_pass(reorder_hop_output_reductions_for_peak_memory)
+    if os.environ.get("TORCHINDUCTOR_DISABLE_SPLIT_BW_GRAD_ACCUM_HOPS") != "1":
+        GraphTransformObserver(
+            gm, "split_bw_grad_accum_hops_for_peak_memory"
+        ).apply_gm_pass(split_bw_grad_accum_hops_for_peak_memory)
+    if os.environ.get("TORCHINDUCTOR_REORDER_BW_GRAD_ACCUM_HOP_OUTPUTS") == "1":
+        GraphTransformObserver(
+            gm, "reorder_bw_grad_accum_hop_outputs_for_peak_memory"
+        ).apply_gm_pass(reorder_bw_grad_accum_hop_outputs_for_peak_memory)
+    if os.environ.get("TORCHINDUCTOR_DISABLE_CLONE_LARGE_RMSNORM_XHAT") != "1":
+        GraphTransformObserver(
+            gm, "clone_large_rmsnorm_xhat_for_peak_memory"
+        ).apply_gm_pass(clone_large_rmsnorm_xhat_for_peak_memory)
+    if os.environ.get("TORCHINDUCTOR_ENABLE_DELAY_HOP_OUTER_FW_ALL_GATHERS") == "1":
+        GraphTransformObserver(
+            gm, "delay_hop_outer_fw_all_gathers_for_peak_memory"
+        ).apply_gm_pass(delay_hop_outer_fw_all_gathers_for_peak_memory)
+    if os.environ.get("TORCHINDUCTOR_DISABLE_HOP_OUTER_FW_BW_FUSE_REGIONS") != "1":
+        GraphTransformObserver(
+            gm, "annotate_hop_outer_fw_bw_fuse_regions"
+        ).apply_gm_pass(annotate_hop_outer_fw_bw_fuse_regions)
 
     gm.recompile()
     gm.graph.lint()

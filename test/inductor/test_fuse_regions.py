@@ -436,6 +436,20 @@ class TestFuseRegions(InductorTestCase):
             with config.patch(allow_buffer_reuse_across_fuse_regions=False):
                 self.assertTrue(alloc_line.should_reuse_buffer(adjacent_free_line, 128))
 
+            with config.patch(large_buffer_reuse_threshold_bytes=128):
+                self.assertFalse(alloc_line.should_reuse_buffer(free_line, 128))
+                self.assertTrue(alloc_line.should_reuse_buffer(free_line, 127))
+                self.assertTrue(
+                    alloc_line.should_reuse_buffer(adjacent_free_line, 128)
+                )
+
+            with config.patch(
+                large_buffer_reuse_threshold_bytes=128,
+                large_buffer_reuse_max_threshold_bytes=256,
+            ):
+                self.assertFalse(alloc_line.should_reuse_buffer(free_line, 128))
+                self.assertTrue(alloc_line.should_reuse_buffer(free_line, 256))
+
     def test_fuse_region_uses_invoke_subgraph_arg_extraction(self):
         from torch._inductor.fx_passes.fuse_regions import FUSE_REGION, mark_fuse_region
         from torch._inductor.fx_utils import _extract_subgraphs_and_args

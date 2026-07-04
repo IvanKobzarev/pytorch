@@ -215,8 +215,31 @@ def fuse_as_graphmodule(
                 # external user node, need to expose as an output
                 output_mapping[node] = node_map[node]
 
+    output_node = gm.graph.output_node()
+    output_order: list[Node] = []
+    seen_outputs: set[Node] = set()
+
+    def collect_user_output_nodes(x: object) -> None:
+        if isinstance(x, Node):
+            if x in output_mapping and x not in seen_outputs:
+                output_order.append(x)
+                seen_outputs.add(x)
+            return
+        if isinstance(x, (tuple, list)):
+            for item in x:
+                collect_user_output_nodes(item)
+            return
+        if isinstance(x, dict):
+            for item in x.values():
+                collect_user_output_nodes(item)
+
+    collect_user_output_nodes(output_node.args[0])
+    output_order.extend(
+        node for node in output_mapping if node not in seen_outputs
+    )
+
     # outs contain nodes in the new subgraph
-    outs = tuple(output_mapping.values())
+    outs = tuple(output_mapping[node] for node in output_order)
 
     if always_return_tuple:
         # always return a tuple, even if there is only one output
@@ -236,7 +259,7 @@ def fuse_as_graphmodule(
     original_inputs: tuple[Node, ...] = tuple(node_to_placeholder.keys())
 
     # sub_gm's outputs node in the original module
-    original_outputs: tuple[Node, ...] = tuple(output_mapping.keys())
+    original_outputs: tuple[Node, ...] = tuple(output_order)
 
     return fused_gm, original_inputs, original_outputs
 

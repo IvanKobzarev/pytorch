@@ -73,6 +73,7 @@ from .exc import (
     MissingOperatorWithDecomp,
     MissingOperatorWithoutDecomp,
 )
+from .fx_passes.fuse_regions import FUSE_REGION
 from .fx_utils import count_flops_fx
 from .ir import (
     assign_origin_node,
@@ -2183,6 +2184,20 @@ class GraphLowering(torch.fx.Interpreter):
                     # Use inner fn as a rough proxy. Good enough.
                     if curr.has_large_inner_fn(threshold=100):
                         result.realize()
+
+        region = n.meta.get(FUSE_REGION)
+        if region is not None:
+            if not isinstance(region, str):
+                raise AssertionError(f"expected fuse_region to be str, got {region}")
+            for op in self.operations[operation_watermark:]:
+                if not hasattr(op, "annotations"):
+                    continue
+                existing_region = op.annotations.get(FUSE_REGION)
+                if existing_region is not None and existing_region != region:
+                    raise AssertionError(
+                        f"expected one fuse_region per op, got {existing_region} and {region}"
+                    )
+                op.annotations[FUSE_REGION] = region
 
         assign_origin_node(result, n)
         self.register_users_of(result)

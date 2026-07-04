@@ -5026,6 +5026,48 @@ class TestInvokeSubgraphTrainStepCapture(TestCase):
             self.assertIn("nested_region_config", node.meta["custom"])
 
     @torch._dynamo.config.patch(
+        enable_invoke_subgraph_regional_compile=True,
+        inline_single_use_invoke_subgraph=False,
+    )
+    def test_hop_partitioner_sees_static_inputs(self):
+        from torch._functorch.partitioners import default_partition
+        from torch._higher_order_ops.invoke_subgraph import (
+            get_invoke_subgraph_compile_options,
+        )
+
+        seen_static_indices = []
+
+        def recording_partitioner(gm, joint_inputs, **kwargs):
+            seen_static_indices.append(
+                list(kwargs.get("static_lifetime_input_indices") or [])
+            )
+            return default_partition(gm, joint_inputs, **kwargs)
+
+        config = get_invoke_subgraph_compile_options(
+            inductor_config_patches={},
+            decompositions=torch._decomp.core_aten_decompositions(),
+            partitioner=recording_partitioner,
+        )
+
+        @nested_compile_region(options=config)
+        def nested_fn(weight, x):
+            return torch.mm(x, weight)
+
+        class Model(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.randn(4, 4))
+
+            def forward(self, x):
+                return nested_fn(self.weight, x).sum()
+
+        model = Model()
+        x = torch.randn(4, 4, requires_grad=True)
+        torch.compile(model, backend="aot_eager", fullgraph=True)(x).backward()
+
+        self.assertEqual(seen_static_indices, [[1]])
+
+    @torch._dynamo.config.patch(
         trace_autograd_ops=True,
         enable_invoke_subgraph_regional_compile=True,
         inline_single_use_invoke_subgraph=False,

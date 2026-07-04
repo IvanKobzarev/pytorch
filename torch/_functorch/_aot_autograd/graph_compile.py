@@ -14,6 +14,7 @@ import functools
 import itertools
 import logging
 import operator
+import os
 import threading
 import time
 import traceback
@@ -457,7 +458,11 @@ def aot_stage2_inference(
     # Partition them before the remat pass so that remat duplicates the
     # already-partitioned fw subgraphs (which produce saved tensors for bw).
     fw_module = run_joint_graph_passes_on_hops(
-        fw_module, None, aot_config, default_partition_fn=partition_fn
+        fw_module,
+        None,
+        aot_config,
+        default_partition_fn=partition_fn,
+        static_input_indices=fw_metadata.static_input_indices,
     )
 
     # Apply AC rematerialization after HOP partitioning. This must happen
@@ -692,6 +697,8 @@ class InvokeSubgraphHopGraphs:
     new_bw_hop_gm: torch.fx.GraphModule | None = None
     new_num_sym_nodes: int | None = None
     new_num_saved_nodes: int | None = None
+    new_extra_output_input_indices: list[int | None] | None = None
+    new_extra_output_getitem_indices: list[int | None] | None = None
 
 
 def prepare_for_partitioner(
@@ -824,6 +831,7 @@ def run_joint_graph_passes_on_hops(
         ..., tuple[torch.fx.GraphModule, torch.fx.GraphModule]
     ]
     | None = None,
+    static_input_indices: list[int] | None = None,
 ) -> torch.fx.GraphModule:
     """
     This pass runs the joint graph passes on the HOP graph. In torch.compile, we
@@ -863,6 +871,53 @@ def run_joint_graph_passes_on_hops(
 
     def num_inputs(mod: torch.fx.GraphModule) -> int:
         return len(mod.graph.find_nodes(op="placeholder"))
+
+    def get_hop_static_lifetime_input_indices(
+        fw_hop_node: torch.fx.Node,
+    ) -> list[int]:
+        if not static_input_indices:
+            return []
+
+        static_input_indices_set = set(static_input_indices)
+        placeholder_indices = {
+            node: idx
+            for idx, node in enumerate(joint_gm.graph.find_nodes(op="placeholder"))
+        }
+        static_node_cache: dict[torch.fx.Node, bool] = {}
+
+        def node_dependencies(node: torch.fx.Node) -> list[torch.fx.Node]:
+            deps: list[torch.fx.Node] = []
+
+            def collect(arg: Any) -> Any:
+                if isinstance(arg, torch.fx.Node):
+                    deps.append(arg)
+                return arg
+
+            torch.fx.node.map_aggregate((node.args, node.kwargs), collect)
+            return deps
+
+        def is_static_lifetime_node(node: torch.fx.Node) -> bool:
+            if node in static_node_cache:
+                return static_node_cache[node]
+
+            if node.op == "placeholder":
+                is_static = placeholder_indices.get(node) in static_input_indices_set
+            elif node.op == "get_attr":
+                is_static = True
+            else:
+                deps = node_dependencies(node)
+                is_static = bool(deps) and all(
+                    is_static_lifetime_node(dep) for dep in deps
+                )
+
+            static_node_cache[node] = is_static
+            return is_static
+
+        return [
+            idx
+            for idx, arg in enumerate(fw_hop_node.args[2:])
+            if isinstance(arg, torch.fx.Node) and is_static_lifetime_node(arg)
+        ]
 
     new_hop_graphs: dict[str, InvokeSubgraphHopGraphs] = defaultdict(
         lambda: InvokeSubgraphHopGraphs()
@@ -1004,9 +1059,9 @@ def run_joint_graph_passes_on_hops(
             joint_hop_gm, num_fw_inputs, num_fw_outputs
         )
 
-        # TODO: invoke_subgraph should track which of its inputs static indices
-        # so it can propagate them to the partitioner (and use in cudagraphs)
-        static_lifetime_input_indices: list[int] = []
+        static_lifetime_input_indices = get_hop_static_lifetime_input_indices(
+            fw_hop_node
+        )
 
         used_hop_custom_partition, partition_fn = _get_partition_fn(
             fw_hop_node, aot_config, default_partition_fn
@@ -1028,18 +1083,55 @@ def run_joint_graph_passes_on_hops(
             else:
                 raise
 
+        from torch._inductor.fx_passes.post_grad import REORDER_FOR_PEAK_MEMORY
+
+        new_bw_hop_gm.meta[REORDER_FOR_PEAK_MEMORY] = True
+
         # Save the new forward and backward graph modules
         new_hop_graphs[identifier].new_fw_hop_gm = new_fw_hop_gm
         new_hop_graphs[identifier].new_bw_hop_gm = new_bw_hop_gm
 
-        # Save the number of symints and saved tensors
-        new_fw_out_nodes = new_fw_hop_gm.graph.find_nodes(op="output")[0].args[0]
+        # Save the number of symints and saved tensors. Extra outputs which
+        # are just HOP inputs are wired directly from the outer graph instead
+        # of being returned from the forward HOP; otherwise a later proxy trace
+        # can canonicalize the input to the HOP output alias.
+        new_fw_output_node = new_fw_hop_gm.graph.find_nodes(op="output")[0]
+        new_fw_out_nodes = new_fw_output_node.args[0]
         extra_outputs = new_fw_out_nodes[num_fw_outputs:]
         symint_outputs = [n for n in extra_outputs if is_sym_node(n)]
+        placeholder_to_input_idx = {
+            node: idx
+            for idx, node in enumerate(
+                new_fw_hop_gm.graph.find_nodes(op="placeholder")
+            )
+        }
 
         new_hop_graphs[identifier].new_num_sym_nodes = len(symint_outputs)
         new_hop_graphs[identifier].new_num_saved_nodes = len(extra_outputs) - len(
             symint_outputs
+        )
+        new_hop_graphs[identifier].new_extra_output_input_indices = [
+            placeholder_to_input_idx.get(node)
+            if isinstance(node, torch.fx.Node)
+            else None
+            for node in extra_outputs
+        ]
+        compact_fw_outputs = list(new_fw_out_nodes[:num_fw_outputs])
+        new_extra_output_getitem_indices: list[int | None] = []
+        for node, input_idx in zip(
+            extra_outputs,
+            new_hop_graphs[identifier].new_extra_output_input_indices,
+        ):
+            if input_idx is not None:
+                new_extra_output_getitem_indices.append(None)
+                continue
+            new_extra_output_getitem_indices.append(len(compact_fw_outputs))
+            compact_fw_outputs.append(node)
+        new_fw_output_node.args = (tuple(compact_fw_outputs),)
+        new_fw_hop_gm.graph.lint()
+        new_fw_hop_gm.recompile()
+        new_hop_graphs[identifier].new_extra_output_getitem_indices = (
+            new_extra_output_getitem_indices
         )
 
         new_hop_graphs[identifier].partitioning_done = True
@@ -1108,6 +1200,592 @@ def run_joint_graph_passes_on_hops(
         out_example_vals = [n.meta["val"] if n else None for n in output.args[0]]
         new_call_function_node.meta["val"] = tuple(out_example_vals)
 
+    def get_custom_meta(node: torch.fx.Node, key: str) -> Any:
+        custom = node.meta.get("custom", {})
+        if not isinstance(custom, dict):
+            return None
+        return custom.get(key)
+
+    def get_invoke_subgraph_gm(node: torch.fx.Node) -> torch.fx.GraphModule | None:
+        if not (
+            node.op == "call_function"
+            and node.target is invoke_subgraph
+            and len(node.args) >= 2
+        ):
+            return None
+        attr = node.args[0]
+        if not (
+            isinstance(attr, torch.fx.Node)
+            and attr.op == "get_attr"
+            and isinstance(attr.target, str)
+        ):
+            return None
+        gm = getattr(joint_gm, attr.target, None)
+        return gm if isinstance(gm, torch.fx.GraphModule) else None
+
+    def getitem_source(
+        node: torch.fx.Node,
+    ) -> tuple[torch.fx.Node, int] | None:
+        if not (
+            node.op == "call_function"
+            and node.target is operator.getitem
+            and len(node.args) == 2
+            and isinstance(node.args[0], torch.fx.Node)
+            and isinstance(node.args[1], int)
+        ):
+            return None
+        return node.args[0], node.args[1]
+
+    def unique_module_name(base: str) -> str:
+        safe_base = "".join(c if c.isalnum() or c == "_" else "_" for c in base)
+        name = safe_base
+        idx = 0
+        while hasattr(joint_gm, name):
+            idx += 1
+            name = f"{safe_base}_{idx}"
+        return name
+
+    def output_values(gm: torch.fx.GraphModule) -> tuple[Any, ...]:
+        output = gm.graph.find_nodes(op="output")[0].args[0]
+        if isinstance(output, tuple):
+            return output
+        if isinstance(output, list):
+            return tuple(output)
+        return (output,)
+
+    def fx_value_signature(value: object) -> tuple[Any, ...]:
+        if isinstance(value, (tuple, list)):
+            return (
+                type(value).__name__,
+                tuple(fx_value_signature(v) for v in value),
+            )
+        return (
+            getattr(value, "dtype", None),
+            tuple(getattr(value, "shape", ())),
+            tuple(value.stride()) if hasattr(value, "stride") else None,
+            getattr(value, "device", None),
+        )
+
+    def graph_structure_key(gm: torch.fx.GraphModule) -> tuple[Any, ...]:
+        node_names: dict[torch.fx.Node, int] = {}
+        entries = []
+
+        def normalize(arg: object) -> object:
+            if isinstance(arg, torch.fx.Node):
+                return ("node", node_names[arg])
+            if isinstance(arg, tuple):
+                return ("tuple", tuple(normalize(v) for v in arg))
+            if isinstance(arg, list):
+                return ("list", tuple(normalize(v) for v in arg))
+            if isinstance(arg, dict):
+                return (
+                    "dict",
+                    tuple((k, normalize(v)) for k, v in sorted(arg.items())),
+                )
+            return ("const", repr(arg))
+
+        for idx, node in enumerate(gm.graph.nodes):
+            node_names[node] = idx
+            entries.append(
+                (
+                    node.op,
+                    repr(node.target),
+                    normalize(node.args),
+                    normalize(node.kwargs),
+                    fx_value_signature(node.meta.get("val")),
+                )
+            )
+        return tuple(entries)
+
+    def derived_node_structure_key(
+        node: torch.fx.Node,
+        derived_node_fw_getitem_to_output: dict[torch.fx.Node, int],
+    ) -> tuple[Any, ...]:
+        def normalize(arg: object) -> object:
+            if isinstance(arg, torch.fx.Node):
+                output_idx = derived_node_fw_getitem_to_output.get(arg)
+                if output_idx is not None:
+                    return ("fw_output", output_idx)
+                return ("node", arg.op, repr(arg.target), fx_value_signature(arg.meta.get("val")))
+            if isinstance(arg, tuple):
+                return ("tuple", tuple(normalize(v) for v in arg))
+            if isinstance(arg, list):
+                return ("list", tuple(normalize(v) for v in arg))
+            if isinstance(arg, dict):
+                return (
+                    "dict",
+                    tuple((k, normalize(v)) for k, v in sorted(arg.items())),
+                )
+            return ("const", repr(arg))
+
+        return (
+            node.op,
+            repr(node.target),
+            normalize(node.args),
+            normalize(node.kwargs),
+            fx_value_signature(node.meta.get("val")),
+        )
+
+    def compose_bw_and_grad_accum_hops(
+        bw_gm: torch.fx.GraphModule,
+        grad_accum_gm: torch.fx.GraphModule,
+        grad_accum_arg_to_bw_output: dict[int, int],
+        used_grad_accum_arg_indices: set[int],
+    ) -> torch.fx.GraphModule:
+        new_graph = torch.fx.Graph()
+
+        bw_val_map: dict[torch.fx.Node, torch.fx.Node] = {}
+        for ph in bw_gm.graph.find_nodes(op="placeholder"):
+            new_ph = new_graph.placeholder(ph.name)
+            new_ph.meta = copy.copy(ph.meta)
+            bw_val_map[ph] = new_ph
+        bw_outputs = new_graph.graph_copy(bw_gm.graph, bw_val_map)
+        if not isinstance(bw_outputs, (tuple, list)):
+            bw_outputs = (bw_outputs,)
+        unused_placeholder_replacement = next(iter(bw_val_map.values()))
+
+        grad_accum_val_map: dict[torch.fx.Node, torch.fx.Node] = {}
+        for idx, ph in enumerate(grad_accum_gm.graph.find_nodes(op="placeholder")):
+            if idx not in used_grad_accum_arg_indices:
+                grad_accum_val_map[ph] = unused_placeholder_replacement
+                continue
+            if idx in grad_accum_arg_to_bw_output:
+                grad_accum_val_map[ph] = bw_outputs[
+                    grad_accum_arg_to_bw_output[idx]
+                ]
+                continue
+            new_ph = new_graph.placeholder(f"grad_accum_{ph.name}")
+            new_ph.meta = copy.copy(ph.meta)
+            grad_accum_val_map[ph] = new_ph
+
+        grad_accum_outputs = new_graph.graph_copy(
+            grad_accum_gm.graph, grad_accum_val_map
+        )
+        new_graph.output(grad_accum_outputs)
+        fused_gm = torch.fx.GraphModule(torch.nn.Module(), new_graph)
+        fused_gm.meta = copy.copy(bw_gm.meta)
+        fused_gm.meta.update(copy.copy(grad_accum_gm.meta))
+        fused_gm.meta["region_role"] = "bw_grad_accum"
+        fused_gm.graph.lint()
+        fused_gm.recompile()
+        return fused_gm
+
+    def compose_fw_and_bw_grad_accum_hops(
+        fw_gm: torch.fx.GraphModule,
+        bw_grad_accum_gm: torch.fx.GraphModule,
+        bw_grad_accum_arg_to_fw_output: dict[int, int],
+        bw_grad_accum_arg_to_derived_node: dict[int, torch.fx.Node],
+        derived_node_fw_getitem_to_output: dict[torch.fx.Node, int],
+        used_bw_grad_accum_arg_indices: set[int],
+        external_fw_output_indices: list[int],
+    ) -> torch.fx.GraphModule:
+        new_graph = torch.fx.Graph()
+
+        fw_args: list[torch.fx.Node] = []
+        fw_val_map: dict[torch.fx.Node, torch.fx.Node] = {}
+        for ph in fw_gm.graph.find_nodes(op="placeholder"):
+            new_ph = new_graph.placeholder(ph.name)
+            new_ph.meta = copy.copy(ph.meta)
+            fw_args.append(new_ph)
+            fw_val_map[ph] = new_ph
+
+        fw_outputs = new_graph.graph_copy(fw_gm.graph, fw_val_map)
+        if not isinstance(fw_outputs, (tuple, list)):
+            fw_outputs = (fw_outputs,)
+        unused_placeholder_replacement = fw_args[0]
+
+        bw_grad_accum_val_map: dict[torch.fx.Node, torch.fx.Node] = {}
+        for idx, ph in enumerate(bw_grad_accum_gm.graph.find_nodes(op="placeholder")):
+            if idx not in used_bw_grad_accum_arg_indices:
+                bw_grad_accum_val_map[ph] = unused_placeholder_replacement
+                continue
+            if idx in bw_grad_accum_arg_to_fw_output:
+                bw_grad_accum_val_map[ph] = fw_outputs[
+                    bw_grad_accum_arg_to_fw_output[idx]
+                ]
+                continue
+            if idx in bw_grad_accum_arg_to_derived_node:
+                derived_node = bw_grad_accum_arg_to_derived_node[idx]
+
+                def load_derived_arg(node: torch.fx.Node) -> torch.fx.Node:
+                    output_idx = derived_node_fw_getitem_to_output.get(node)
+                    if output_idx is None:
+                        raise AssertionError(
+                            f"unsupported derived HOP argument dependency {node.name}"
+                        )
+                    return fw_outputs[output_idx]
+
+                copied_node = new_graph.node_copy(derived_node, load_derived_arg)
+                copied_node.meta = copy.copy(derived_node.meta)
+                bw_grad_accum_val_map[ph] = copied_node
+                continue
+
+            new_ph = new_graph.placeholder(f"bw_grad_accum_{ph.name}")
+            new_ph.meta = copy.copy(ph.meta)
+            bw_grad_accum_val_map[ph] = new_ph
+
+        bw_grad_accum_outputs = new_graph.graph_copy(
+            bw_grad_accum_gm.graph, bw_grad_accum_val_map
+        )
+        if not isinstance(bw_grad_accum_outputs, (tuple, list)):
+            bw_grad_accum_outputs = (bw_grad_accum_outputs,)
+
+        new_graph.output(
+            tuple(fw_outputs[idx] for idx in external_fw_output_indices)
+            + tuple(bw_grad_accum_outputs)
+        )
+        fused_gm = torch.fx.GraphModule(torch.nn.Module(), new_graph)
+        fused_gm.meta = copy.copy(fw_gm.meta)
+        fused_gm.meta.update(copy.copy(bw_grad_accum_gm.meta))
+        fused_gm.meta["region_role"] = "fw_bw_grad_accum"
+        fused_gm.graph.lint()
+        fused_gm.recompile()
+        return fused_gm
+
+    def stitch_adjacent_hops_with_same_region_id() -> None:
+        for grad_accum_node in list(joint_gm.graph.nodes):
+            if get_custom_meta(grad_accum_node, "region_role") != "grad_accum":
+                continue
+            region_id = get_custom_meta(grad_accum_node, "region_id")
+            if region_id is None:
+                continue
+
+            grad_accum_gm = get_invoke_subgraph_gm(grad_accum_node)
+            if grad_accum_gm is None:
+                continue
+
+            bw_node = None
+            grad_accum_arg_to_bw_output: dict[int, int] = {}
+            selected_getitems: list[torch.fx.Node] = []
+            external_grad_accum_args: list[Any] = []
+            used_grad_accum_arg_indices = {
+                idx
+                for idx, ph in enumerate(
+                    grad_accum_gm.graph.find_nodes(op="placeholder")
+                )
+                if ph.users
+            }
+            unsupported_grad_accum_stitch = False
+
+            for arg_idx, arg in enumerate(grad_accum_node.args[2:]):
+                if arg_idx not in used_grad_accum_arg_indices:
+                    continue
+                if isinstance(arg, torch.fx.Node):
+                    source = getitem_source(arg)
+                    if source is not None:
+                        candidate_bw_node, bw_output_idx = source
+                        if (
+                            get_custom_meta(candidate_bw_node, "region_role") == "bw"
+                            and get_custom_meta(candidate_bw_node, "region_id")
+                            == region_id
+                        ):
+                            if bw_node is None:
+                                bw_node = candidate_bw_node
+                            elif bw_node is not candidate_bw_node:
+                                unsupported_grad_accum_stitch = True
+                                break
+                            if list(arg.users) != [grad_accum_node]:
+                                unsupported_grad_accum_stitch = True
+                                break
+                            grad_accum_arg_to_bw_output[arg_idx] = bw_output_idx
+                            selected_getitems.append(arg)
+                            continue
+                external_grad_accum_args.append(arg)
+
+            if unsupported_grad_accum_stitch:
+                continue
+            if bw_node is None:
+                continue
+            if any(user not in selected_getitems for user in bw_node.users):
+                continue
+            bw_gm = get_invoke_subgraph_gm(bw_node)
+            if bw_gm is None:
+                continue
+
+            fused_gm = compose_bw_and_grad_accum_hops(
+                bw_gm,
+                grad_accum_gm,
+                grad_accum_arg_to_bw_output,
+                used_grad_accum_arg_indices,
+            )
+            fused_attr_name = unique_module_name(
+                f"stitched_{region_id}_{bw_node.args[1]}_{grad_accum_node.args[1]}"
+            )
+            joint_gm.register_module(fused_attr_name, fused_gm)
+
+            with joint_gm.graph.inserting_before(grad_accum_node):
+                fused_attr = joint_gm.graph.get_attr(fused_attr_name)
+                fused_attr.meta = copy.copy(grad_accum_node.args[0].meta)
+                fused_node = joint_gm.graph.call_function(
+                    the_function=invoke_subgraph,
+                    args=(
+                        fused_attr,
+                        fused_attr_name,
+                        *bw_node.args[2:],
+                        *external_grad_accum_args,
+                    ),
+                )
+                propagate_meta_info(fused_gm, fused_node, grad_accum_node)
+                fused_node.meta.setdefault("custom", {})
+                fused_node.meta["custom"]["region_id"] = region_id
+                fused_node.meta["custom"]["region_role"] = "bw_grad_accum"
+
+            grad_accum_node.replace_all_uses_with(fused_node)
+            joint_gm.graph.erase_node(grad_accum_node)
+            for node in selected_getitems:
+                if not node.users:
+                    joint_gm.graph.erase_node(node)
+            if not bw_node.users:
+                joint_gm.graph.erase_node(bw_node)
+
+        if os.environ.get("TORCHINDUCTOR_STITCH_FW_BW_GRAD_ACCUM_HOPS") != "1":
+            return
+
+        fw_bw_grad_accum_cache: dict[tuple[Any, ...], str] = {}
+        fw_bw_grad_accum_cache_hits = 0
+        fw_bw_grad_accum_stitched = 0
+
+        for bw_grad_accum_node in list(joint_gm.graph.nodes):
+            if (
+                get_custom_meta(bw_grad_accum_node, "region_role")
+                != "bw_grad_accum"
+            ):
+                continue
+            region_id = get_custom_meta(bw_grad_accum_node, "region_id")
+            if region_id is None:
+                continue
+
+            bw_grad_accum_gm = get_invoke_subgraph_gm(bw_grad_accum_node)
+            if bw_grad_accum_gm is None:
+                continue
+
+            fw_node = None
+            bw_grad_accum_arg_to_fw_output: dict[int, int] = {}
+            bw_grad_accum_arg_to_derived_node: dict[int, torch.fx.Node] = {}
+            derived_node_fw_getitem_to_output: dict[torch.fx.Node, int] = {}
+            selected_fw_getitems: list[torch.fx.Node] = []
+            derived_nodes: list[torch.fx.Node] = []
+            external_bw_grad_accum_args: list[Any] = []
+            used_bw_grad_accum_arg_indices = {
+                idx
+                for idx, ph in enumerate(
+                    bw_grad_accum_gm.graph.find_nodes(op="placeholder")
+                )
+                if ph.users
+            }
+            unsupported_fw_stitch = False
+
+            for arg_idx, arg in enumerate(bw_grad_accum_node.args[2:]):
+                if arg_idx not in used_bw_grad_accum_arg_indices:
+                    continue
+                if isinstance(arg, torch.fx.Node):
+                    source = getitem_source(arg)
+                    if source is not None:
+                        candidate_fw_node, fw_output_idx = source
+                        if (
+                            get_custom_meta(candidate_fw_node, "region_role") == "fw"
+                            and get_custom_meta(candidate_fw_node, "region_id")
+                            == region_id
+                        ):
+                            if fw_node is None:
+                                fw_node = candidate_fw_node
+                            elif fw_node is not candidate_fw_node:
+                                unsupported_fw_stitch = True
+                                break
+                            if list(arg.users) != [bw_grad_accum_node]:
+                                unsupported_fw_stitch = True
+                                break
+                            bw_grad_accum_arg_to_fw_output[arg_idx] = fw_output_idx
+                            selected_fw_getitems.append(arg)
+                            continue
+                    if list(arg.users) == [bw_grad_accum_node]:
+                        fw_getitems: list[torch.fx.Node] = []
+                        valid_derived_node = True
+
+                        def collect_fw_getitems(dep: Any) -> Any:
+                            nonlocal valid_derived_node
+                            if isinstance(dep, torch.fx.Node):
+                                source = getitem_source(dep)
+                                if source is None:
+                                    valid_derived_node = False
+                                    return dep
+                                candidate_fw_node, fw_output_idx = source
+                                if (
+                                    get_custom_meta(candidate_fw_node, "region_role")
+                                    == "fw"
+                                    and get_custom_meta(candidate_fw_node, "region_id")
+                                    == region_id
+                                ):
+                                    fw_getitems.append(dep)
+                                    derived_node_fw_getitem_to_output[dep] = fw_output_idx
+                                    return dep
+                                valid_derived_node = False
+                            return dep
+
+                        torch.fx.node.map_aggregate(
+                            (arg.args, arg.kwargs), collect_fw_getitems
+                        )
+                        if valid_derived_node and fw_getitems:
+                            for dep in fw_getitems:
+                                source = getitem_source(dep)
+                                if source is None:
+                                    unsupported_fw_stitch = True
+                                    break
+                                candidate_fw_node, _ = source
+                                if fw_node is None:
+                                    fw_node = candidate_fw_node
+                                elif fw_node is not candidate_fw_node:
+                                    unsupported_fw_stitch = True
+                                    break
+                                selected_fw_getitems.append(dep)
+                            if unsupported_fw_stitch:
+                                break
+                            bw_grad_accum_arg_to_derived_node[arg_idx] = arg
+                            derived_nodes.append(arg)
+                            continue
+                external_bw_grad_accum_args.append(arg)
+
+            if unsupported_fw_stitch:
+                continue
+            if fw_node is None:
+                continue
+            fw_gm = get_invoke_subgraph_gm(fw_node)
+            if fw_gm is None:
+                continue
+
+            fw_output_getitems: list[torch.fx.Node] = []
+            for user in list(fw_node.users):
+                source = getitem_source(user)
+                if source is None or source[0] is not fw_node:
+                    unsupported_fw_stitch = True
+                    break
+                fw_output_getitems.append(user)
+            if unsupported_fw_stitch:
+                continue
+
+            selected_fw_getitem_set = set(selected_fw_getitems)
+            external_fw_getitems = [
+                node for node in fw_output_getitems if node not in selected_fw_getitem_set
+            ]
+            external_fw_getitems.sort(key=lambda node: node.args[1])
+            external_fw_output_indices = [node.args[1] for node in external_fw_getitems]
+            for user in list(bw_grad_accum_node.users):
+                source = getitem_source(user)
+                if source is None or source[0] is not bw_grad_accum_node:
+                    unsupported_fw_stitch = True
+                    break
+            if unsupported_fw_stitch:
+                continue
+
+            cache_key = (
+                graph_structure_key(fw_gm),
+                graph_structure_key(bw_grad_accum_gm),
+                tuple(sorted(bw_grad_accum_arg_to_fw_output.items())),
+                tuple(
+                    (
+                        arg_idx,
+                        derived_node_structure_key(
+                            node,
+                            derived_node_fw_getitem_to_output,
+                        ),
+                    )
+                    for arg_idx, node in sorted(
+                        bw_grad_accum_arg_to_derived_node.items()
+                    )
+                ),
+                tuple(sorted(used_bw_grad_accum_arg_indices)),
+                tuple(external_fw_output_indices),
+            )
+            fused_attr_name = fw_bw_grad_accum_cache.get(cache_key)
+            if fused_attr_name is None:
+                fused_gm = compose_fw_and_bw_grad_accum_hops(
+                    fw_gm,
+                    bw_grad_accum_gm,
+                    bw_grad_accum_arg_to_fw_output,
+                    bw_grad_accum_arg_to_derived_node,
+                    derived_node_fw_getitem_to_output,
+                    used_bw_grad_accum_arg_indices,
+                    external_fw_output_indices,
+                )
+                fused_attr_name = unique_module_name(
+                    f"stitched_{region_id}_{fw_node.args[1]}_{bw_grad_accum_node.args[1]}"
+                )
+                joint_gm.register_module(fused_attr_name, fused_gm)
+                fw_bw_grad_accum_cache[cache_key] = fused_attr_name
+            else:
+                fused_gm = getattr(joint_gm, fused_attr_name)
+                fw_bw_grad_accum_cache_hits += 1
+
+            with joint_gm.graph.inserting_before(bw_grad_accum_node):
+                fused_attr = joint_gm.graph.get_attr(fused_attr_name)
+                fused_attr.meta = copy.copy(bw_grad_accum_node.args[0].meta)
+                fused_node = joint_gm.graph.call_function(
+                    the_function=invoke_subgraph,
+                    args=(
+                        fused_attr,
+                        fused_attr_name,
+                        *fw_node.args[2:],
+                        *external_bw_grad_accum_args,
+                    ),
+                )
+                fused_node.meta = copy.copy(bw_grad_accum_node.meta)
+                output = fused_gm.graph.find_nodes(op="output")[0]
+                out_example_vals = [n.meta["val"] if n else None for n in output.args[0]]
+                fused_node.meta["val"] = tuple(out_example_vals)
+                fused_node.meta.setdefault("custom", {})
+                fused_node.meta["custom"]["region_id"] = region_id
+                fused_node.meta["custom"]["region_role"] = "fw_bw_grad_accum"
+                fused_node.meta.pop("eager_input_vals", None)
+
+            new_getitems: list[torch.fx.Node] = []
+            with joint_gm.graph.inserting_after(fused_node):
+                for output_idx, output_val in enumerate(fused_node.meta["val"]):
+                    getitem_node = joint_gm.graph.call_function(
+                        the_function=operator.getitem,
+                        args=(fused_node, output_idx),
+                    )
+                    getitem_node.meta = copy.copy(fused_node.meta)
+                    getitem_node.meta["val"] = output_val
+                    new_getitems.append(getitem_node)
+
+            for output_idx, old_getitem in enumerate(external_fw_getitems):
+                old_getitem.replace_all_uses_with(new_getitems[output_idx])
+
+            bw_grad_accum_output_offset = len(external_fw_getitems)
+            for user in list(bw_grad_accum_node.users):
+                source = getitem_source(user)
+                output_idx = bw_grad_accum_output_offset + source[1]
+                user.replace_all_uses_with(new_getitems[output_idx])
+
+            for node in dict.fromkeys(selected_fw_getitems + external_fw_getitems):
+                if not node.users:
+                    joint_gm.graph.erase_node(node)
+            for user in list(bw_grad_accum_node.users):
+                if not user.users:
+                    joint_gm.graph.erase_node(user)
+            for node in derived_nodes:
+                if not node.users:
+                    joint_gm.graph.erase_node(node)
+            if not bw_grad_accum_node.users:
+                joint_gm.graph.erase_node(bw_grad_accum_node)
+            if not fw_node.users:
+                joint_gm.graph.erase_node(fw_node)
+            fw_bw_grad_accum_stitched += 1
+
+        if fw_bw_grad_accum_stitched:
+            trace_structured(
+                "artifact",
+                metadata_fn=lambda: {
+                    "name": "stitch_fw_bw_grad_accum_hops_with_same_region_id",
+                    "encoding": "json",
+                },
+                payload_fn=lambda: {
+                    "stitched": fw_bw_grad_accum_stitched,
+                    "cache_hits": fw_bw_grad_accum_cache_hits,
+                    "unique_fused_subgraphs": len(fw_bw_grad_accum_cache),
+                },
+            )
+
     for bw_node in reversed(bw_hop_nodes):
         identifier = bw_node.args[1].removeprefix("bw")
 
@@ -1130,6 +1808,12 @@ def run_joint_graph_passes_on_hops(
         old_num_fw_outputs = new_hop_graphs[identifier].old_num_fw_outputs
         new_num_sym_nodes = new_hop_graphs[identifier].new_num_sym_nodes
         new_num_saved_nodes = new_hop_graphs[identifier].new_num_saved_nodes
+        new_extra_output_input_indices = new_hop_graphs[
+            identifier
+        ].new_extra_output_input_indices
+        new_extra_output_getitem_indices = new_hop_graphs[
+            identifier
+        ].new_extra_output_getitem_indices
         if old_num_fw_outputs is None:
             raise AssertionError(
                 f"old_num_fw_outputs for identifier {identifier} must not be None"
@@ -1142,7 +1826,25 @@ def run_joint_graph_passes_on_hops(
             raise AssertionError(
                 f"new_num_saved_nodes for identifier {identifier} must not be None"
             )
+        if new_extra_output_input_indices is None:
+            raise AssertionError(
+                f"new_extra_output_input_indices for identifier {identifier} must not be None"
+            )
+        if new_extra_output_getitem_indices is None:
+            raise AssertionError(
+                f"new_extra_output_getitem_indices for identifier {identifier} must not be None"
+            )
         total_outputs = old_num_fw_outputs + new_num_saved_nodes + new_num_sym_nodes
+        if len(new_extra_output_input_indices) != total_outputs - old_num_fw_outputs:
+            raise AssertionError(
+                f"expected {total_outputs - old_num_fw_outputs} extra output input "
+                f"indices for identifier {identifier}, got {len(new_extra_output_input_indices)}"
+            )
+        if len(new_extra_output_getitem_indices) != total_outputs - old_num_fw_outputs:
+            raise AssertionError(
+                f"expected {total_outputs - old_num_fw_outputs} extra output getitem "
+                f"indices for identifier {identifier}, got {len(new_extra_output_getitem_indices)}"
+            )
 
         extra_fw_outputs = []
 
@@ -1169,16 +1871,30 @@ def run_joint_graph_passes_on_hops(
                 ),
             )
             propagate_meta_info(new_fw_hop_gm, new_fw_node, fw_node)
+            new_fw_node.meta["partitioner_tag"] = "is_forward"
 
         # old_num_fw_outputs = (*fw_outs)
         # new_num_fw_outputs = (*fw_outs, *saved_tensors, *sym_nodes)
         with joint_gm.graph.inserting_after(new_fw_node):
             for fw_out_idx in range(old_num_fw_outputs, total_outputs):
+                extra_out_idx = fw_out_idx - old_num_fw_outputs
+                input_idx = new_extra_output_input_indices[
+                    extra_out_idx
+                ]
+                if input_idx is not None:
+                    extra_fw_outputs.append(fw_node.args[2 + input_idx])
+                    continue
+                getitem_idx = new_extra_output_getitem_indices[extra_out_idx]
+                if getitem_idx is None:
+                    raise AssertionError(
+                        f"expected getitem index for non-input extra output {extra_out_idx} "
+                        f"on identifier {identifier}"
+                    )
                 saved_tensor_node = joint_gm.graph.call_function(
-                    the_function=operator.getitem, args=(new_fw_node, fw_out_idx)
+                    the_function=operator.getitem, args=(new_fw_node, getitem_idx)
                 )
                 saved_tensor_node.meta = copy.copy(new_fw_node.meta)
-                saved_tensor_node.meta["val"] = new_fw_node.meta["val"][fw_out_idx]
+                saved_tensor_node.meta["val"] = new_fw_node.meta["val"][getitem_idx]
                 extra_fw_outputs.append(saved_tensor_node)
 
         fw_node.replace_all_uses_with(new_fw_node)
@@ -1227,6 +1943,7 @@ def run_joint_graph_passes_on_hops(
                 ),
             )
             propagate_meta_info(new_bw_hop_gm, new_bw_node, bw_node)
+            new_bw_node.meta["partitioner_tag"] = "is_backward"
             # Since the partitioner is run after the graph passes, we have lost
             # the eager information and cannot faithfully extract the eager
             # inputs for the new partitioned backward graph. For the forward
@@ -1262,8 +1979,11 @@ def run_joint_graph_passes_on_hops(
                     args=(new_attr, new_attr_name, *fw_node.args[2:]),
                 )
                 propagate_meta_info(new_fw_hop_gm, new_fw_node, fw_node)
+                new_fw_node.meta["partitioner_tag"] = "is_forward"
             fw_node.replace_all_uses_with(new_fw_node)
             joint_gm.graph.erase_node(fw_node)
+
+    stitch_adjacent_hops_with_same_region_id()
 
     joint_gm.graph.eliminate_dead_code()
     joint_gm.graph.lint()
@@ -1918,7 +2638,11 @@ def _partition_joint_graph_into_fw_bw(
     )
 
     fx_g = run_joint_graph_passes_on_hops(
-        fx_g, joint_inputs, aot_config, default_partition_fn=partition_fn
+        fx_g,
+        joint_inputs,
+        aot_config,
+        default_partition_fn=partition_fn,
+        static_input_indices=fw_metadata.static_input_indices,
     )
 
     # apply joint_gm callback here

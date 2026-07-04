@@ -45,6 +45,16 @@ from torch.utils.checkpoint import _CachedTorchDispatchMode, _CachingTorchDispat
 
 invoke_subgraph_counter = 0
 
+_CUSTOM_META_KEYS = ("region_id", "region_role")
+
+
+def _copy_custom_meta(src, dst_meta: dict[str, Any]) -> None:
+    if not isinstance(src, torch.fx.GraphModule) or not hasattr(src, "meta"):
+        return
+    for key in _CUSTOM_META_KEYS:
+        if key in src.meta:
+            dst_meta[key] = src.meta[key]
+
 
 # During the tracing of the joint graph, we construct this information. This is
 # used to filter out grad_outs/tangents in the `backward` method of
@@ -126,6 +136,31 @@ def _set_invoke_subgraph_call_id(call_id: int):
         yield
     finally:
         _invoke_subgraph_call_state.current = prev
+
+
+def _current_invoke_subgraph_custom_meta() -> dict[str, Any] | None:
+    return getattr(_invoke_subgraph_call_state, "custom_meta", None)
+
+
+@contextlib.contextmanager
+def _set_invoke_subgraph_custom_meta(custom_meta: dict[str, Any] | None):
+    prev = getattr(_invoke_subgraph_call_state, "custom_meta", None)
+    _invoke_subgraph_call_state.custom_meta = custom_meta
+    try:
+        yield
+    finally:
+        _invoke_subgraph_call_state.custom_meta = prev
+
+
+def _backward_invoke_subgraph_custom_meta(
+    custom_meta: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not custom_meta:
+        return custom_meta
+    bw_custom_meta = copy.copy(custom_meta)
+    if bw_custom_meta.get("region_role") == "fw":
+        bw_custom_meta["region_role"] = "bw"
+    return bw_custom_meta
 
 
 def warn_and_trace_duplicate_backward(
@@ -780,6 +815,7 @@ class InvokeSubgraphAutogradOp(torch.autograd.Function):
         ctx._identifier = identifier
         ctx._output_metadata = output_metadata
         ctx._call_id = _next_invoke_subgraph_call_id()
+        ctx._custom_meta = copy.copy(_current_invoke_subgraph_custom_meta())
         # We snapshot the dispatch keys in forward for materializing the
         # the bw_graph in backward.
         ctx._fw_include_key_set = torch._C._dispatch_tls_local_include_set()
@@ -831,6 +867,7 @@ class InvokeSubgraphAutogradOp(torch.autograd.Function):
         identifier = ctx._identifier
         output_metadata = ctx._output_metadata
         primals = saved_values(ctx)
+        bw_custom_meta = _backward_invoke_subgraph_custom_meta(ctx._custom_meta)
 
         # Filter out grads that are None or do not require_grad. This was
         # the assumption we made during the tracing of joint_graph.
@@ -934,6 +971,11 @@ class InvokeSubgraphAutogradOp(torch.autograd.Function):
                     bw_graph.meta["nested_region_config"] = subgraph.meta[
                         "nested_region_config"
                     ]
+                _copy_custom_meta(subgraph, bw_graph.meta)
+                if bw_custom_meta:
+                    bw_graph.meta.update(bw_custom_meta)
+                if bw_graph.meta.get("region_role") == "fw":
+                    bw_graph.meta["region_role"] = "bw"
 
         if invoke_subgraph_cache and not cache_hit:
             suffix = invoke_subgraph_cache.add_lazy_bwd_entry(
@@ -943,7 +985,10 @@ class InvokeSubgraphAutogradOp(torch.autograd.Function):
                 identifier, suffix, bw_graph, len(primals), filtered_grad_outs
             )
 
-        with _set_invoke_subgraph_call_id(ctx._call_id):
+        with (
+            _set_invoke_subgraph_call_id(ctx._call_id),
+            _set_invoke_subgraph_custom_meta(bw_custom_meta),
+        ):
             grads = invoke_subgraph(
                 bw_graph, f"bw_{identifier}_{suffix}", *primals_and_tangents
             )[: -output_metadata.num_fw_outs]
@@ -1268,7 +1313,14 @@ def _(proxy_mode: ProxyTorchDispatchMode, subgraph, identifier, *operands):
 
     call_id = _current_invoke_subgraph_call_id()
 
-    if nested_config is not None or call_id is not None:
+    custom_meta: dict[str, Any] = {}
+    for gm in (graph, orig_subgraph):
+        _copy_custom_meta(gm, custom_meta)
+    call_custom_meta = _current_invoke_subgraph_custom_meta()
+    if call_custom_meta:
+        custom_meta.update(call_custom_meta)
+
+    if nested_config is not None or call_id is not None or custom_meta:
         node = out_proxy.node
         if "custom" not in node.meta:
             node.meta["custom"] = {}
@@ -1276,6 +1328,7 @@ def _(proxy_mode: ProxyTorchDispatchMode, subgraph, identifier, *operands):
             node.meta["custom"]["nested_region_config"] = nested_config
         if call_id is not None:
             node.meta["custom"]["call_id"] = call_id
+        node.meta["custom"].update(custom_meta)
 
     example_out = invoke_subgraph(graph, identifier, *operands)
     return track_tensor_tree(

@@ -119,7 +119,11 @@ from .debug import DebugContext
 from .decomposition import select_decomp_table
 from .exc import InductorError
 from .fx_passes.joint_graph import joint_graph_passes
-from .fx_passes.post_grad import post_grad_passes, view_to_reshape
+from .fx_passes.post_grad import (
+    post_grad_passes,
+    REORDER_FOR_PEAK_MEMORY,
+    view_to_reshape,
+)
 from .fx_passes.pre_grad import pre_grad_passes
 from .graph import GraphLowering
 from .ir import get_device_type, IRNode
@@ -572,6 +576,23 @@ def _recursive_joint_graph_passes(
         return out_gm
 
 
+def _mark_backward_invoke_subgraph_children_for_peak_memory(gm: GraphModule) -> None:
+    for node in gm.graph.find_nodes(
+        op="call_function", target=torch.ops.higher_order.invoke_subgraph
+    ):
+        if len(node.args) < 2 or not isinstance(node.args[1], str):
+            continue
+        identifier = node.args[1]
+        if not identifier.startswith(("bw", "partitioned_bw")):
+            continue
+        subgraph_arg = node.args[0]
+        if not isinstance(subgraph_arg, torch.fx.Node) or subgraph_arg.op != "get_attr":
+            continue
+        subgraph = getattr(gm, subgraph_arg.target, None)
+        if isinstance(subgraph, torch.fx.GraphModule):
+            subgraph.meta[REORDER_FOR_PEAK_MEMORY] = True
+
+
 def _recursive_post_grad_passes(gm: GraphModule, is_inference: bool = False) -> None:
     with dynamo_timed(
         "_recursive_post_grad_passes",
@@ -581,6 +602,7 @@ def _recursive_post_grad_passes(gm: GraphModule, is_inference: bool = False) -> 
         if not config.use_post_grad_passes:
             return
 
+        _mark_backward_invoke_subgraph_children_for_peak_memory(gm)
         for subgraph_name in _get_subgraph_names(gm):
             subgraph = getattr(gm, subgraph_name)
             _recursive_post_grad_passes(subgraph, is_inference)

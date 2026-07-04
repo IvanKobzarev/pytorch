@@ -598,6 +598,307 @@ class TestFXGraphPasses(JitTestCase):
         x, y, z = torch.rand(4), torch.rand(4), torch.rand(4)
         torch.testing.assert_close(M()(x, y, z), fused_graph(x, y, z))
 
+    def test_fuse_preserves_original_output_order(self):
+        class M(torch.nn.Module):
+            def forward(self, x):
+                a = x + 1
+                b = x + 2
+                c = x + 3
+                return c, a, b
+
+        gm = symbolic_trace(M())
+        partition = {
+            node: None
+            for node in gm.graph.nodes
+            if node.op not in ("placeholder", "output")
+        }
+
+        fused_graph = fuse_by_partitions(gm, [partition], always_return_tuple=True)
+        fused_submodule = fused_graph.get_submodule("fused_0")
+        submodule_output = fused_submodule.graph.output_node().args[0]
+        self.assertEqual([node.name for node in submodule_output], ["add_2", "add", "add_1"])
+
+        x = torch.rand(4)
+        torch.testing.assert_close(M()(x), fused_graph(x))
+
+    def test_split_bw_grad_accum_hop_preserves_padded_bridge_stride(self):
+        from torch._inductor.fx_passes.post_grad import _split_bw_grad_accum_subgraph
+        from torch._subclasses.fake_tensor import FakeTensorMode
+
+        with FakeTensorMode(), torch._inductor.config.patch(comprehensive_padding=True):
+            large = torch.empty_strided(
+                (4096, 200003),
+                (200003, 1),
+                device="cuda",
+                dtype=torch.bfloat16,
+            )
+            small_val = torch.empty_strided(
+                (200003,),
+                (1,),
+                device="cuda",
+                dtype=torch.bfloat16,
+            )
+
+            graph = torch.fx.Graph()
+            x = graph.placeholder("x")
+            x.meta["val"] = large
+            small_in = graph.placeholder("small_in")
+            small_in.meta["val"] = small_val
+            bridge = graph.call_function(torch.ops.aten.clone.default, args=(x,))
+            bridge.meta["val"] = large
+            out0 = graph.call_function(torch.ops.aten.add.Tensor, args=(bridge, 1.0))
+            out0.meta["val"] = large
+            out1 = graph.call_function(torch.ops.aten.mul.Tensor, args=(bridge, 2.0))
+            out1.meta["val"] = large
+            small = graph.call_function(
+                torch.ops.aten.add.Tensor, args=(small_in, 1.0)
+            )
+            small.meta["val"] = small_val
+            graph.output((out0, out1, small))
+
+            split = _split_bw_grad_accum_subgraph(
+                torch.fx.GraphModule(torch.nn.Module(), graph)
+            )
+
+        self.assertIsNotNone(split)
+        (
+            early_gm,
+            late_gm,
+            small_indices,
+            large_indices,
+            early_input_indices,
+            late_input_indices,
+        ) = split
+        self.assertEqual(small_indices, [2])
+        self.assertEqual(large_indices, [0, 1])
+        self.assertEqual(early_input_indices, [0, 1])
+        self.assertEqual(late_input_indices, [])
+
+        early_outputs = early_gm.graph.output_node().args[0]
+        self.assertEqual(early_outputs[0].meta["val"].stride(), (200064, 1))
+
+        late_placeholders = list(late_gm.graph.find_nodes(op="placeholder"))
+        self.assertEqual(late_placeholders[-1].meta["val"].stride(), (200064, 1))
+
+    def test_split_bw_grad_accum_hop_reuses_structural_subgraphs(self):
+        from torch._inductor.fx_passes.post_grad import (
+            split_bw_grad_accum_hops_for_peak_memory,
+        )
+        from torch._subclasses.fake_tensor import FakeTensorMode
+
+        def make_subgraph(large, small):
+            graph = torch.fx.Graph()
+            x = graph.placeholder("x")
+            x.meta["val"] = large
+            small_in = graph.placeholder("small_in")
+            small_in.meta["val"] = small
+            bridge = graph.call_function(torch.ops.aten.clone.default, args=(x,))
+            bridge.meta["val"] = large
+            out0 = graph.call_function(torch.ops.aten.add.Tensor, args=(bridge, 1.0))
+            out0.meta["val"] = large
+            out1 = graph.call_function(torch.ops.aten.mul.Tensor, args=(bridge, 2.0))
+            out1.meta["val"] = large
+            small_out = graph.call_function(
+                torch.ops.aten.add.Tensor, args=(small_in, 1.0)
+            )
+            small_out.meta["val"] = small
+            graph.output((out0, out1, small_out))
+            return torch.fx.GraphModule(torch.nn.Module(), graph)
+
+        with FakeTensorMode(), torch._inductor.config.patch(comprehensive_padding=True):
+            large = torch.empty_strided(
+                (4096, 200003),
+                (200003, 1),
+                device="cuda",
+                dtype=torch.bfloat16,
+            )
+            small = torch.empty_strided(
+                (200003,),
+                (1,),
+                device="cuda",
+                dtype=torch.bfloat16,
+            )
+
+            root = torch.nn.Module()
+            root.add_module("subgraph0", make_subgraph(large, small))
+            root.add_module("subgraph1", make_subgraph(large, small))
+
+            graph = torch.fx.Graph()
+            x = graph.placeholder("x")
+            x.meta["val"] = large
+            small_in = graph.placeholder("small_in")
+            small_in.meta["val"] = small
+            outputs = []
+            for idx, name in enumerate(("subgraph0", "subgraph1")):
+                attr = graph.get_attr(name)
+                hop = graph.call_function(
+                    torch.ops.higher_order.invoke_subgraph,
+                    args=(attr, f"hop_{idx}", x, small_in),
+                )
+                hop.meta["custom"] = {"region_role": "bw_grad_accum"}
+                hop.meta["val"] = (large, large, small)
+                for output_idx, value in enumerate(hop.meta["val"]):
+                    getitem = graph.call_function(
+                        operator.getitem, args=(hop, output_idx)
+                    )
+                    getitem.meta["val"] = value
+                    outputs.append(getitem)
+            graph.output(tuple(outputs))
+            gm = torch.fx.GraphModule(root, graph)
+
+            split_bw_grad_accum_hops_for_peak_memory(gm)
+
+        early_names = [name for name in gm._modules if name.endswith("_early")]
+        late_names = [name for name in gm._modules if name.endswith("_late")]
+        self.assertEqual(early_names, ["subgraph0_early"])
+        self.assertEqual(late_names, ["subgraph0_late"])
+
+        split_targets = [
+            node.args[0].target
+            for node in gm.graph.find_nodes(
+                op="call_function", target=torch.ops.higher_order.invoke_subgraph
+            )
+        ]
+        self.assertEqual(split_targets.count("subgraph0_early"), 2)
+        self.assertEqual(split_targets.count("subgraph0_late"), 2)
+
+        split_hops = [
+            node
+            for node in gm.graph.find_nodes(
+                op="call_function", target=torch.ops.higher_order.invoke_subgraph
+            )
+        ]
+        early_hops = [node for node in split_hops if node.args[0].target == "subgraph0_early"]
+        late_hops = [node for node in split_hops if node.args[0].target == "subgraph0_late"]
+        self.assertTrue(all(len(node.args) == 4 for node in early_hops))
+        self.assertTrue(all(len(node.args) == 3 for node in late_hops))
+
+    def test_clone_large_rmsnorm_xhat_for_peak_memory(self):
+        from torch._inductor.fx_passes.post_grad import (
+            clone_large_rmsnorm_xhat_for_peak_memory,
+        )
+
+        rows = 32768
+        cols = 3072
+        x_val = torch.empty_strided(
+            (rows, cols), (cols, 1), device="meta", dtype=torch.bfloat16
+        )
+        stats_val = torch.empty_strided(
+            (rows, 1), (1, 1), device="meta", dtype=torch.float32
+        )
+        f32_val = torch.empty_strided(
+            (rows, cols), (cols, 1), device="meta", dtype=torch.float32
+        )
+
+        graph = torch.fx.Graph()
+        x = graph.placeholder("x")
+        x.meta["val"] = x_val
+        stats = graph.placeholder("stats")
+        stats.meta["val"] = stats_val
+        grad = graph.placeholder("grad")
+        grad.meta["val"] = f32_val
+        convert = graph.call_function(
+            torch.ops.prims.convert_element_type.default, args=(x, torch.float32)
+        )
+        convert.meta["val"] = f32_val
+        rsqrt = graph.call_function(torch.ops.aten.rsqrt.default, args=(stats,))
+        rsqrt.meta["val"] = stats_val
+        xhat = graph.call_function(torch.ops.aten.mul.Tensor, args=(convert, rsqrt))
+        xhat.meta["val"] = f32_val
+        use0 = graph.call_function(torch.ops.aten.mul.Tensor, args=(xhat, grad))
+        use0.meta["val"] = f32_val
+        use1 = graph.call_function(torch.ops.aten.div.Tensor, args=(xhat, cols))
+        use1.meta["val"] = f32_val
+        graph.output((use0, use1))
+        gm = torch.fx.GraphModule(torch.nn.Module(), graph)
+
+        clone_large_rmsnorm_xhat_for_peak_memory(gm)
+
+        convert_nodes = [
+            node
+            for node in gm.graph.nodes
+            if node.op == "call_function"
+            and node.target == torch.ops.prims.convert_element_type.default
+        ]
+        xhat_nodes = [
+            node
+            for node in gm.graph.nodes
+            if node.op == "call_function"
+            and node.target == torch.ops.aten.mul.Tensor
+            and any(arg in convert_nodes for arg in node.args[:2])
+            and rsqrt in node.args[:2]
+        ]
+        self.assertEqual(len(convert_nodes), 2)
+        self.assertEqual(len(xhat_nodes), 2)
+        self.assertTrue(all(len(node.users) == 1 for node in xhat_nodes))
+
+    def test_delay_hop_outer_fw_all_gathers_for_peak_memory(self):
+        from torch._inductor.fx_passes.control_dependencies import control_deps
+        from torch._inductor.fx_passes.post_grad import (
+            delay_hop_outer_fw_all_gathers_for_peak_memory,
+        )
+
+        big_val = torch.empty_strided(
+            (262144, 3072), (3072, 1), device="meta", dtype=torch.bfloat16
+        )
+        weight_val = torch.empty_strided(
+            (384, 3072), (3072, 1), device="meta", dtype=torch.bfloat16
+        )
+        gathered_val = torch.empty_strided(
+            (3072, 3072), (3072, 1), device="meta", dtype=torch.bfloat16
+        )
+
+        subgraph = torch.fx.Graph()
+        subgraph.output(())
+        root = torch.nn.Module()
+        root.subgraph0 = torch.fx.GraphModule(torch.nn.Module(), subgraph)
+
+        graph = torch.fx.Graph()
+        weight = graph.placeholder("weight")
+        weight.meta["val"] = weight_val
+        x = graph.placeholder("x")
+        x.meta["val"] = big_val
+        subgraph_attr = graph.get_attr("subgraph0")
+        hop = graph.call_function(
+            torch.ops.higher_order.invoke_subgraph,
+            args=(subgraph_attr, "subgraph0"),
+        )
+        hop.meta["custom"] = {"region_id": "chunk_0"}
+        all_gather = graph.call_function(
+            torch.ops._c10d_functional.all_gather_into_tensor.default,
+            args=(weight, 8, "0"),
+        )
+        all_gather.meta["val"] = gathered_val
+        big = graph.call_function(torch.ops.aten.add.Tensor, args=(x, x))
+        big.meta["val"] = big_val
+        use0 = graph.call_function(torch.ops.aten.mul.Tensor, args=(big, x))
+        use0.meta["val"] = big_val
+        wait = graph.call_function(
+            torch.ops._c10d_functional.wait_tensor.default,
+            args=(all_gather,),
+        )
+        wait.meta["val"] = gathered_val
+        use1 = graph.call_function(torch.ops.aten.sub.Tensor, args=(big, x))
+        use1.meta["val"] = big_val
+        graph.output((wait, use0, use1, hop))
+        gm = torch.fx.GraphModule(root, graph)
+
+        delay_hop_outer_fw_all_gathers_for_peak_memory(gm, min_dep_bytes=1)
+
+        control_nodes = [
+            node
+            for node in gm.graph.nodes
+            if node.op == "call_function" and node.target is control_deps
+        ]
+        self.assertEqual(len(control_nodes), 1)
+        ordered_all_gather = control_nodes[0]
+        self.assertEqual(ordered_all_gather.args[0], (big,))
+        self.assertEqual(wait.args[0], ordered_all_gather)
+
+        order = {node: idx for idx, node in enumerate(gm.graph.nodes)}
+        self.assertLess(order[big], order[ordered_all_gather])
+        self.assertLess(order[ordered_all_gather], order[wait])
+
     def test_fuse_preserves_intermediate_input_encounter_order(self):
         class M(torch.nn.Module):
             def forward(self, x, y):

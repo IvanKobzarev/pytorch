@@ -254,6 +254,14 @@ allow_buffer_reuse = True
 # Allow reuse to extend a buffer lifetime across explicit fuse-region boundaries.
 allow_buffer_reuse_across_fuse_regions = False
 
+# If nonzero, avoid non-adjacent reuse of buffers at or above this many bytes.
+# This can reduce active peak memory for graphs with very large temporaries at
+# the cost of more allocator churn/reserved memory.
+large_buffer_reuse_threshold_bytes = 0
+
+# If nonzero, only apply large_buffer_reuse_threshold_bytes below this size.
+large_buffer_reuse_max_threshold_bytes = 0
+
 # Enable pooled allocations for non-output tensors
 memory_planning = os.environ.get("TORCHINDUCTOR_MEMORY_PLANNING", "0") == "1"
 
