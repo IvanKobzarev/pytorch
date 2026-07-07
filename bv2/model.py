@@ -261,7 +261,10 @@ class TxtUnembedding(nn.Module):
             region_name = f"txt_unemb_chunk_{start // chunksz}"
 
             if graph_trainer:
-                with gt.subgraph(region_name, unshard_outside=True):
+                with gt.subgraph(
+                    region_name,
+                    role="txt_unemb_chunk",
+                ):
                     loss, tok_losses_chunk, pred, grads, grad_params = self._process_chunk_gt(
                         chunk_x,
                         chunk_targets,

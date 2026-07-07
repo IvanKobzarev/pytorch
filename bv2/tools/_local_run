@@ -68,7 +68,7 @@ else
 fi
 
 export MASTER_ADDR=127.0.0.1
-export MASTER_PORT=12355
+export MASTER_PORT=${MASTER_PORT:-12355}
 export WORLD_SIZE=$NGPUS
 
 # Run all processes in the background, except rank 0...

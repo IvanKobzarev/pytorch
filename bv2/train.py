@@ -61,6 +61,12 @@ DEFAULT_INDUCTOR_CONFIG = {
     "shape_padding": True,
     "force_shape_pad": False,
     "autoheuristic_use.pad_mm": True,
+    # Overlap scheduling, when enabled, must not raise peak memory: zero budget
+    # above the baseline peak. Both knobs are required -- OverlapScheduler allows
+    # max(gb_cap, ratio * baseline), so leaving the ratio unset falls back to the
+    # 5% default and still permits multi-GiB peak regressions on the joint graph.
+    "aten_distributed_optimizations.max_memory_increase_gb": 0.0,
+    "aten_distributed_optimizations.max_memory_increase_ratio": 0.0,
 }
 
 try:
@@ -122,6 +128,8 @@ def _inductor_config(c):
 
 def main(c, rank, local_rank, world_size):
     inductor_config = _inductor_config(c)
+    if rank == 0 and inductor_config:
+        print(f"Applying Inductor config: {inductor_config}")
     with torch._inductor.config.patch(inductor_config):
         return _main(c, rank, local_rank, world_size)
 
@@ -131,11 +139,30 @@ def _main(c, rank, local_rank, world_size):  # noqa: C901
     trainsched = u.schedule(c, prefix="n", name="training schedule")
     is_short_run = trainsched["unit"] == "nsteps" and trainsched["spec"] < 50
     prints0(f"Training target: {u.BLUE}{trainsched['unit']}={trainsched['spec']}{u.RESET}")
+    profile_enabled_config = c.get("profile.enabled", None)
+    profile_enabled = not is_short_run if profile_enabled_config is None else profile_enabled_config
+    profile_rank = c.get("profile.dump_rank", None)
+    profile_this_rank = profile_enabled and (profile_rank is None or profile_rank == rank)
+    profile_start_after_steps = c.get("profile.start_after_steps", 50)
+    profile_trace_after_steps = c.get("profile.trace_after_steps", 54)
+    profile_memory_snapshot_after_steps = c.get("profile.memory_snapshot_after_steps", 2)
+    profile_memory_history_start_after_steps = c.get("profile.memory_history_start_after_steps", None)
 
     # start from the beginning to track every gpu memory allocation
     # otherwise we lost cpp tracestack for model initialization
-    if not is_short_run:
-        torch.cuda.memory._record_memory_history(max_entries=10000000)
+    memory_history_started = False
+    if (
+        profile_this_rank
+        and c.get("profile.memory_history", True)
+        and profile_memory_history_start_after_steps is None
+    ):
+        torch.cuda.memory._record_memory_history(
+            c.get("profile.memory_history_mode", "all"),
+            context=c.get("profile.memory_history_context", "all"),
+            stacks=c.get("profile.memory_history_stacks", "all"),
+            max_entries=c.get("profile.memory_history_max_entries", 10000000),
+        )
+        memory_history_started = True
 
     # In theory we only need `init_device_mesh`, but in practice, we need this
     # whole verbose `init_process_group` or else the `barrier` will throw a warning.
@@ -249,7 +276,9 @@ def _main(c, rank, local_rank, world_size):  # noqa: C901
     if c.use_graph_trainer:
         decay_param_names = [n for n, _ in model.named_parameters() if is_decay(n, decay_patterns)]
         _run_fwd_bwd_step = gt_adapter.make_train_step_dispatcher(
-            model, optim, decay_param_names,
+            model,
+            optim,
+            decay_param_names,
         )
 
     # Potentially resume/fork from a checkpoint, if not, init stuff.
@@ -277,16 +306,19 @@ def _main(c, rank, local_rank, world_size):  # noqa: C901
         summary_table(model, stats=c.get("param_stats", False), param_mode=get_muon_param_mode, decay_patterns=decay_patterns)
     prints0(model)
 
-    peak_mems, model_times, step_times = [], [], []
+    peak_mems, peak_reserved_mems, model_times, step_times = [], [], [], []
     t0 = t_step_start = t_prev_step_end = perf_counter()
-    prof = not is_short_run and first_step == 0 and profile(
+    prof = profile_this_rank and c.get("profile.torch_profiler", True) and first_step == 0 and profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         record_shapes=True,
-        profile_memory=False,  # Done with torch.cuda functions instead.
+        profile_memory=c.get("profile.torch_profile_memory", False),
         with_stack=True,
         with_flops=True,
         with_modules=True,
     )
+    prof_started = False
+    prof_trace_exported = False
+    prof_memsnap_exported = False
 
     # We have a factory here, so that we get independent compiles and compile-limit
     # counters for individual evals. For example, we run different evals at varying
@@ -353,13 +385,30 @@ def _main(c, rank, local_rank, world_size):  # noqa: C901
         if (data := next(train_iter, None)) is None:
             break
 
+        if (
+            profile_this_rank
+            and c.get("profile.memory_history", True)
+            and not memory_history_started
+            and profile_memory_history_start_after_steps is not None
+            and (step - first_step) == profile_memory_history_start_after_steps
+        ):
+            torch.cuda.memory._record_memory_history(
+                c.get("profile.memory_history_mode", "all"),
+                context=c.get("profile.memory_history_context", "all"),
+                stacks=c.get("profile.memory_history_stacks", "all"),
+                max_entries=c.get("profile.memory_history_max_entries", 10000000),
+            )
+            memory_history_started = True
+            prints(f"Started CUDA memory history at step {step}")
+
         torch.cuda.reset_peak_memory_stats()
         u.global_gpu_barrier(device)  # For accurate global datawait timing.
         t_prev_step_start, t_step_start = t_step_start, perf_counter()
 
-        if prof and (step - first_step) == 50:
+        if prof and not prof_started and (step - first_step) == profile_start_after_steps:
             torch.cuda.cudart().cudaProfilerStart()
             prof.start()
+            prof_started = True
 
         num_data_tokens, num_examples, num_model_tokens, num_loss_tokens = u.all_reduce_scalars(
             sum(data["ndatatoks"]), len(data["ndatatoks"]), sum(data["ntok"]), (data["lowe"] > 0).sum())
@@ -412,13 +461,29 @@ def _main(c, rank, local_rank, world_size):  # noqa: C901
         mw.log({"chrono/axltime": np.float64(time() - 1751320800.0)})
         mw.log({"chrono/datawait": t_step_start - t_prev_step_end})
         mw.log({"sys/gpu_peak_mem_gb": (peak_mem := torch.cuda.max_memory_allocated() / 1024**3)})
+        mw.log({"sys/gpu_peak_reserved_mem_gb": (peak_reserved_mem := torch.cuda.max_memory_reserved() / 1024**3)})
         if step % 10 == 0 and rank == 0:
             bv2.metrics.log_system_metrics(mw, gpu_index=0, prefix="sys")
         if is_short_run:
             model_times.append(model_time)
             step_times.append(step_time)
             peak_mems.append(peak_mem * 1024)  # MiB
+            peak_reserved_mems.append(peak_reserved_mem * 1024)  # MiB
 
+        if _env_truthy("RIGI_DEBUG_LOSS_SCALARS") and step < first_step + int(os.environ.get("RIGI_DEBUG_LOSS_STEPS", "2")):
+            def _scalar(x):
+                if isinstance(x, torch.Tensor):
+                    return x.detach().float().cpu().item()
+                return float(x)
+
+            prints0(
+                "debug loss scalars: "
+                f"step={step} "
+                f"local_loss={_scalar(local_loss):.8f} "
+                f"local_pplx={_scalar(extras['pplx']):.8f} "
+                f"global_total_loss_toks={_scalar(extras['global_total_loss_toks']):.1f} "
+                f"num_loss_tokens={num_loss_tokens}"
+            )
         global_loss, global_pplx, global_ncorrect = u.all_reduce_scalars(
             local_loss, extras["pplx"], extras["ncorrect"])
 
@@ -488,17 +553,23 @@ def _main(c, rank, local_rank, world_size):  # noqa: C901
             mw.end_step()
             break
 
-        if prof and (step - first_step) == 2:
+        if memory_history_started and not prof_memsnap_exported and (step - first_step) == profile_memory_snapshot_after_steps:
             # dumping first 3 iterations from init are enough to include optim states.
             # Otherwise the .pkl becomes too big and freezes chrome.
             # Drag .pkl file to https://docs.pytorch.org/memory_viz
-            torch.cuda.memory._dump_snapshot(pjoin(workdir, f"prof_memsnap_s{step}_r{rank}.pkl"))  # fmt: skip
+            snapshot_path = pjoin(workdir, f"prof_memsnap_s{step}_r{rank}.pkl")
+            prints(f"Dumping CUDA memory snapshot to {snapshot_path}")
+            torch.cuda.memory._dump_snapshot(snapshot_path)
             torch.cuda.memory._record_memory_history(enabled=None)
-        if prof and (step - first_step) == 54:  # Open in about://tracing or ui.perfetto.dev
+            memory_history_started = False
+            prints(f"Dumped CUDA memory snapshot to {snapshot_path}")
+            prof_memsnap_exported = True
+        if prof and prof_started and not prof_trace_exported and (step - first_step) == profile_trace_after_steps:  # Open in about://tracing or ui.perfetto.dev
             torch.cuda.cudart().cudaProfilerStop()
             prof.stop()  # TODO: speedup gz
             prof.export_chrome_trace(pjoin(workdir, f"prof_trace_s{step}_r{rank}.json.gz"))
             prof.export_stacks(pjoin(workdir, f"prof_stacks_cpu_s{step}_r{rank}.txt"))
+            prof_trace_exported = True
 
         run_evals(step, progress, last_step=training_done)
 
@@ -516,6 +587,7 @@ def _main(c, rank, local_rank, world_size):  # noqa: C901
 
     if is_short_run:
         u.printR(f"Peak mems (med: {np.median(peak_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_mems)}")  # fmt: skip
+        u.printR(f"Reserved mems (med: {np.median(peak_reserved_mems):.1f}MiB): {' '.join(f'{t:.0f}' for t in peak_reserved_mems)}")  # fmt: skip
         u.printR(f"Model times (med: {np.median(model_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in model_times)}")  # fmt: skip
         u.printR(f"Step times (med: {np.median(step_times)*1000:.1f}ms): {' '.join(f'{t*1000:.0f}' for t in step_times)}")  # fmt: skip
 
@@ -782,6 +854,19 @@ def get_config():
 
     c.nsteps = 16
     c.warmup_nsteps = 3
+    c.profile.enabled = None
+    c.profile.dump_rank = None
+    c.profile.start_after_steps = 50
+    c.profile.trace_after_steps = 54
+    c.profile.memory_snapshot_after_steps = 2
+    c.profile.memory_history = True
+    c.profile.memory_history_mode = "all"
+    c.profile.memory_history_context = "all"
+    c.profile.memory_history_stacks = "all"
+    c.profile.memory_history_start_after_steps = None
+    c.profile.memory_history_max_entries = 10000000
+    c.profile.torch_profiler = True
+    c.profile.torch_profile_memory = False
     c.lr_adam = 1e-3
     c.lr_muon = 1e-3
     c.wd = lambda: c.lr_adam * 0.01
@@ -828,7 +913,8 @@ if __name__ == "__main__":
     # It means ranks don't share the compile cache, but it also
     # means we don't get the following startup crash randomly anymore:
     # torch._inductor.exc.InductorError: Timeout: The file lock [...] could not be acquired.
-    os.environ["TORCHINDUCTOR_CACHE_DIR"] = f"/tmp/torchinductor_{getuser()}_rank{local_rank}"
+    cache_suffix = os.environ.get("RIGI_TORCHINDUCTOR_CACHE_SUFFIX", "")
+    os.environ["TORCHINDUCTOR_CACHE_DIR"] = f"/tmp/torchinductor_{getuser()}{cache_suffix}_rank{local_rank}"
 
     # Don't squeeze tables! Can't protect this by isatty, because slurm-out is always a tty :(
     rich.reconfigure(width=500)
