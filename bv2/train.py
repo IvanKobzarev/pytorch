@@ -27,6 +27,7 @@ import torch.distributed.checkpoint.state_dict as dcpsd
 import zstandard as zstd
 from torch.profiler import ProfilerActivity, profile, record_function
 
+import bv2.graph_trainer_utils.adapter as gt_adapter
 import bv2.metrics
 import bv2.pdb_distr
 import bv2.simple_data
@@ -55,14 +56,77 @@ torch.backends.cudnn.benchmark = False
 torch.set_deterministic_debug_mode("error")  # raises error on non-determinism
 
 # Use AutoHeuristics for pad_mm to automatically pad matmuls for better perf.
-# Requires pytorch/pytorch@bd80d3b6c9f04e8d80626ee13a9e5ddb72f125f9.
+# Keep force_shape_pad disabled by default; forced padding regresses peak memory.
+DEFAULT_INDUCTOR_CONFIG = {
+    "shape_padding": True,
+    "force_shape_pad": False,
+    "autoheuristic_use.pad_mm": True,
+}
+
 try:
     torch._inductor.config.autoheuristic_use.pad_mm = True
 except Exception:
     pass
 
 
-def main(c, rank, local_rank, world_size):  # noqa: C901
+def _dict_config(value):
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return {}
+        obj = json.loads(value)
+        if not isinstance(obj, dict):
+            raise TypeError(f"Expected a JSON object config, got {type(obj).__name__}")
+        return obj
+    if isinstance(value, dict):
+        return dict(value)
+    raise TypeError(f"Expected a dict config, got {type(value).__name__}")
+
+
+def _env_truthy(name):
+    return os.environ.get(name, "").lower() in ("1", "true", "yes", "on")
+
+
+def _has_inductor_config_value(value):
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(_dict_config(value))
+    if isinstance(value, dict):
+        return bool(value)
+    return True
+
+
+def _inductor_config(c):
+    config_value = c.get("inductor_configs", None)
+    env_value = os.environ.get("RIGI_INDUCTOR_CONFIGS_JSON", None)
+    override_enabled = c.get("allow_inductor_config_override", False) or _env_truthy(
+        "RIGI_ENABLE_INDUCTOR_CONFIG_OVERRIDE"
+    )
+    cfg = dict(DEFAULT_INDUCTOR_CONFIG)
+    if not override_enabled:
+        if _has_inductor_config_value(config_value) or _has_inductor_config_value(env_value):
+            raise RuntimeError(
+                "Inductor config overrides require "
+                "RIGI_ENABLE_INDUCTOR_CONFIG_OVERRIDE=1 or "
+                "allow_inductor_config_override=True"
+            )
+        return cfg
+
+    cfg.update(_dict_config(c.get("inductor_configs", None)))
+    cfg.update(_dict_config(env_value))
+    return cfg
+
+
+def main(c, rank, local_rank, world_size):
+    inductor_config = _inductor_config(c)
+    with torch._inductor.config.patch(inductor_config):
+        return _main(c, rank, local_rank, world_size)
+
+
+def _main(c, rank, local_rank, world_size):  # noqa: C901
     prints0(f"Running with arguments:\n{c}")
     trainsched = u.schedule(c, prefix="n", name="training schedule")
     is_short_run = trainsched["unit"] == "nsteps" and trainsched["spec"] < 50
@@ -180,6 +244,13 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                 for param in decay_params:
                     param.mul_(1.0 - weight_decay)
         return loss, extras
+
+    _run_fwd_bwd_step = _fwd_and_bwd_step
+    if c.use_graph_trainer:
+        decay_param_names = [n for n, _ in model.named_parameters() if is_decay(n, decay_patterns)]
+        _run_fwd_bwd_step = gt_adapter.make_train_step_dispatcher(
+            model, optim, decay_param_names,
+        )
 
     # Potentially resume/fork from a checkpoint, if not, init stuff.
     progress = u.TrainingProgress()
@@ -325,7 +396,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
             mw.log({f"pnorm/{k}": v for k, v in global_norms(model.named_parameters()).items()})
 
         t_before_model = perf_counter()  # Let's not sync/barrier, FSDP does that anyways.
-        local_loss, extras = _fwd_and_bwd_step(
+        local_loss, extras = _run_fwd_bwd_step(
             torch.tensor(c.wd * sched) if c.wd else None,
             data["toki"],
             data["toko"],
@@ -392,7 +463,7 @@ def main(c, rank, local_rank, world_size):  # noqa: C901
                     mw.log({f"mix_pplx/{src}": (stats[2, i] / stats[0, i] / np.log(2)).item()})
 
         # And grad-norms are for this step, but we only get them after the update ran, i.e. here.
-        if step < 50 or step % 10 == 0:  # Interesting frequently early, sparsely later.
+        if not c.use_graph_trainer and (step < 50 or step % 10 == 0):  # Interesting frequently early, sparsely later.
             mw.log({f"gnorm/{k}": v for k, v in global_norms((n, p.grad) for n, p in model.named_parameters()).items()})
 
         # After the update is done, we are at the step+1
@@ -722,6 +793,7 @@ def get_config():
     c.model.dim = 4096
     c.model.depth = 4
     c.model.txt_unemb.chunksz = 4096
+    c.use_graph_trainer = False
 
     c.evals.pplx_val.type = "pplx"
     c.evals.pplx_val.at_steps = 10

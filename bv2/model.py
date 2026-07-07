@@ -4,10 +4,12 @@ import torch.distributed as distr
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
+from torch.distributed import _functional_collectives as funcol
 from torch.nn.attention.flex_attention import AuxRequest, flex_attention
 from torch.utils.checkpoint import checkpoint
 
 import bv2.data.dpack as dpack  # usort: skip
+import bv2.graph_trainer_utils.adapter as gt  # usort: skip
 
 
 class RMSNorm(nn.Module):
@@ -157,8 +159,7 @@ class TxtUnembedding(nn.Module):
     def _norm_logits(self, x):
         return F.rms_norm(x, (x.shape[-1],), weight=self.gamma_head.abs())
 
-    def _process_chunk(self, x, targets, loss_weights, global_total_loss_toks, mode):
-        logits = self._norm_logits(self.head(x)) + self.head_bias
+    def _loss_from_logits(self, logits, targets, loss_weights, global_total_loss_toks):
         pred = logits.argmax(dim=-1)
 
         # We need to flatten/unflatten batch_dims because of torch's cross-entropy API.
@@ -171,12 +172,47 @@ class TxtUnembedding(nn.Module):
         toklosses = toklosses * (loss_weights > 0)
         lsum = (toklosses * loss_weights).sum()
         loss = lsum / global_total_loss_toks
+        return loss, toklosses, pred
+
+    def _process_chunk(self, x, targets, loss_weights, global_total_loss_toks, mode):
+        logits = self._norm_logits(self.head(x)) + self.head_bias
+        loss, toklosses, pred = self._loss_from_logits(
+            logits, targets, loss_weights, global_total_loss_toks
+        )
         if mode == "loss and bwd":
             loss.backward()
 
         return loss.detach(), toklosses.detach(), pred.detach()
 
-    def forward(self, x, targets, loss_weights, seqids, mode, logits_tok_idx=None):
+    def _process_chunk_gt(self, x, targets, loss_weights, global_total_loss_toks):
+        head_weight = self.head.weight
+        head_bias = self.head_bias
+        gamma_head = self.gamma_head
+        grad_inputs = (x, head_weight, head_bias, gamma_head)
+
+        head_out = F.linear(x, head_weight)
+        logits = F.rms_norm(
+            head_out, (head_out.shape[-1],), weight=gamma_head.abs()
+        ) + head_bias
+        loss, toklosses, pred = self._loss_from_logits(
+            logits, targets, loss_weights, global_total_loss_toks
+        )
+        loss_out = loss.detach()
+        toklosses = toklosses.detach()
+        pred = pred.detach()
+        grads = torch.autograd.grad(loss, grad_inputs)
+        return loss_out, toklosses, pred, grads, grad_inputs[1:]
+
+    def forward(
+        self,
+        x,
+        targets,
+        loss_weights,
+        seqids,
+        mode,
+        logits_tok_idx=None,
+        graph_trainer=False,
+    ):
         assert mode in ("loss and bwd", "loss", "logits"), f"Invalid mode {mode}"
 
         if mode == "logits":
@@ -190,11 +226,16 @@ class TxtUnembedding(nn.Module):
         targets, _, mask = dpack.unpack_as_text(targets)
         x_detached = x.detach().requires_grad_() if mode == "loss and bwd" else x
 
+        graph_trainer = mode == "loss and bwd" and graph_trainer
+        # GraphTrainer captures fwd+bwd as one graph; use autograd.grad so each
+        # chunk writes a small input grad into one full-seqlen accumulator.
+        grad_acc = x_detached.detach() if graph_trainer else None
+
         seqlen = x_detached.shape[-2]
 
-        total_loss = 0
-        total_pplx = 0
-        total_correct = 0
+        total_loss = torch.zeros((), dtype=torch.float32, device=x_detached.device)
+        total_pplx = torch.zeros((), dtype=torch.float32, device=x_detached.device)
+        total_correct = torch.zeros((), dtype=torch.int64, device=x_detached.device)
         predictions = torch.empty_like(targets)
         tok_losses = torch.empty_like(targets, dtype=torch.float32)
         loss_weights = loss_weights * mask
@@ -202,7 +243,9 @@ class TxtUnembedding(nn.Module):
         # How many tokens get a loss, across all devices.
         # We normalize by count(lowe > 0) so that lowe magnitude is meaningful for weighting.
         global_total_loss_toks = (loss_weights > 0).sum()
-        distr.all_reduce(global_total_loss_toks, op=distr.ReduceOp.SUM)
+        global_total_loss_toks = funcol.wait_tensor(
+            funcol.all_reduce(global_total_loss_toks, "sum", distr.group.WORLD)
+        )
         global_total_loss_toks = torch.clamp(global_total_loss_toks, min=1.0)
 
         # NOTE: This is the case because of our choice to do static compiles without recompiles.
@@ -215,18 +258,46 @@ class TxtUnembedding(nn.Module):
             chunk_x = x_detached[..., start:end, :]
             chunk_targets = targets[..., start:end]
             chunk_loss_weights = loss_weights[..., start:end]
+            region_name = f"txt_unemb_chunk_{start // chunksz}"
 
-            loss, tok_losses_chunk, pred = self._process_chunk(
-                chunk_x, chunk_targets, chunk_loss_weights, global_total_loss_toks, mode)
+            if graph_trainer:
+                with gt.subgraph(region_name, unshard_outside=True):
+                    loss, tok_losses_chunk, pred, grads, grad_params = self._process_chunk_gt(
+                        chunk_x,
+                        chunk_targets,
+                        chunk_loss_weights,
+                        global_total_loss_toks,
+                    )
+                    # Each chunk returns its input grad plus the head param grads;
+                    # accumulate them as loss.backward would.
+                    chunk_x_grad, *param_grads = grads
+                    hidden_grad = chunk_x_grad.detach()
+                    accum_grads = tuple(grad.detach() for grad in param_grads)
+                    torch.autograd.backward(
+                        grad_params,
+                        accum_grads,
+                    )
+                grad_acc[..., start:end, :].copy_(hidden_grad)
+            else:
+                loss, tok_losses_chunk, pred = self._process_chunk(
+                    chunk_x,
+                    chunk_targets,
+                    chunk_loss_weights,
+                    global_total_loss_toks,
+                    mode,
+                )
 
-            total_loss += loss
-            total_pplx += tok_losses_chunk.sum()
+            chunk_loss_sum = tok_losses_chunk.sum()
+            total_loss = total_loss + chunk_loss_sum
+            total_pplx = total_pplx + chunk_loss_sum
             predictions[..., start:end] = pred
             tok_losses[..., start:end] = tok_losses_chunk
-            total_correct += ((pred == chunk_targets) * (chunk_loss_weights > 0)).sum()
+            total_correct = total_correct + ((pred == chunk_targets) * (chunk_loss_weights > 0)).sum()
+
+        total_loss = total_loss / global_total_loss_toks
 
         if mode == "loss and bwd":  # Yes, this graph-breaks. It's ok.
-            x.backward(x_detached.grad)
+            x.backward(grad_acc if graph_trainer else x_detached.grad)
 
         extras = {
             "pplx": total_pplx,
