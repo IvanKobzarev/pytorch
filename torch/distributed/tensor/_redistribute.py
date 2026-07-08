@@ -1,6 +1,7 @@
 # mypy: allow-untyped-defs
 # Copyright (c) Meta Platforms, Inc. and affiliates
 import contextlib
+import contextvars
 import dataclasses
 import itertools
 import logging
@@ -52,6 +53,26 @@ _FORCE_MIN_COST_REDISTRIBUTION_PLAN: bool | None = None
 # consecutive same-type collectives into flattened operations is skipped,
 # and the unmodified transform_infos list is returned as-is.
 _DISABLE_REDISTRIBUTE_TRANSFORM_OPTIMIZATION: bool = False
+
+# Tracks local Tensor work emitted while DTensor crosses into regular Tensor execution.
+_DTENSOR_MATERIALIZATION_DEPTH = contextvars.ContextVar(
+    "dtensor_materialization_depth", default=0
+)
+
+
+@contextlib.contextmanager
+def _record_dtensor_materialization():
+    token = _DTENSOR_MATERIALIZATION_DEPTH.set(
+        _DTENSOR_MATERIALIZATION_DEPTH.get() + 1
+    )
+    try:
+        yield
+    finally:
+        _DTENSOR_MATERIALIZATION_DEPTH.reset(token)
+
+
+def _is_dtensor_materializing():
+    return _DTENSOR_MATERIALIZATION_DEPTH.get() > 0
 
 
 def _redistribute_cost_sort_key(cost: FloatLikeType) -> float:
@@ -1888,70 +1909,71 @@ class Redistribute(torch.autograd.Function):
         async_op: bool,
         dtype_config: _DtypeConfig,
     ):
-        ctx.async_op = async_op
-        bwd = dtype_config["backward_options"]
-        ctx.bwd_op_dtype = bwd["op_dtype"]
-        ctx.bwd_out_dtype = bwd["out_dtype"]
+        with _record_dtensor_materialization():
+            ctx.async_op = async_op
+            bwd = dtype_config["backward_options"]
+            ctx.bwd_op_dtype = bwd["op_dtype"]
+            ctx.bwd_out_dtype = bwd["out_dtype"]
 
-        op_dtype = dtype_config["op_dtype"]
-        out_dtype = dtype_config["out_dtype"]
+            op_dtype = dtype_config["op_dtype"]
+            out_dtype = dtype_config["out_dtype"]
 
-        if op_dtype != input._local_tensor.dtype:
-            local_tensor = input._local_tensor.to(dtype=op_dtype)
-            current_spec = DTensorSpec(
-                mesh=device_mesh,
-                placements=input._spec.placements,
-                tensor_meta=TensorMeta(
-                    shape=input.shape,
-                    stride=input.stride(),
-                    dtype=op_dtype,
-                ),
-                use_strided_shard_as_shard_order=input._spec.use_strided_shard_as_shard_order,
-            )
-        else:
-            local_tensor = input._local_tensor
-            current_spec = input._spec
+            if op_dtype != input._local_tensor.dtype:
+                local_tensor = input._local_tensor.to(dtype=op_dtype)
+                current_spec = DTensorSpec(
+                    mesh=device_mesh,
+                    placements=input._spec.placements,
+                    tensor_meta=TensorMeta(
+                        shape=input.shape,
+                        stride=input.stride(),
+                        dtype=op_dtype,
+                    ),
+                    use_strided_shard_as_shard_order=input._spec.use_strided_shard_as_shard_order,
+                )
+            else:
+                local_tensor = input._local_tensor
+                current_spec = input._spec
 
-        ctx.current_spec = current_spec
+            ctx.current_spec = current_spec
 
-        if current_spec.placements != placements:
-            target_spec = DTensorSpec(
-                device_mesh, placements, tensor_meta=current_spec.tensor_meta
-            )
+            if current_spec.placements != placements:
+                target_spec = DTensorSpec(
+                    device_mesh, placements, tensor_meta=current_spec.tensor_meta
+                )
 
-            output = redistribute_local_tensor(
-                local_tensor,
-                current_spec,
+                output = redistribute_local_tensor(
+                    local_tensor,
+                    current_spec,
+                    target_spec,
+                    async_op=async_op,
+                    is_explicit=True,
+                )
+            else:
+                # use the same local tensor if placements are the same.
+                output = local_tensor
+                target_spec = current_spec
+
+            if output.dtype != out_dtype:
+                output = output.to(out_dtype)
+                target_spec = DTensorSpec(
+                    device_mesh,
+                    target_spec.placements,
+                    tensor_meta=TensorMeta(
+                        shape=input.shape,
+                        stride=input.stride(),
+                        dtype=out_dtype,
+                    ),
+                    use_strided_shard_as_shard_order=target_spec.use_strided_shard_as_shard_order,
+                )
+
+            # pyrefly: ignore [bad-argument-type]
+            return dtensor.DTensor(
+                # pyrefly: ignore [bad-argument-count]
+                output,
                 target_spec,
-                async_op=async_op,
-                is_explicit=True,
+                # pyrefly: ignore [unexpected-keyword]
+                requires_grad=input.requires_grad,
             )
-        else:
-            # use the same local tensor if placements are the same.
-            output = local_tensor
-            target_spec = current_spec
-
-        if output.dtype != out_dtype:
-            output = output.to(out_dtype)
-            target_spec = DTensorSpec(
-                device_mesh,
-                target_spec.placements,
-                tensor_meta=TensorMeta(
-                    shape=input.shape,
-                    stride=input.stride(),
-                    dtype=out_dtype,
-                ),
-                use_strided_shard_as_shard_order=target_spec.use_strided_shard_as_shard_order,
-            )
-
-        # pyrefly: ignore [bad-argument-type]
-        return dtensor.DTensor(
-            # pyrefly: ignore [bad-argument-count]
-            output,
-            target_spec,
-            # pyrefly: ignore [unexpected-keyword]
-            requires_grad=input.requires_grad,
-        )
 
     @staticmethod
     def backward(ctx, grad_output: "dtensor.DTensor"):  # type: ignore[override]

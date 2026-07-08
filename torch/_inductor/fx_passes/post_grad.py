@@ -1,5 +1,6 @@
 # mypy: allow-untyped-decorators
 # mypy: allow-untyped-defs
+import copy
 import functools
 import itertools
 import logging
@@ -81,12 +82,126 @@ log = logging.getLogger(__name__)
 aten = torch.ops.aten
 prims = torch.ops.prims
 
+REORDER_FOR_PEAK_MEMORY = "_inductor_reorder_for_peak_memory"
+
 # First pass_patterns[0] are applied, then [1], then [2]
 pass_patterns = [
     PatternMatcherPass(),
     PatternMatcherPass(),
     PatternMatcherPass(),
 ]
+
+
+def _estimate_tensor_metadata_bytes(value: object) -> int:
+    if hasattr(value, "shape") and hasattr(value, "dtype"):
+        numel = 1
+        for dim in value.shape:
+            try:
+                dim = int(dim)
+            except (TypeError, ValueError):
+                return 0
+            numel *= dim
+        return numel * value.dtype.itemsize
+    return 0
+
+
+def _estimate_fx_value_bytes(value: object) -> int:
+    bytes = _estimate_tensor_metadata_bytes(value)
+    if bytes:
+        return bytes
+    if isinstance(value, (tuple, list)):
+        return sum(_estimate_fx_value_bytes(item) for item in value)
+    return 0
+
+
+def reorder_graph_for_peak_memory(gm: torch.fx.GraphModule) -> None:
+    """Move large-producing nodes later when doing so shortens live ranges."""
+    placeholders: list[torch.fx.Node] = []
+    output_node: torch.fx.Node | None = None
+    nodes: list[torch.fx.Node] = []
+    for node in gm.graph.nodes:
+        if node.op == "placeholder":
+            placeholders.append(node)
+        elif node.op == "output":
+            output_node = node
+        else:
+            nodes.append(node)
+
+    if output_node is None or len(nodes) < 2:
+        return
+
+    node_set = OrderedSet(nodes)
+    original_index = {node: idx for idx, node in enumerate(nodes)}
+    output_bytes = {}
+    for node in nodes:
+        bytes = _estimate_fx_value_bytes(node.meta.get("val"))
+        if not bytes:
+            bytes = _estimate_fx_value_bytes(node.meta.get("example_value"))
+        if not bytes:
+            bytes = _estimate_fx_value_bytes(node.meta.get("tensor_meta"))
+        output_bytes[node] = bytes
+    output_users = OrderedSet(output_node.all_input_nodes)
+    remaining_uses = {
+        node: sum(1 for user in node.users if user in node_set or user is output_node)
+        for node in itertools.chain(placeholders, nodes)
+    }
+    unscheduled_deps = {
+        node: sum(1 for dep in node.all_input_nodes if dep in node_set)
+        for node in nodes
+    }
+    ready = [node for node in nodes if unscheduled_deps[node] == 0]
+    scheduled: list[torch.fx.Node] = []
+
+    while ready:
+
+        def priority(node: torch.fx.Node) -> tuple[int, int, int, int]:
+            freed_bytes = sum(
+                output_bytes.get(dep, 0)
+                for dep in node.all_input_nodes
+                if dep in remaining_uses and remaining_uses[dep] == 1
+            )
+            return (
+                output_bytes[node] - freed_bytes,
+                output_bytes[node],
+                0 if node in output_users else 1,
+                original_index[node],
+            )
+
+        node = min(ready, key=priority)
+        ready.remove(node)
+        scheduled.append(node)
+
+        for dep in node.all_input_nodes:
+            if dep in remaining_uses:
+                remaining_uses[dep] -= 1
+
+        for user in node.users:
+            if user not in unscheduled_deps:
+                continue
+            unscheduled_deps[user] -= 1
+            if unscheduled_deps[user] == 0:
+                ready.append(user)
+
+    if len(scheduled) != len(nodes):
+        return
+
+    new_graph = torch.fx.Graph()
+    env: dict[torch.fx.Node, torch.fx.Node] = {}
+
+    for node in placeholders:
+        new_node = new_graph.placeholder(node.name, type_expr=node.type)
+        new_node.meta = copy.copy(node.meta)
+        env[node] = new_node
+
+    for node in scheduled:
+        new_node = new_graph.node_copy(node, lambda n: env[n])
+        new_node.meta = copy.copy(node.meta)
+        env[node] = new_node
+
+    new_graph.output(torch.fx.node.map_arg(output_node.args[0], lambda n: env[n]))
+    new_graph.lint()
+    gm.graph = new_graph
+    gm.recompile()
 
 
 def _remove_profiler_ops(graph: torch.fx.Graph) -> None:
@@ -297,6 +412,11 @@ def post_grad_passes(gm: torch.fx.GraphModule, is_inference: bool):
     GraphTransformObserver(gm, "move_constructors_to_cuda").apply_graph_pass(
         move_constructors_to_gpu
     )
+
+    if gm.meta.get(REORDER_FOR_PEAK_MEMORY):
+        GraphTransformObserver(gm, "reorder_for_peak_memory").apply_gm_pass(
+            reorder_graph_for_peak_memory
+        )
 
     fake_tensor_updater.incremental_update()
 

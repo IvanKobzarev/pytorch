@@ -278,7 +278,6 @@ class TestSimpleOverlap(torch._dynamo.test_case.TestCase):
                 [sync_coll, async_coll, compute],
             )
 
-
 @requires_accelerator_dist_backend(["nccl", "xccl"])
 @instantiate_parametrized_tests
 class TestCollectivesMultiProc(DynamoDistributedMultiProcTestCase):

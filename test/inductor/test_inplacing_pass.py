@@ -7,12 +7,18 @@ import torch._inductor.config as inductor_config
 from functorch import make_fx
 from torch import Tensor
 from torch._dynamo.utils import ReinplaceCounters
+from torch._guards import detect_fake_mode
 from torch._higher_order_ops.auto_functionalize import (
     auto_functionalized,
     auto_functionalized_v2,
 )
-from torch._inductor.fx_passes.reinplace import reinplace_inplaceable_ops_core
+from torch._inductor.fx_passes.reinplace import (
+    reinplace_inplaceable_ops,
+    reinplace_inplaceable_ops_core,
+)
+from torch._inductor.fx_utils import FakeTensorUpdater
 from torch._inductor.test_case import run_tests, TestCase as InductorTestCase
+from torch._inductor.virtualized import V
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     IS_LINUX,
@@ -523,6 +529,31 @@ class TestReinplacingPassCorrectness(InductorTestCase):
         expected = fn(x)
         result = torch.compile(fn, fullgraph=True, backend="inductor")(x)
         self.assertEqual(result, expected)
+
+    def test_partial_slice_scatter_reinplaced(self):
+        def fn(x, h0, h1):
+            y = aten.sin.default(x)
+            chunk0 = aten.neg.default(aten.slice.Tensor(y, 0, 0, 2))
+            y1 = aten.slice_scatter.default(y, h0, 0, 0, 2)
+            chunk1 = aten.neg.default(aten.slice.Tensor(y1, 0, 2, 4))
+            y2 = aten.slice_scatter.default(y1, h1, 0, 2, 4)
+            return y2, chunk0, chunk1
+
+        x = torch.randn(8, 4, device=device)
+        h0 = torch.randn(2, 4, device=device)
+        h1 = torch.randn(2, 4, device=device)
+        gm = make_fx(fn, tracing_mode="fake")(x, h0, h1)
+
+        fakes = [n.meta["val"] for n in gm.graph.nodes if "val" in n.meta]
+        with V.set_fake_mode(detect_fake_mode(fakes)):
+            reinplace_inplaceable_ops(FakeTensorUpdater(gm), gm.graph)
+        gm.graph.lint()
+        gm.recompile()
+
+        targets = [node.target for node in gm.graph.nodes]
+        self.assertEqual(targets.count(aten.copy_.default), 2)
+        self.assertNotIn(aten.slice_scatter.default, targets)
+        self.assertEqual(gm(x, h0, h1), fn(x, h0, h1))
 
     @parametrize(
         "factory_op",

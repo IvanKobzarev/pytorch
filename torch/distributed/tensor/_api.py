@@ -23,6 +23,7 @@ from torch.distributed.device_mesh import (
 from torch.distributed.tensor._collective_utils import check_tensor_meta, mesh_broadcast
 from torch.distributed.tensor._dtensor_spec import DTensorSpec, TensorMeta
 from torch.distributed.tensor._redistribute import (
+    _record_dtensor_materialization,
     Redistribute,
     redistribute_local_tensor,
 )
@@ -103,16 +104,17 @@ class _ToTorchTensor(torch.autograd.Function):
         input: "DTensor",
         grad_placements: Sequence[Placement] | None,
     ):
-        ctx.dtensor_spec = input._spec
-        ctx.grad_placements = grad_placements
-        ctx.set_materialize_grads(False)
-        local_tensor = input._local_tensor
-        ctx.local_tensor_stride = local_tensor.stride()
+        with _record_dtensor_materialization():
+            ctx.dtensor_spec = input._spec
+            ctx.grad_placements = grad_placements
+            ctx.set_materialize_grads(False)
+            local_tensor = input._local_tensor
+            ctx.local_tensor_stride = local_tensor.stride()
 
-        # We need to return a fresh Tensor object there as autograd metadata
-        # will be inplaced into it. So we don't want to pollute the Tensor
-        # object stored in the _local_tensor of this DTensor.
-        return local_tensor.view_as(local_tensor)
+            # We need to return a fresh Tensor object there as autograd metadata
+            # will be inplaced into it. So we don't want to pollute the Tensor
+            # object stored in the _local_tensor of this DTensor.
+            return local_tensor.view_as(local_tensor)
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor | None):  # type: ignore[override]
