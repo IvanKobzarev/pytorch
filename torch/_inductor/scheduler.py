@@ -198,6 +198,7 @@ class FusionMemoryContext:
     node_to_idx: dict[BaseSchedulerNode, int]
     baseline_peak: int
     baseline_live_before: list[int]
+    baseline_live_after: list[int]
 
 
 def _is_gpu_triton_backend(
@@ -4255,6 +4256,7 @@ class Scheduler:
         self.nodes = self.fuse_nodes(self.nodes)
         if config._post_fusion_custom_pass is not None:
             self.nodes = config._post_fusion_custom_pass(self.nodes)
+        self._apply_post_fusion_overlap_deps()
 
         if any(
             isinstance(node, FusedExternTritonKernelSchedulerNode)
@@ -4557,6 +4559,80 @@ class Scheduler:
         self.nodes = [
             node for node in self.nodes if node.get_name() not in removed_node_names
         ] + list(fe_nodes)
+
+    def _refresh_name_to_fused_node(self) -> None:
+        self.name_to_fused_node = {
+            name: node for node in self.nodes for name in node.get_operation_names()
+        }
+
+    def _add_fake_order_dep(self, node: BaseSchedulerNode, dep_name: str) -> bool:
+        dep = WeakDep(dep_name, node.get_name(), is_fake=True)
+        if dep in node.read_writes.reads:
+            return False
+        node.set_read_writes(node.read_writes.with_read(dep))
+        return True
+
+    def _has_post_fusion_dep_path(
+        self,
+        start: BaseSchedulerNode,
+        target: BaseSchedulerNode,
+        live_buffer_to_node: dict[str, BaseSchedulerNode],
+    ) -> bool:
+        seen: OrderedSet[BaseSchedulerNode] = OrderedSet()
+        stack = [start]
+        while stack:
+            node = stack.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            for dep in node.unmet_dependencies:
+                dep_node = live_buffer_to_node.get(dep.name)
+                if dep_node is None or dep_node is node:
+                    continue
+                if dep_node is target:
+                    return True
+                stack.append(dep_node)
+        return False
+
+    def _apply_post_fusion_overlap_deps(self) -> None:
+        overlap_deps = V.graph.post_fusion_overlap_deps
+        if not overlap_deps:
+            return
+
+        self._refresh_name_to_fused_node()
+        live_buffer_to_node = {
+            name: node for node in self.nodes for name in node.get_buffer_names()
+        }
+        changed = False
+        for op_name, dep_op_names in overlap_deps.items():
+            node = self.name_to_fused_node.get(op_name)
+            if node is None:
+                continue
+
+            for dep_op_name in dep_op_names:
+                dep_node = self.name_to_fused_node.get(dep_op_name)
+                if dep_node is None or dep_node is node:
+                    continue
+
+                dep_name = next(iter(dep_node.get_buffer_names()), None)
+                if dep_name is None:
+                    continue
+
+                if self._has_post_fusion_dep_path(node, dep_node, live_buffer_to_node):
+                    continue
+                if self._has_post_fusion_dep_path(dep_node, node, live_buffer_to_node):
+                    log.debug(
+                        "Skipping post-fusion overlap dep %s -> %s due to cycle",
+                        dep_name,
+                        node.get_name(),
+                    )
+                    continue
+
+                if self._add_fake_order_dep(node, dep_name):
+                    changed = True
+
+        if changed:
+            self.nodes = self.topological_sort_schedule(self.nodes)
 
     def compute_dependencies(self) -> None:
         """
@@ -5065,6 +5141,8 @@ class Scheduler:
                 ancestors.add(dep_node_name)
                 ancestors |= name_to_ancestors[dep_node_name]
             name_to_ancestors[node.get_name()] = ancestors
+            for op_name in node.get_operation_names():
+                name_to_ancestors[op_name] = ancestors
             node.ancestors = ancestors
 
         for order, node in enumerate(self.nodes):
@@ -5098,6 +5176,9 @@ class Scheduler:
                 max_dist = max(dep_max_dists)
             name_to_min_distance[node.get_name()] = min_dist
             name_to_max_distance[node.get_name()] = max_dist
+            for op_name in node.get_operation_names():
+                name_to_min_distance[op_name] = min_dist
+                name_to_max_distance[op_name] = max_dist
             node.min_input_distance = min_dist
             node.max_input_distance = max_dist
 
@@ -6165,6 +6246,21 @@ class Scheduler:
             if self.can_fuse(
                 node1, node2, is_reorder_round
             ) and not self.will_fusion_create_cycle(node1, node2):
+                tolerance = (
+                    config.memory_timeline_fusion_peak_regression_tolerance_bytes
+                )
+                if (
+                    tolerance is not None
+                    and (
+                        self.fusion_regresses_estimated_peak_memory(
+                            node1, node2, tolerance
+                        )
+                        or self.fusion_extends_large_output_across_peak(
+                            node1, node2, tolerance
+                        )
+                    )
+                ):
+                    continue
                 fusion_res = self.speedup_by_fusion(node1, node2)
                 if fusion_res.callable_fn is not None:
                     pending_fusion = PendingFusion(
@@ -6264,7 +6360,7 @@ class Scheduler:
         prev_fusion_memory_context = self._fusion_memory_context
         self._fusion_memory_context = (
             self._init_fusion_memory_context(nodes)
-            if config.peak_aware_fusion
+            if config.memory_timeline_fusion_peak_regression_tolerance_bytes is not None
             else None
         )
         try:
@@ -6857,7 +6953,9 @@ class Scheduler:
         buf_info_list, _, _ = compute_memory_timeline(
             nodes, name_to_freeable, graph_outputs
         )
-        baseline_peak, _ = peak_memory_from_buf_info_list(buf_info_list, len(nodes))
+        baseline_peak, baseline_live_after = peak_memory_from_buf_info_list(
+            buf_info_list, len(nodes)
+        )
         baseline_live_before = live_memory_before_steps_from_buf_info_list(
             buf_info_list, len(nodes)
         )
@@ -6875,6 +6973,7 @@ class Scheduler:
             node_to_idx=node_to_idx,
             baseline_peak=baseline_peak,
             baseline_live_before=baseline_live_before,
+            baseline_live_after=baseline_live_after,
         )
 
     @staticmethod
@@ -6889,7 +6988,10 @@ class Scheduler:
         return min(steps) if steps else None
 
     def fusion_regresses_estimated_peak_memory(
-        self, node1: BaseSchedulerNode, node2: BaseSchedulerNode
+        self,
+        node1: BaseSchedulerNode,
+        node2: BaseSchedulerNode,
+        tolerance: int,
     ) -> bool:
         """Estimate the local peak after replacing two scheduled nodes with one fusion."""
         from .memory import estimate_region_peak_memory
@@ -6965,16 +7067,83 @@ class Scheduler:
         )
 
         peak_delta = region_peak - ctx.baseline_peak
-        if peak_delta <= config.peak_aware_fusion_tolerance_bytes:
+        if peak_delta <= tolerance:
             return False
 
         fusion_log.debug(
-            "peak-aware fusion rejected %s with %s: estimated peak delta %d bytes",
+            "memory-timeline fusion rejected %s with %s: estimated peak delta %d bytes",
             node1.get_name(),
             node2.get_name(),
             peak_delta,
         )
         return True
+
+    def fusion_extends_large_output_across_peak(
+        self,
+        node1: BaseSchedulerNode,
+        node2: BaseSchedulerNode,
+        tolerance: int,
+    ) -> bool:
+        ctx = self._fusion_memory_context
+        if ctx is None:
+            return False
+        if node1 not in ctx.node_set or node2 not in ctx.node_set:
+            return False
+        if (node1.get_operation_names() & node2.ancestors) or (
+            node2.get_operation_names() & node1.ancestors
+        ):
+            return False
+
+        step1 = self._fusion_node_step(ctx, node1)
+        step2 = self._fusion_node_step(ctx, node2)
+        if step1 is None or step2 is None:
+            return False
+
+        peak_steps = [
+            i
+            for i, live in enumerate(ctx.baseline_live_after)
+            if live >= ctx.baseline_peak
+        ]
+        if not peak_steps:
+            return False
+        peak_start = min(peak_steps)
+        peak_end = max(peak_steps)
+        fused_step = min(step1, step2)
+
+        min_size = max(tolerance, 16 * 1024 * 1024)
+        has_pre_peak_output = False
+        has_large_peak_spanning_output = False
+
+        for node in (node1, node2):
+            for buf in node.get_outputs():
+                if buf.get_name() in ctx.graph_outputs:
+                    continue
+                succ_steps = [
+                    step
+                    for succ in buf.mpi_buffer.succ_nodes
+                    if (step := self._fusion_node_step(ctx, succ)) is not None
+                ]
+                if not succ_steps:
+                    continue
+                end_step = max(succ_steps)
+                if end_step < peak_start:
+                    has_pre_peak_output = True
+                if (
+                    max(buf.mpi_buffer.size_alloc, buf.mpi_buffer.size_free) > min_size
+                    and fused_step <= peak_end
+                    and end_step >= peak_start
+                ):
+                    has_large_peak_spanning_output = True
+
+        if has_pre_peak_output and has_large_peak_spanning_output:
+            fusion_log.debug(
+                "memory-timeline fusion rejected %s with %s: large output would "
+                "span baseline peak while another output dies before it",
+                node1.get_name(),
+                node2.get_name(),
+            )
+            return True
+        return False
 
     def fusion_prevent_too_many_reads_and_writes(
         self, node1: BaseSchedulerNode, node2: BaseSchedulerNode, threshold: int

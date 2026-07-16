@@ -959,9 +959,10 @@ loop_index_inversion_in_fusion: bool = True
 # For the cases loop ordering after fusion does not help, we don't lose much.
 score_fusion_memory_threshold = 10
 
-# Skip fusions that make the estimated scheduler peak memory worse.
-peak_aware_fusion = False
-peak_aware_fusion_tolerance_bytes = 0
+# Use Inductor's estimated scheduler memory timeline to skip fusions that
+# increase estimated peak memory. None disables the check; otherwise the value
+# is the allowed estimated peak regression in bytes.
+memory_timeline_fusion_peak_regression_tolerance_bytes = None
 
 # For Triton Templates, select fastest of best template + epilogue vs best template + separate epilogue kernel
 benchmark_epilogue_fusion = (
@@ -1222,6 +1223,14 @@ class aten_distributed_optimizations:
     # Insert ordering dependencies to preserve overlap relationships. This should only be used if
     # compiling with inductor, or for subsequent passes before removing the ops prior to execution
     insert_overlap_deps: bool | None = None
+
+    # Implementation used when insert_overlap_deps is enabled.
+    #
+    # "control_deps" preserves the existing behavior by wrapping dependent
+    # FX nodes in the control_deps HOP.
+    # "meta" records the ordering constraints as FX metadata and applies them
+    # to scheduler nodes after fusion.
+    insert_overlap_deps_impl: Literal["control_deps", "meta"] = "control_deps"
 
     # Maximum compute node prefetch distance for overlap scheduling
     max_compute_pre_fetch: int | None = None

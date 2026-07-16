@@ -14,6 +14,152 @@ from torch.testing._internal.inductor_utils import (
 
 
 class TestControlDeps(InductorTestCase):
+    def test_insert_overlap_deps_impl_meta_records_metadata(self):
+        from torch._inductor.fx_passes.control_dependencies import (
+            control_deps,
+            META_OVERLAP_DEPS,
+            preserve_node_ordering_from_config,
+        )
+        from torch.utils._ordered_set import OrderedSet
+
+        def fn(a, b):
+            x = a + 1
+            y = b * 2
+            return x + y
+
+        gm = torch.fx.symbolic_trace(fn)
+        call_nodes = [node for node in gm.graph.nodes if node.op == "call_function"]
+        self.assertEqual(len(call_nodes), 3)
+
+        deps_map = {call_nodes[1]: OrderedSet([call_nodes[0]])}
+        with config.patch(
+            {"aten_distributed_optimizations.insert_overlap_deps_impl": "meta"}
+        ):
+            preserve_node_ordering_from_config(gm.graph, deps_map)
+
+        self.assertEqual(
+            gm.graph.find_nodes(op="call_function", target=control_deps), []
+        )
+        self.assertIn(call_nodes[0], call_nodes[1].meta[META_OVERLAP_DEPS])
+
+    @requires_gpu()
+    def test_meta_overlap_deps_lower_to_post_fusion_deps(self):
+        from torch._inductor.fx_passes.control_dependencies import (
+            control_deps,
+            META_OVERLAP_DEPS,
+            preserve_node_ordering_from_config,
+        )
+        from torch._inductor.virtualized import V
+        from torch.utils._ordered_set import OrderedSet
+
+        def fn(a, b):
+            mm = b @ b
+            x = a + 1
+            y = x * 2
+            return mm, y
+
+        captured_deps: list[set[str]] = []
+
+        def add_meta_deps(graph):
+            mm_nodes = graph.find_nodes(
+                op="call_function", target=torch.ops.aten.mm.default
+            )
+            mul_nodes = graph.find_nodes(
+                op="call_function", target=torch.ops.aten.mul.Tensor
+            )
+            self.assertEqual(len(mm_nodes), 1)
+            self.assertEqual(len(mul_nodes), 1)
+
+            deps_map = {mul_nodes[0]: OrderedSet([mm_nodes[0]])}
+            preserve_node_ordering_from_config(graph, deps_map)
+
+            self.assertEqual(
+                graph.find_nodes(op="call_function", target=control_deps), []
+            )
+            self.assertIn(mm_nodes[0], mul_nodes[0].meta[META_OVERLAP_DEPS])
+            return graph
+
+        def capture_post_fusion(nodes):
+            dep_names: set[str] = set()
+            for deps in V.graph.post_fusion_overlap_deps.values():
+                dep_names.update(deps)
+            captured_deps.append(dep_names)
+            return nodes
+
+        patches = {
+            "post_grad_custom_post_pass": add_meta_deps,
+            "_post_fusion_custom_pass": capture_post_fusion,
+            "aten_distributed_optimizations.insert_overlap_deps_impl": "meta",
+        }
+        torch._dynamo.reset()
+        with config.patch(patches):
+            a = torch.rand([256, 256], device=GPU_TYPE)
+            b = torch.rand([256, 256], device=GPU_TYPE)
+            result = torch.compile(fn)(a, b)
+
+        expected = fn(a, b)
+        torch.testing.assert_close(result, expected)
+        self.assertTrue(any(captured_deps))
+
+    @requires_gpu()
+    def test_meta_overlap_deps_do_not_force_realization(self):
+        from torch._inductor.fx_passes.control_dependencies import (
+            preserve_node_ordering_from_config,
+        )
+        from torch._inductor.virtualized import V
+        from torch.utils._ordered_set import OrderedSet
+
+        def fn(a, b):
+            x = a + 1
+            y = x * 2
+            mm = b @ b
+            return y, mm
+
+        captured_deps: list[set[str]] = []
+        captured_outputs: list[list[list[str]]] = []
+
+        def add_meta_deps(graph):
+            add_nodes = graph.find_nodes(
+                op="call_function", target=torch.ops.aten.add.Tensor
+            )
+            mm_nodes = graph.find_nodes(
+                op="call_function", target=torch.ops.aten.mm.default
+            )
+            self.assertEqual(len(add_nodes), 1)
+            self.assertEqual(len(mm_nodes), 1)
+
+            deps_map = {mm_nodes[0]: OrderedSet([add_nodes[0]])}
+            preserve_node_ordering_from_config(graph, deps_map)
+            return graph
+
+        def capture_post_fusion(nodes):
+            dep_names: set[str] = set()
+            for deps in V.graph.post_fusion_overlap_deps.values():
+                dep_names.update(deps)
+            captured_deps.append(dep_names)
+            captured_outputs.append(
+                [[out.get_name() for out in node.get_outputs()] for node in nodes]
+            )
+            return nodes
+
+        patches = {
+            "post_grad_custom_post_pass": add_meta_deps,
+            "_post_fusion_custom_pass": capture_post_fusion,
+            "aten_distributed_optimizations.insert_overlap_deps_impl": "meta",
+        }
+        torch._dynamo.reset()
+        with config.patch(patches):
+            a = torch.rand([32, 32], device=GPU_TYPE)
+            b = torch.rand([32, 32], device=GPU_TYPE)
+            result = torch.compile(fn)(a, b)
+
+        expected = fn(a, b)
+        torch.testing.assert_close(result, expected)
+        self.assertTrue(any(captured_deps))
+        all_deps = [dep for deps in captured_deps for dep in deps]
+        self.assertTrue(all(dep.startswith("op") for dep in all_deps))
+        self.assertEqual(sum(len(outputs) for outputs in captured_outputs[-1]), 2)
+
     @config.patch(reorder_for_locality=False)
     @requires_gpu()
     def test_control_deps_prevents_fusion(self):
