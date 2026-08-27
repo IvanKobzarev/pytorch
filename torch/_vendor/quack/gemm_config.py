@@ -1,8 +1,14 @@
 # Copyright (C) 2025, Tri Dao.
 import itertools
+from enum import IntEnum
 from typing import Optional, List
 from functools import partial
 from dataclasses import dataclass
+
+
+class SplitKMode(IntEnum):
+    SERIAL = 0
+    PARALLEL = 1
 
 
 @dataclass(frozen=True)
@@ -17,6 +23,8 @@ class GemmConfig:
     cluster_m: int = 2
     cluster_n: int = 1
     cluster_k: int = 1
+    split_k: int = 1
+    split_k_mode: int = 0
     swap_ab: bool = False
     # raster_order: int = 1
     max_swizzle_size: int = 8

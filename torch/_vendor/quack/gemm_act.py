@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from typing import NamedTuple, Tuple, Optional, Callable, Type
 
+import torch
 from torch import Tensor
 from torch._subclasses.fake_tensor import is_fake_tensor
 
@@ -57,6 +58,7 @@ from . import layout_utils
 from . import copy_utils
 from .layout_utils import permute_gated_Cregs_b16
 from .activation import act_fn_map, gate_fn_map
+from .gemm_config import SplitKMode
 from .rounding import RoundingMode, convert_f32_to_bf16_sr, epilogue_aux_out_sr_seed
 
 
@@ -203,6 +205,8 @@ class GemmActMixin(ComposableEpiMixin):
         ("local_reduce_feeds_main", cutlass.Constexpr, False),
         ("local_reduce_group", cutlass.Constexpr, 0),
         ("local_reduce_axis", cutlass.Constexpr, 1),
+        ("split_k_semaphore", Optional[cute.Tensor], None),
+        ("split_k_workspace", Optional[cute.Tensor], None),
     )
 
     @mlir_namedtuple
@@ -230,6 +234,8 @@ class GemmActMixin(ComposableEpiMixin):
         mLocalReduce: Optional[cute.Tensor] = None
         rounding_mode: cutlass.Constexpr[int] = RoundingMode.RN
         sr_seed: Optional[Int32 | cute.Tensor] = None
+        split_k_semaphore: Optional[cute.Tensor] = None
+        split_k_workspace: Optional[cute.Tensor] = None
 
     # EpilogueParams auto-generated from _epi_ops + _extra_param_fields
 
@@ -263,6 +269,8 @@ class GemmActMixin(ComposableEpiMixin):
         d["local_reduce_feeds_main"] = args.local_reduce_feeds_main
         d["local_reduce_group"] = args.local_reduce_group
         d["local_reduce_axis"] = args.local_reduce_axis
+        d["split_k_semaphore"] = args.split_k_semaphore
+        d["split_k_workspace"] = args.split_k_workspace
         self.local_reduce_feeds_main = args.local_reduce_feeds_main
         self.local_reduce_group = args.local_reduce_group
         self.local_reduce_axis = args.local_reduce_axis
@@ -809,6 +817,8 @@ def _compile_gemm_act(
     rounding_mode=RoundingMode.RN,
     sr_seed_mode=0,
     use_tma_gather=False,
+    split_k=1,
+    split_k_mode=SplitKMode.SERIAL,
 ):
     sm_to_cls = {
         "act": {
@@ -989,6 +999,25 @@ def _compile_gemm_act(
         mLocalReduce=mLocalReduce,
         rounding_mode=rounding_mode,
         sr_seed=fake_scalar(sr_seed_mode),
+        split_k_semaphore=(
+            fake_tensor(
+                Int32,
+                (cute.sym_int(), cute.sym_int(), cute.sym_int()),
+                leading_dim=1,
+            )
+            if split_k > 1
+            else None
+        ),
+        split_k_workspace=(
+            fake_tensor(
+                Float32,
+                (cute.sym_int(), cute.sym_int(), cute.sym_int(), cute.sym_int()),
+                leading_dim=0,
+                divisibility=4,
+            )
+            if split_k > 1
+            else None
+        ),
     )
     scheduler_args = make_fake_scheduler_args(
         (is_dynamic_persistent and device_capacity[0] == 9), False, l
@@ -1015,6 +1044,8 @@ def _compile_gemm_act(
         varlen_args,
         use_tma_gather=use_tma_gather,
         concat_layout=concat_layout or None,
+        split_k=split_k,
+        split_k_mode=split_k_mode,
     )
 
 
@@ -1063,6 +1094,8 @@ def gemm_act(
     alpha: float | Tensor = 1.0,
     beta: float | Tensor = 1.0,
     device_capacity_override: tuple[int, int] | None = None,
+    split_k: int = 1,
+    split_k_mode: int = SplitKMode.SERIAL,
 ) -> None:
     """Run GEMM with an optional generated tensor epilogue and local reduction.
 
@@ -1097,6 +1130,12 @@ def gemm_act(
     before conversion and storage. Both keys are required whenever the grouped
     reduction needs physical lane, warp, or fragment combining; they may be
     omitted when the tensor epilogue returns an already-complete TensorSSA group.
+
+    ``split_k`` partitions dense SM100/SM110 GEMMs along K. Non-finalizing splits
+    commit raw FP32 accumulators to a temporary workspace; the final split combines
+    them in split order and applies the complete epilogue exactly once.
+    ``split_k_mode=0`` orders those commits deterministically; mode 1 uses
+    arrival-order atomics for lower synchronization overhead.
 
     Returns:
         None. Results are written to the supplied output tensors.
@@ -1158,6 +1197,36 @@ def gemm_act(
                 )
     varlen_m = cu_seqlens_m is not None
     gather_A = A_idx is not None
+    if split_k < 1:
+        raise ValueError("split_k must be >= 1")
+    if split_k_mode not in tuple(SplitKMode):
+        raise ValueError(f"invalid split_k_mode: {split_k_mode}")
+    if split_k > 1:
+        if varlen_m or gather_A:
+            raise NotImplementedError("FlexGEMM split-K requires a dense GEMM")
+        if gemm_cls_name == "gated":
+            raise NotImplementedError(
+                "FlexGEMM split-K does not support gated activations"
+            )
+        if rounding_mode != RoundingMode.RN:
+            raise NotImplementedError("FlexGEMM split-K does not support stochastic rounding")
+        if main_output_transform_group is not None:
+            raise NotImplementedError(
+                "FlexGEMM split-K does not support output contractions"
+            )
+        if (not persistent or is_dynamic_persistent) and not is_fake_tensor(A):
+            num_batches = A.shape[0] if A.ndim == 3 else 1
+            if num_batches * split_k > 65535:
+                raise ValueError(
+                    "FlexGEMM split-K batch times split_k must not exceed 65535"
+                )
+        if not is_fake_tensor(A):
+            cta_tile_k = tile_K or 1024 // (A.element_size() * 8)
+            k_tiles = (A.shape[-1] + cta_tile_k - 1) // cta_tile_k
+            if split_k > k_tiles:
+                raise ValueError(
+                    "FlexGEMM split_k must not exceed the number of K tiles"
+                )
     if varlen_m:
         assert persistent, "varlen_m requires persistent=True"
         assert A.stride(-1) == 1, "varlen_m requires A to be k-major"
@@ -1233,6 +1302,8 @@ def gemm_act(
     assert device_capacity[0] in [8, 9, 10, 11, 12], (
         "Only SM8x, SM90, SM100, SM110, and SM120 are supported"
     )
+    if split_k > 1 and device_capacity[0] not in (10, 11):
+        raise NotImplementedError("FlexGEMM split-K currently requires SM100 or SM110")
     validate_grouped_n_contract_device(main_output_transform_group, device_capacity)
     if rounding_mode == RoundingMode.RS:
         assert device_capacity[0] == 10, "Stochastic rounding (RoundingMode.RS) requires SM100"
@@ -1378,12 +1449,37 @@ def gemm_act(
         rounding_mode=rounding_mode,
         sr_seed_mode=sr_seed_mode,
         use_tma_gather=use_tma_gather,
+        split_k=split_k,
+        split_k_mode=split_k_mode,
     )
 
     from .cache import is_compile_only
 
     if is_compile_only():
         return
+
+    split_k_semaphore = None
+    split_k_workspace = None
+    if split_k > 1:
+        output_tensor = D if D is not None else postact_tensors[0]
+        num_l, len_m, len_n = output_tensor.shape
+        use_2cta = cluster_M % 2 == 0 and tile_M in (128, 256)
+        cta_tile_m = tile_M // 2 if use_2cta else tile_M
+        ntile_m = (len_m + cta_tile_m - 1) // cta_tile_m
+        ntile_n = (len_n + tile_N - 1) // tile_N
+        ntile_m = (ntile_m + cluster_M - 1) // cluster_M * cluster_M
+        ntile_n = (ntile_n + cluster_N - 1) // cluster_N * cluster_N
+        split_k_semaphore = torch.zeros(
+            (num_l, ntile_m, ntile_n), dtype=torch.int32, device=output_tensor.device
+        )
+        workspace_factory = (
+            torch.zeros if split_k_mode == SplitKMode.PARALLEL else torch.empty
+        )
+        split_k_workspace = workspace_factory(
+            (num_l, ntile_m, ntile_n, cta_tile_m * tile_N),
+            dtype=torch.float32,
+            device=output_tensor.device,
+        )
 
     max_active_clusters = get_max_active_clusters(cluster_M * cluster_N) if persistent else 0
 
@@ -1419,6 +1515,16 @@ def gemm_act(
         mLocalReduce=local_reduce_out,
         rounding_mode=None,  # Constexpr, pass None at call time
         sr_seed=scalar_arg(sr_seed, sr_seed_mode),
+        split_k_semaphore=(
+            split_k_semaphore.permute(1, 2, 0)
+            if split_k_semaphore is not None
+            else None
+        ),
+        split_k_workspace=(
+            split_k_workspace.permute(3, 1, 2, 0)
+            if split_k_workspace is not None
+            else None
+        ),
     )
     scheduler_args = make_scheduler_args(
         max_active_clusters,

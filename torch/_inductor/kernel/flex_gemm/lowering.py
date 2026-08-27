@@ -289,6 +289,9 @@ def flex_gemm_config_keys(
     local_reduce_output_layout: FlexGemmOutputStorageLayout | None = None,
     local_reduce_output_geometry: Any | None = None,
     local_reduce_feeds_main: bool = False,
+    k: int | None = None,
+    batch_size: int = 1,
+    tune_split_k: bool = False,
 ) -> tuple[tuple[Any, ...], ...]:
     """Select QuACK config keys after applying grouped-layout config constraints.
 
@@ -312,6 +315,7 @@ def flex_gemm_config_keys(
         candidate_gemm_configs_for_device,
         default_gemm_config_key,
         explicit_gemm_configs_for_device,
+        expand_split_k_configs_for_problem,
         gemm_config_from_key,
         gemm_config_key,
     )
@@ -337,11 +341,13 @@ def flex_gemm_config_keys(
         )
     if output_contraction is not None:
         candidate_configs = tuple(
-            config for config in candidate_configs if not config.swap_ab
+            config
+            for config in candidate_configs
+            if not config.swap_ab and config.split_k == 1
         )
         if not candidate_configs:
             raise NotImplementedError(
-                "FlexGEMM output contractions do not support swap_ab configs"
+                "FlexGEMM output contractions do not support swap_ab or split-K configs"
             )
     candidate_configs = tuple(
         config
@@ -413,6 +419,17 @@ def flex_gemm_config_keys(
                 geometry.axis,
             ),
         )
+    if (
+        tune_split_k
+        and tuned
+        and explicit_config is None
+        and k is not None
+        and not local_reduce_geometries
+        and output_contraction is None
+    ):
+        configs = expand_split_k_configs_for_problem(
+            configs, device, m, n, k, batch_size
+        )
     if tuned:
         return tuple(gemm_config_key(config) for config in configs)
     return (gemm_config_key(configs[0]),)
@@ -453,10 +470,11 @@ def lower_quack_flex_gemm(gemm_op, subgraph, args, gemm_kwargs, kernel_options):
             f"FlexGEMM QUACK backend currently supports only aten.{_SUPPORTED_FLEX_GEMM_OP_NAMES}"
         )
     tuned = kernel_options.get("tuned", False)
+    tune_split_k = kernel_options.get("tune_split_k", False)
     fast_math = kernel_options.get("fast_math", False)
     explicit_config = kernel_options.get("config")
     unsupported_options = OrderedSet(kernel_options) - OrderedSet(
-        ["backend", "tuned", "fast_math", "config"]
+        ["backend", "tuned", "tune_split_k", "fast_math", "config"]
     )
     if unsupported_options:
         raise NotImplementedError(
@@ -464,6 +482,8 @@ def lower_quack_flex_gemm(gemm_op, subgraph, args, gemm_kwargs, kernel_options):
         )
     if not isinstance(fast_math, bool):
         raise NotImplementedError("FlexGEMM fast_math kernel option must be bool")
+    if not isinstance(tune_split_k, bool):
+        raise NotImplementedError("FlexGEMM tune_split_k kernel option must be bool")
     if "config" in kernel_options and not isinstance(explicit_config, dict):
         raise NotImplementedError("FlexGEMM config kernel option must be a dict")
 
@@ -696,9 +716,10 @@ def lower_quack_flex_gemm(gemm_op, subgraph, args, gemm_kwargs, kernel_options):
         lowering_name=subgraph.name,
         verbose=True,
     )
+    mat1_size = gemm_args[mat1_index].get_size()
     quack_config_keys = flex_gemm_config_keys(
         layout.device,
-        gemm_args[mat1_index].get_size()[-2],
+        mat1_size[-2],
         gemm_args[mat2_index].get_size()[-1],
         epilogue_analysis.required_geometries,
         tuned,
@@ -714,6 +735,9 @@ def lower_quack_flex_gemm(gemm_op, subgraph, args, gemm_kwargs, kernel_options):
         local_reduce_feeds_main=(
             outputs.local_reduce is not None and outputs.local_reduce.feeds_main
         ),
+        k=mat1_size[-1],
+        batch_size=mat1_size[-3] if len(mat1_size) == 3 else 1,
+        tune_split_k=tune_split_k,
     )
     log_flex_gemm_artifact(
         "config_candidates",

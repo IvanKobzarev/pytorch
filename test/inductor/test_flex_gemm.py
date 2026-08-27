@@ -995,6 +995,15 @@ class TestFlexGemmRuntimeHelpers(TestCase):
                 (supported, alternative),
             )
             self.assertEqual(
+                flex_gemm_heuristics.explicit_gemm_configs_for_device(
+                    {"tile_m": 128, "split_k": 4}, device
+                ),
+                (
+                    dataclasses.replace(supported, split_k=4),
+                    dataclasses.replace(alternative, split_k=4),
+                ),
+            )
+            self.assertEqual(
                 flex_gemm_config_keys(
                     device,
                     128,
@@ -1026,6 +1035,14 @@ class TestFlexGemmRuntimeHelpers(TestCase):
             with self.assertRaisesRegex(NotImplementedError, "not supported"):
                 flex_gemm_heuristics.explicit_gemm_configs_for_device(
                     {"cluster_m": True}, device
+                )
+            with self.assertRaisesRegex(NotImplementedError, "positive int"):
+                flex_gemm_heuristics.explicit_gemm_configs_for_device(
+                    {"split_k": 0}, device
+                )
+            with self.assertRaisesRegex(NotImplementedError, "split_k_mode is invalid"):
+                flex_gemm_heuristics.explicit_gemm_configs_for_device(
+                    {"split_k": 2, "split_k_mode": 2}, device
                 )
             with self.assertRaisesRegex(NotImplementedError, "not supported"):
                 flex_gemm_heuristics.explicit_gemm_configs_for_device(
@@ -1091,6 +1108,50 @@ class TestFlexGemmRuntimeHelpers(TestCase):
                     explicit_config=swap_config,
                     local_reduce_feeds_main=True,
                 )
+
+    def test_tuned_dense_config_adds_split_k_for_starved_problem(self):
+        from torch._inductor.heuristics.template.flex_gemm import (
+            expand_split_k_configs_for_problem,
+        )
+        from torch._vendor.quack.gemm_config import GemmConfig
+
+        device = torch.device("cuda")
+        starved = GemmConfig(
+            tile_m=256,
+            tile_n=256,
+            pingpong=False,
+            is_dynamic_persistent=False,
+            cluster_m=2,
+            device_capacity=10,
+        )
+        populated = dataclasses.replace(starved, tile_n=64)
+        with (
+            mock.patch("torch.cuda.get_device_capability", return_value=(10, 0)),
+            mock.patch(
+                "torch.cuda.get_device_properties",
+                return_value=SimpleNamespace(multi_processor_count=152),
+            ),
+        ):
+            configs = expand_split_k_configs_for_problem(
+                (starved, populated), device, 2816, 2048, 65536
+            )
+
+        self.assertEqual(
+            {config.split_k for config in configs if config.tile_n == 256},
+            {1, 2, 4},
+        )
+        self.assertEqual(
+            {
+                config.split_k_mode
+                for config in configs
+                if config.tile_n == 256 and config.split_k > 1
+            },
+            {1},
+        )
+        self.assertEqual(
+            {config.split_k for config in configs if config.tile_n == 64},
+            {1},
+        )
 
     def test_swap_ab_alignment_filters_tuned_and_explicit_configs(self):
         from torch._inductor.heuristics.template.flex_gemm import gemm_config_key
@@ -2103,6 +2164,70 @@ class TestFlexGemmRuntime(FlexGemmTestCase):
                 local_reduce_axis=0,
                 local_reduce_combine_key="combine",
                 local_reduce_finalize_key="finalize",
+                device_capacity_override=(10, 0),
+            )
+
+    @skipIfNoCuteDSL
+    def test_quack_split_k_rejects_gated_activations(self):
+        from torch._vendor.quack.gemm_act import gemm_act
+
+        with self.assertRaisesRegex(NotImplementedError, "gated activations"):
+            gemm_act(
+                torch.empty(1, 4, 8, dtype=torch.bfloat16),
+                torch.empty(1, 8, 8, dtype=torch.bfloat16),
+                None,
+                None,
+                torch.empty(1, 4, 4, dtype=torch.bfloat16),
+                None,
+                "swiglu",
+                128,
+                128,
+                1,
+                1,
+                split_k=2,
+                device_capacity_override=(10, 0),
+            )
+
+    @skipIfNoCuteDSL
+    def test_quack_split_k_rejects_oversized_grid_z(self):
+        from torch._vendor.quack.gemm_act import gemm_act
+
+        with self.assertRaisesRegex(ValueError, "must not exceed 65535"):
+            gemm_act(
+                torch.empty(2, 4, 8, dtype=torch.bfloat16),
+                torch.empty(2, 8, 8, dtype=torch.bfloat16),
+                None,
+                None,
+                torch.empty(2, 4, 8, dtype=torch.bfloat16),
+                None,
+                None,
+                128,
+                128,
+                1,
+                1,
+                is_dynamic_persistent=True,
+                split_k=32768,
+                device_capacity_override=(10, 0),
+            )
+
+    @skipIfNoCuteDSL
+    def test_quack_split_k_rejects_empty_splits(self):
+        from torch._vendor.quack.gemm_act import gemm_act
+
+        with self.assertRaisesRegex(ValueError, "number of K tiles"):
+            gemm_act(
+                torch.empty(1, 4, 64, dtype=torch.bfloat16),
+                torch.empty(1, 8, 64, dtype=torch.bfloat16),
+                None,
+                None,
+                torch.empty(1, 4, 8, dtype=torch.bfloat16),
+                None,
+                None,
+                128,
+                128,
+                1,
+                1,
+                split_k=2,
                 device_capacity_override=(10, 0),
             )
 
@@ -4943,6 +5068,28 @@ class TestFlexGemmEpilogueHOP(FlexGemmTestCase):
                 tuned=True,
                 output_contraction=contraction,
                 explicit_config=dict(gemm_config_key(swap)),
+            )
+        with self.assertRaisesRegex(NotImplementedError, "do not support.*split-K"):
+            flex_gemm_config_keys(
+                device,
+                64,
+                128,
+                (),
+                tuned=True,
+                output_contraction=contraction,
+                explicit_config=dict(
+                    gemm_config_key(
+                        dataclasses.replace(
+                            next(
+                                config
+                                for config in candidates
+                                if not config.swap_ab
+                                and output_contraction_config_supported(config, 128)
+                            ),
+                            split_k=2,
+                        )
+                    )
+                ),
             )
 
     @skipIfNoCuteDSL
@@ -9546,6 +9693,115 @@ class TestFlexGemmExplicitConfigDevice(FlexGemmTestCase):
         )
         self.assertFlexGemmGeneratedCode(code)
         self.assertIn(f"config_key={config_key!r}", code)
+
+    @unittest.skipIf(SM120OrLater, "SM100 config required")
+    @parametrize("is_dynamic_persistent", (False, True))
+    @parametrize("split_k_mode", (0, 1))
+    def test_mm_explicit_split_k_matches_reference(
+        self, device, is_dynamic_persistent, split_k_mode
+    ):
+        from torch._inductor.heuristics.template.flex_gemm import (
+            candidate_gemm_configs_for_device,
+        )
+
+        def epilogue_fn(acc):
+            return acc.bfloat16().float()
+
+        config = next(
+            config
+            for config in candidate_gemm_configs_for_device(device)
+            if config.tile_n == 64
+            and config.cluster_m == 2
+            and config.cluster_n == 1
+            and config.swap_ab
+            and config.is_dynamic_persistent == is_dynamic_persistent
+            and not config.use_tma_gather
+        )
+        pinned = dataclasses.asdict(config)
+        pinned["split_k"] = 4
+        pinned["split_k_mode"] = split_k_mode
+
+        def fn(a, b):
+            return flex_gemm(
+                torch.mm,
+                (a, b),
+                epilogue_fn,
+                kernel_options={"backend": "QUACK", "config": pinned},
+            )
+
+        m, n, k = 192, 256, 4176
+        a = torch.randn(k, m, device=device, dtype=torch.bfloat16).mT
+        b = torch.randn(k, n, device=device, dtype=torch.bfloat16)
+        compiled = torch.compile(
+            fn, backend="inductor", fullgraph=True, mode="reduce-overhead"
+        )
+        cudagraph_skips = torch._dynamo.utils.counters["inductor"][
+            "cudagraph_skips"
+        ]
+        actual, (code,) = run_and_get_code(compiled, a, b)
+        self.assertEqual(actual, epilogue_fn(a @ b), atol=0.1, rtol=0.01)
+        previous = actual.clone()
+        for _ in range(2):
+            a.copy_(torch.randn_like(a))
+            torch.compiler.cudagraph_mark_step_begin()
+            replay = compiled(a, b).clone()
+            self.assertEqual(replay, epilogue_fn(a @ b), atol=0.1, rtol=0.01)
+            self.assertFalse(torch.equal(replay, previous))
+            previous = replay
+        self.assertEqual(
+            torch._dynamo.utils.counters["inductor"]["cudagraph_skips"],
+            cudagraph_skips,
+        )
+        self.assertFlexGemmGeneratedCode(code)
+        self.assertIn("('split_k', 4)", code)
+        self.assertIn(f"('split_k_mode', {split_k_mode})", code)
+
+    @unittest.skipIf(SM120OrLater, "SM100 config required")
+    def test_addmm_explicit_split_k_matches_reference(self, device):
+        from torch._inductor.heuristics.template.flex_gemm import (
+            candidate_gemm_configs_for_device,
+        )
+
+        def epilogue_fn(acc):
+            return acc.relu()
+
+        config = next(
+            config
+            for config in candidate_gemm_configs_for_device(device)
+            if config.tile_n == 64
+            and config.cluster_m == 2
+            and config.cluster_n == 1
+            and config.swap_ab
+            and not config.is_dynamic_persistent
+            and not config.use_tma_gather
+        )
+        pinned = dataclasses.asdict(config)
+        pinned["split_k"] = 4
+        pinned["split_k_mode"] = 1
+
+        def fn(bias, a, b):
+            return flex_gemm(
+                torch.addmm,
+                (bias, a, b),
+                epilogue_fn,
+                gemm_kwargs={"beta": 0.5, "alpha": 1.5},
+                kernel_options={"backend": "QUACK", "config": pinned},
+            )
+
+        m, n, k = 192, 256, 4176
+        bias = torch.randn(m, n, device=device, dtype=torch.bfloat16)
+        a = torch.randn(k, m, device=device, dtype=torch.bfloat16).mT
+        b = torch.randn(k, n, device=device, dtype=torch.bfloat16)
+        actual, (code,) = run_and_get_code(
+            torch.compile(fn, backend="inductor", fullgraph=True), bias, a, b
+        )
+        expected = epilogue_fn(torch.addmm(bias, a, b, beta=0.5, alpha=1.5))
+        reference = epilogue_fn(
+            torch.addmm(bias.double(), a.double(), b.double(), beta=0.5, alpha=1.5)
+        )
+        self.assertMatchesLowPrecisionEager(actual, expected, reference, k)
+        self.assertFlexGemmGeneratedCode(code, "C=")
+        self.assertIn("('split_k', 4)", code)
 
     @parametrize("tuned", (False, True))
     def test_mm_partial_config_matches_reference(self, device, tuned):

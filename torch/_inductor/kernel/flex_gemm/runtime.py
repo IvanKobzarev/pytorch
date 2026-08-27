@@ -609,6 +609,8 @@ def dispatch_gemm_act(
         beta=beta,
         use_tma_gather=config.use_tma_gather,
         device_capacity_override=device_capacity_override,
+        split_k=config.split_k,
+        split_k_mode=config.split_k_mode,
     )
 
 

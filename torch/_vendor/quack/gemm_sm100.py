@@ -142,6 +142,8 @@ class GemmSm100(GemmTmaBase):
         use_clc_persistence: bool = True,
         concat_layout: tuple | None = None,
         use_pdl: bool = True,
+        split_k: int = 1,
+        split_k_mode: int = 0,
     ):
         """Initializes the configuration for a Blackwell dense GEMM kernel.
 
@@ -189,6 +191,7 @@ class GemmSm100(GemmTmaBase):
             assert cluster_shape_mnk[1] == 1, "Cluster shape N must be 1 for gather A "
         if use_tma_gather:
             assert gather_A, "TMA gather requires gather_A=True"
+        self._init_split_k(split_k, split_k_mode)
 
         self.cta_group = tcgen05.CtaGroup.TWO if self.use_2cta_instrs else tcgen05.CtaGroup.ONE
 
@@ -716,9 +719,12 @@ class GemmSm100(GemmTmaBase):
         self.num_tma_load_bytes *= atom_thr_size
 
         # Setup TMA store for D and TMA load for C.
-        tma_atom_d, tma_tensor_d, tma_atom_c, tma_tensor_c = (
-            self.make_tma_epilogue_atoms_and_tensors(mD, mC, epilogue_args, varlen_m)
-        )
+        (
+            tma_atom_d,
+            tma_tensor_d,
+            tma_atom_c,
+            tma_tensor_c,
+        ) = self.make_tma_epilogue_atoms_and_tensors(mD, mC, epilogue_args, varlen_m)
 
         epilogue_params = self.epi_to_underlying_arguments(epilogue_args)
         varlen_params = VarlenManager.to_underlying_arguments(varlen_args)
@@ -1089,7 +1095,7 @@ class GemmSm100(GemmTmaBase):
             do_epi_load_barrier_arrive = Boolean(True)
             while work_tile.is_valid_tile:
                 tile_coord_mnkl = work_tile.tile_idx
-                batch_idx = tile_coord_mnkl[3]
+                batch_idx, split_idx = tile_coord_mnkl[3], tile_coord_mnkl[2]
                 # Local_tile partition global tensors
                 mma_tile_coord_mnl = (
                     tile_coord_mnkl[0] // cute.size(tiled_mma.thr_id.shape),
@@ -1222,7 +1228,10 @@ class GemmSm100(GemmTmaBase):
                         filter_zeros=True,
                         mcast_mask=sfb_mcast_mask,
                     )
-                k_tile_cnt = cute.ceil_div(len_k, self.cta_tile_shape_mnk[2])
+                k_tile_total = cute.ceil_div(len_k, self.cta_tile_shape_mnk[2])
+                k_tile_start, k_tile_cnt = tile_scheduler.get_split_k_tile_range(
+                    k_tile_total, split_idx
+                )
                 tctx.b("tma_load")
                 if const_expr(not self.gather_A):
                     ab_producer_state = self.load_tma(
@@ -1230,6 +1239,7 @@ class GemmSm100(GemmTmaBase):
                         ab_producer_state,
                         [copy_A, copy_B, copy_SFA, copy_SFB],
                         k_tile_cnt,
+                        k_tile_start=k_tile_start,
                     )
                 elif const_expr(self.use_tma_gather):
                     ab_producer_state, a_prefetch_consumer_state = self.load_AB_tma_gather(
@@ -1379,8 +1389,9 @@ class GemmSm100(GemmTmaBase):
                 work_tile = tile_scheduler.initial_work_tile_info()
                 while work_tile.is_valid_tile:
                     # Get tile coord from tile scheduler
+                    # (pid_m, pid_n, split_idx | None, batch_idx), decoded by the scheduler
                     tile_coord_mnkl = work_tile.tile_idx
-                    batch_idx = tile_coord_mnkl[3]
+                    batch_idx, split_idx = tile_coord_mnkl[3], tile_coord_mnkl[2]
                     copy_C = None
                     if const_expr(has_C):
                         copy_C_fn, _, _ = self.epilog_gmem_copy_and_partition(
@@ -1413,12 +1424,26 @@ class GemmSm100(GemmTmaBase):
                             mode=[1],
                         )
                     )
-                    for epi_idx in cutlass.range(epi_tile_num, unroll=1):
-                        epi_pipeline.producer_acquire(epi_producer_state)
-                        copy_epi_load(src_idx=epi_idx, producer_state=epi_producer_state)
-                        # Epi pipeline's producer commit is a NOP
-                        epi_pipeline.producer_commit(epi_producer_state)
-                        epi_producer_state.advance()
+                    # Split-K (serial/parallel): only the finalizing split runs the
+                    # epilogue, so only its tiles consume C; skip the loads (and the
+                    # pipeline slots) for non-finalizing splits, symmetric with the
+                    # epilogue warps' skip in epilogue_split_k. The outer branch is
+                    # constexpr so split_k == 1 codegen is untouched.
+                    if const_expr(self.split_k > 1):
+                        if split_idx == self.split_k - 1:
+                            for epi_idx in cutlass.range(epi_tile_num, unroll=1):
+                                epi_pipeline.producer_acquire(epi_producer_state)
+                                copy_epi_load(src_idx=epi_idx, producer_state=epi_producer_state)
+                                # Epi pipeline's producer commit is a NOP
+                                epi_pipeline.producer_commit(epi_producer_state)
+                                epi_producer_state.advance()
+                    else:
+                        for epi_idx in cutlass.range(epi_tile_num, unroll=1):
+                            epi_pipeline.producer_acquire(epi_producer_state)
+                            copy_epi_load(src_idx=epi_idx, producer_state=epi_producer_state)
+                            # Epi pipeline's producer commit is a NOP
+                            epi_pipeline.producer_commit(epi_producer_state)
+                            epi_producer_state.advance()
                     # Advance to next tile
                     tile_scheduler.advance_to_next_work()
                     work_tile = tile_scheduler.get_current_work()
@@ -1487,10 +1512,12 @@ class GemmSm100(GemmTmaBase):
             )
             while work_tile.is_valid_tile:
                 # Get tile coord from tile scheduler
+                # (pid_m, pid_n, split_idx | None, batch_idx), decoded by the scheduler
                 tile_coord_mnkl = work_tile.tile_idx
-                batch_idx = tile_coord_mnkl[3]
+                batch_idx, split_idx = tile_coord_mnkl[3], tile_coord_mnkl[2]
                 k_len = varlen_manager.len_k(batch_idx)
-                k_tile_cnt = cute.ceil_div(k_len, self.mma_tiler[2])
+                k_tile_total = cute.ceil_div(k_len, self.mma_tiler[2])
+                _, k_tile_cnt = tile_scheduler.get_split_k_tile_range(k_tile_total, split_idx)
                 # Set tensor memory buffer for current tile
                 # (MMA, MMA_M, MMA_N)
                 acc_stage_idx = (
@@ -1607,8 +1634,9 @@ class GemmSm100(GemmTmaBase):
             )
             while work_tile.is_valid_tile:
                 # Get tile coord from tile scheduler
+                # (pid_m, pid_n, split_idx | None, batch_idx), decoded by the scheduler
                 tile_coord_mnkl = work_tile.tile_idx
-                batch_idx = tile_coord_mnkl[3]
+                batch_idx, split_idx = tile_coord_mnkl[3], tile_coord_mnkl[2]
                 # Set tensor memory buffer for current tile
                 # (T2R, T2R_M, T2R_N, EPI_M, EPI_M)
                 epi_acc_stage = (
@@ -1630,6 +1658,7 @@ class GemmSm100(GemmTmaBase):
                         sD,
                         tile_coord_mnkl,
                     )
+
                 copy_C = None  # We're using a separate warp to load C
 
                 tTR_tAcc = cute.group_modes(tTR_tAcc, 3, cute.rank(tTR_tAcc))
@@ -1638,6 +1667,15 @@ class GemmSm100(GemmTmaBase):
                     cute.zipped_divide(cute.make_layout(self.cta_tile_shape_mnk[:2]), epi_tile),
                     mode=[1],
                 )
+                clear_acc = varlen_k and k_len == 0
+                if const_expr(self.split_k > 1):
+                    # An empty split (split_k > total k-tiles) still runs the epilogue with a
+                    # zero contribution so the serial-semaphore turnstile advances.
+                    k_tile_total = cute.ceil_div(k_len, self.cta_tile_shape_mnk[2])
+                    _, k_tile_cnt_split = tile_scheduler.get_split_k_tile_range(
+                        k_tile_total, split_idx
+                    )
+                    clear_acc = k_tile_cnt_split == 0
                 load_acc_subtile = partial(
                     self.epi_load_acc_subtile,
                     tiled_copy_t2r,
@@ -1649,11 +1687,11 @@ class GemmSm100(GemmTmaBase):
                     acc_release_idx=self.iter_acc_early_release
                     if const_expr(self.overlap_accum_sf)
                     else epi_tile_num - 1,
-                    clear_acc=(varlen_k and k_len == 0),
+                    clear_acc=clear_acc,
                 )
 
                 tctx.b("epilogue")
-                epi_read_state, _ = self.epilogue(
+                epi_read_state, _ = self.epilogue_split_k(
                     epilogue_params,
                     epi_smem_tensors,
                     epi_pipeline,

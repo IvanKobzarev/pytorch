@@ -13,8 +13,10 @@ from cutlass.cute.nvgpu import cpasync
 from cutlass.utils import LayoutEnum
 
 from . import copy_utils
+from . import utils
 from .cute_dsl_utils import ParamsBase
 from .epi_ops import EpiSmemBytes
+from .gemm_config import SplitKMode
 from .pipeline import PipelineTmaCpAsync
 from .rounding import RoundingMode, epilogue_sr_seed
 from .tile_scheduler import (
@@ -43,6 +45,16 @@ class GemmBase:
     """Common non-mainloop pieces shared by GEMM architectures."""
 
     arch = 0
+    # Split-K along the contraction dim. Constexpr (lives on self): split_k == 1 compiles to
+    # exactly the non-split kernel. The epilogue (the full epi mixin: alpha, beta*C, bias,
+    # activations, aux outputs) runs exactly ONCE per output tile, on the entity that owns
+    # the completed f32 sum, following CUTLASS-3.x stream-K fixup semantics. Non-finalizing splits
+    # run no epilogue at all: they dump raw f32 accumulator fragments into a per-tile
+    # workspace region (split_k_partial_commit) and bump the tile's completion flag.
+    # SERIAL commits are turnstile-ordered by split index and deterministic. PARALLEL
+    # commits in arrival order without waiting and is faster but not deterministic.
+    split_k = 1
+    split_k_mode = SplitKMode.SERIAL
 
     @dataclass
     class EpilogueArguments:
@@ -52,6 +64,18 @@ class GemmBase:
 
     def epi_smem_warp_shape_mnk(self):
         return (self.num_epi_warps, 1, 1)
+
+    def _init_split_k(self, split_k: int, split_k_mode: int):
+        """Validate and store split-K configuration after setting ``gather_A``."""
+        if split_k < 1:
+            raise ValueError("split_k must be >= 1")
+        if split_k_mode not in tuple(SplitKMode):
+            raise ValueError(f"invalid split_k_mode: {split_k_mode}")
+        self.split_k = split_k
+        self.split_k_mode = SplitKMode(split_k_mode)
+        if split_k > 1:
+            if self.gather_A:
+                raise ValueError("split_k does not support gather_A")
 
     @cute.jit
     def epilogue(
@@ -80,6 +104,7 @@ class GemmBase:
         tile_scheduler,
         tidx: Int32,
         is_tma_warp: cutlass.Boolean,
+        split_k_ws: Optional[cute.Pointer] = None,
     ) -> Tuple[cutlass.pipeline.PipelineState, cutlass.pipeline.PipelineState]:
         has_C = const_expr(tRS_rC is not None)
         has_epi_load = const_expr(self.epi_c_stage > 0)
@@ -145,6 +170,21 @@ class GemmBase:
             epi_coord = epi_tile_layout.get_hier_coord(epi_idx)  # (epi_m, epi_n)
             # Copy from acc to D registers
             load_acc_subtile(tRS_rD, epi_coord)
+            if const_expr(split_k_ws is not None):
+                # Finalizing split: fold the other splits' raw f32 partials into the
+                # accumulator BEFORE any epilogue math. The tile's workspace region is a
+                # flat (epi_subtile, thread, fragment) stripe written by
+                # split_k_partial_commit with this exact partitioning, so a compact
+                # same-shape view lines up element-for-element.
+                tRS_gWs = cute.make_tensor(
+                    split_k_ws
+                    + (epi_idx * self.num_epi_warps * cute.arch.WARP_SIZE + tidx)
+                    * cute.size(tRS_rD),
+                    cute.make_layout(tRS_rD.shape),
+                )
+                tRS_rWs = cute.make_rmem_tensor(tRS_rD.shape, self.acc_dtype)
+                cute.autovec_copy(tRS_gWs, tRS_rWs)
+                tRS_rD.store(tRS_rD.load() + tRS_rWs.load())
             if const_expr(has_epi_load):
                 if const_expr(use_tma_c):
                     epi_pipeline.consumer_wait(epi_read_state)
@@ -269,6 +309,224 @@ class GemmBase:
 
         return epi_read_state, epi_producer_state
 
+    @cute.jit
+    def split_k_partial_commit(
+        self,
+        load_acc_subtile: Callable,
+        tRS_rD: cute.Tensor,
+        epi_tile: cute.Tile,
+        ws_ptr: cute.Pointer,
+        lock_ptr: cute.Pointer,
+        split_idx: Int32,
+        epilogue_barrier: cutlass.pipeline.NamedBarrier,
+        tidx: Int32,
+        is_tma_warp: cutlass.Boolean,
+    ) -> None:
+        """Non-finalizing split: commit the raw f32 accumulator partial, run no epilogue.
+
+        The tile's workspace region is a flat (epi_subtile, thread, fragment) stripe of
+        accumulator fragments: no (m, n) semantics and no predication. The finalizer reads
+        it back with the identical partitioning (see the split_k_ws block in epilogue()).
+        SERIAL uses a turnstile to order the f32 adds by split index. PARALLEL
+        atomically adds into a zeroed workspace in arrival order.
+        """
+        epi_tile_shape = cute.zipped_divide(
+            cute.make_layout(self.cta_tile_shape_mnk[:2]), epi_tile
+        ).shape[1]
+        epi_tile_layout = cute.make_ordered_layout(
+            epi_tile_shape, order=(0, 1) if const_expr(self.epi_m_major) else (1, 0)
+        )
+        num_epi_threads = self.num_epi_warps * cute.arch.WARP_SIZE
+        frag_elems = cute.size(tRS_rD)
+        if const_expr(self.split_k_mode == SplitKMode.SERIAL):
+            if is_tma_warp:
+                utils.semaphore_wait_eq(lock_ptr, split_idx)
+            epilogue_barrier.arrive_and_wait()
+        for epi_idx in cutlass.range_constexpr(cute.size(epi_tile_shape)):
+            epi_coord = epi_tile_layout.get_hier_coord(epi_idx)
+            load_acc_subtile(tRS_rD, epi_coord)
+            frag_base = ws_ptr + (epi_idx * num_epi_threads + tidx) * frag_elems
+            if const_expr(self.split_k_mode == SplitKMode.SERIAL):
+                if split_idx == 0:
+                    tRS_gWs = cute.make_tensor(
+                        frag_base, cute.make_layout(tRS_rD.shape)
+                    )
+                    cute.autovec_copy(tRS_rD, tRS_gWs)
+                else:
+                    self._red_add_frag(frag_base, tRS_rD)
+            else:
+                self._red_add_frag(frag_base, tRS_rD)
+        # The group barrier orders every thread's writes before lane 0's gpu-scope
+        # release of the flag (CTA-scope happens-before chains into the release).
+        epilogue_barrier.arrive_and_wait()
+        if is_tma_warp:
+            if const_expr(self.split_k_mode == SplitKMode.SERIAL):
+                utils.semaphore_release(lock_ptr, split_idx + 1)
+            else:
+                utils.semaphore_arrive_inc(lock_ptr)
+
+    @cute.jit
+    def _red_add_frag(self, frag_base: cute.Pointer, tRS_rD: cute.Tensor) -> None:
+        """red.add the fragment into gmem at frag_base using one-way L2 reductions (no
+        read-back; the turnstile-latency-critical path in serial mode), vectorized
+        v4.f32 when the fragment allows."""
+        frag_elems = cute.size(tRS_rD)
+        if const_expr(frag_elems % 4 == 0 and self.acc_dtype == cutlass.Float32):
+            for v in cutlass.range_constexpr(frag_elems // 4):
+                chunk = cute.make_tensor(tRS_rD.iterator + 4 * v, cute.make_layout(4))
+                cute.arch.atomic_add(frag_base + 4 * v, chunk.load())
+        else:
+            for v in cutlass.range_constexpr(frag_elems):
+                cute.arch.atomic_add(frag_base + v, tRS_rD[v])
+
+    @cute.jit
+    def epilogue_split_k(
+        self,
+        params: EpilogueParams,
+        epi_smem_tensors: Dict[str, cute.Tensor],
+        epi_pipeline: Optional[cutlass.pipeline.PipelineAsync],
+        epi_store_pipeline: Optional[cutlass.pipeline.PipelineAsync],
+        epi_read_state: Optional[cutlass.pipeline.PipelineState],
+        epi_producer_state: Optional[cutlass.pipeline.PipelineState],
+        epi_tile: cute.Tile,
+        load_acc_subtile: Callable,
+        tRS_rD: cute.Tensor,
+        tRS_rC: Optional[cute.Tensor],
+        tiled_copy_t2r: Optional[cute.TiledCopy],
+        tiled_copy_r2s: cute.TiledCopy,
+        tRS_sD: cute.Tensor,
+        tiled_copy_s2r: Optional[cute.ThrCopy],
+        tSR_rC: Optional[cute.Tensor],
+        tSR_sC: Optional[cute.Tensor],
+        copy_D: Optional[Callable],
+        copy_C: Optional[Callable],
+        tile_coord_mnkl: cute.Coord,
+        varlen_manager: VarlenManager,
+        epilogue_barrier: cutlass.pipeline.NamedBarrier,
+        tile_scheduler,
+        tidx: Int32,
+        is_tma_warp: cutlass.Boolean,
+    ) -> Tuple[cutlass.pipeline.PipelineState, cutlass.pipeline.PipelineState]:
+        """self.epilogue wrapped in the split-K finalization protocol.
+
+        split_k == 1 passes straight through. Non-finalizing splits commit raw partials
+        and skip the epilogue entirely, including the C loads, while the
+        last split waits for the tile's completion flag, folds the workspace into its
+        accumulator, and runs the full epi mixin exactly once.
+        """
+        if const_expr(self.split_k == 1):
+            epi_read_state, epi_producer_state = self.epilogue(
+                params,
+                epi_smem_tensors,
+                epi_pipeline,
+                epi_store_pipeline,
+                epi_read_state,
+                epi_producer_state,
+                epi_tile,
+                load_acc_subtile,
+                tRS_rD,
+                tRS_rC,
+                tiled_copy_t2r,
+                tiled_copy_r2s,
+                tRS_sD,
+                tiled_copy_s2r,
+                tSR_rC,
+                tSR_sC,
+                copy_D,
+                copy_C,
+                tile_coord_mnkl,
+                varlen_manager,
+                epilogue_barrier,
+                tile_scheduler,
+                tidx,
+                is_tma_warp,
+            )
+        else:
+            # The flag and workspace are CuTe tensors over the (cluster-rounded) tile
+            # domain; their layouts own the address computation.
+            if const_expr(self.acc_dtype != cutlass.Float32):
+                raise AssertionError("split_k workspace must be f32")
+            batch_idx, split_idx = tile_coord_mnkl[3], tile_coord_mnkl[2]
+            lock_ptr = utils.elem_pointer(
+                params.split_k_semaphore,
+                (tile_coord_mnkl[0], tile_coord_mnkl[1], batch_idx),
+            )
+            ws_ptr = utils.elem_pointer(
+                params.split_k_workspace,
+                (0, tile_coord_mnkl[0], tile_coord_mnkl[1], batch_idx),
+            )
+            # The stripe must tile the host-allocated region exactly.
+            epi_tile_num = cute.size(
+                cute.zipped_divide(cute.make_layout(self.cta_tile_shape_mnk[:2]), epi_tile).shape[1]
+            )
+            if const_expr(
+                cute.size(tRS_rD) * self.num_epi_warps * cute.arch.WARP_SIZE * epi_tile_num
+                != self.cta_tile_shape_mnk[0] * self.cta_tile_shape_mnk[1]
+            ):
+                raise AssertionError(
+                    "split-K workspace stripe does not tile cta_tile_m * cta_tile_n"
+                )
+            if split_idx < self.split_k - 1:
+                self.split_k_partial_commit(
+                    load_acc_subtile,
+                    tRS_rD,
+                    epi_tile,
+                    ws_ptr,
+                    lock_ptr,
+                    split_idx,
+                    epilogue_barrier,
+                    tidx,
+                    is_tma_warp,
+                )
+            else:
+                # Finalizer (fixed: the last split, so e.g. the SM100 epi-load warp can
+                # gate C loads statically). Wait for all S-1 sibling commits; the flag
+                # counts committed splits.
+                if is_tma_warp:
+                    utils.semaphore_wait_eq(lock_ptr, self.split_k - 1)
+                epilogue_barrier.arrive_and_wait()
+                epi_read_state, epi_producer_state = self.epilogue(
+                    params,
+                    epi_smem_tensors,
+                    epi_pipeline,
+                    epi_store_pipeline,
+                    epi_read_state,
+                    epi_producer_state,
+                    epi_tile,
+                    load_acc_subtile,
+                    tRS_rD,
+                    tRS_rC,
+                    tiled_copy_t2r,
+                    tiled_copy_r2s,
+                    tRS_sD,
+                    tiled_copy_s2r,
+                    tSR_rC,
+                    tSR_sC,
+                    copy_D,
+                    copy_C,
+                    tile_coord_mnkl,
+                    varlen_manager,
+                    epilogue_barrier,
+                    tile_scheduler,
+                    tidx,
+                    is_tma_warp,
+                    split_k_ws=ws_ptr,
+                )
+                # Self-clean the flag (fresh-zeros allocation also works, but this keeps
+                # the tensor reusable if the host ever caches it).
+                if is_tma_warp:
+                    utils.semaphore_release(lock_ptr, Int32(0))
+                # Drain this tile's TMA stores. The epi smem buffer rotation is seeded
+                # by num_tiles_executed, which also counts the SKIPPED non-finalizing
+                # tiles, so the next executed epilogue's first buffer index jumps by
+                # (skipped * epi_tile_num) mod epi_stage; producer_acquire's
+                # "<= epi_stage - 1 outstanding groups" guard is only safe for
+                # consecutive (+1) rotation. Draining here makes any start index safe.
+                if const_expr(epi_store_pipeline is not None):
+                    if is_tma_warp:
+                        epi_store_pipeline.producer_tail()
+        return epi_read_state, epi_producer_state
+
     def get_scheduler_class(self, varlen_m: bool = False):
         """Return the scheduler class to use. Override in subclasses for custom schedulers."""
         return TileScheduler if not varlen_m else VarlenMTileScheduler
@@ -318,8 +576,11 @@ class GemmBase:
                 tile_count_semaphore=scheduler_args.tile_count_semaphore,
                 batch_idx_permute=scheduler_args.batch_idx_permute,
                 persistence_mode=persistence_mode,
+                num_split_k=self.split_k,
             )
         else:
+            if self.split_k != 1:
+                raise AssertionError("split_k does not support varlen_m")
             assert (mD is not None) or (epilogue_args.mAuxOut is not None) or (not self.gather_A)
             problem_shape_ntile_mnl = (
                 None,
@@ -496,6 +757,7 @@ class GemmTmaBase(GemmBase):
         producer_state: cutlass.pipeline.PipelineState,
         copy_fns: Sequence[Optional[Callable]],
         k_tile_cnt: Int32,
+        k_tile_start: Int32 | int = 0,
     ) -> cutlass.pipeline.PipelineState:
         # Peek (try_wait) AB buffer empty for k_block = prefetch_k_tile_cnt.
         peek_empty_status = Boolean(True)
@@ -510,7 +772,7 @@ class GemmTmaBase(GemmBase):
             smem_idx = producer_state.index
             for copy_fn in copy_fns:
                 if const_expr(copy_fn is not None):
-                    copy_fn(k_tile, smem_idx, tma_bar_ptr=tma_bar_ptr)
+                    copy_fn(k_tile_start + k_tile, smem_idx, tma_bar_ptr=tma_bar_ptr)
             # Mainloop pipeline's producer commit is a NOP for TMA pipelines.
             pipeline.producer_commit(producer_state)
             producer_state.advance()

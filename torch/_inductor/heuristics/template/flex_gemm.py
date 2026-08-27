@@ -1,7 +1,7 @@
 # mypy: allow-untyped-defs
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, replace
 from functools import cache
 from typing import Any, TYPE_CHECKING, TypeAlias
 
@@ -57,13 +57,36 @@ def explicit_gemm_configs_for_device(
             f"FlexGEMM explicit QUACK config targets SM{requested_device_capacity}0, "
             f"but {device} uses SM{expected_device_capacity}0 configs"
         )
+    split_k = config.get("split_k", 1)
+    if type(split_k) is not int or split_k < 1:
+        raise NotImplementedError(
+            f"FlexGEMM explicit QUACK split_k must be a positive int, got {split_k!r}"
+        )
+    if split_k > 1 and expected_device_capacity != 10:
+        raise NotImplementedError(
+            "FlexGEMM split-K currently requires an SM100 or SM110 config"
+        )
+    split_k_mode = config.get(
+        "split_k_mode", int(quack_gemm_config.SplitKMode.SERIAL)
+    )
+    if type(split_k_mode) is not int or split_k_mode not in tuple(
+        quack_gemm_config.SplitKMode
+    ):
+        raise NotImplementedError(
+            f"FlexGEMM explicit QUACK split_k_mode is invalid: {split_k_mode!r}"
+        )
+    base_config = {
+        name: value
+        for name, value in config.items()
+        if name not in ("split_k", "split_k_mode")
+    }
     matches = tuple(
-        candidate
+        replace(candidate, split_k=split_k, split_k_mode=split_k_mode)
         for candidate in candidates
         if all(
             type(value) is type(getattr(candidate, name))
             and value == getattr(candidate, name)
-            for name, value in config.items()
+            for name, value in base_config.items()
         )
     )
     if matches:
@@ -215,6 +238,66 @@ def candidate_gemm_configs_for_device(
             f"SM{device_capacity}0"
         )
     return configs
+
+
+def expand_split_k_configs_for_problem(
+    configs: Sequence[quack_gemm_config.GemmConfig],
+    device: torch.device,
+    m,
+    n,
+    k,
+    batch_size=1,
+) -> tuple[quack_gemm_config.GemmConfig, ...]:
+    """Add split-K variants for statically known, occupancy-starved SM100 GEMMs."""
+    values = tuple(sympy.sympify(value) for value in (m, n, k, batch_size))
+    if any(value.free_symbols for value in values):
+        return tuple(configs)
+    m, n, k, batch_size = (int(value) for value in values)
+    if torch.cuda.get_device_capability(device)[0] not in (10, 11):
+        return tuple(configs)
+    sm_count = torch.cuda.get_device_properties(device).multi_processor_count
+    expanded = list(configs)
+    for config in configs:
+        # Expanding every base config made graph compilation impractical. Benchmark
+        # split-K only on the static 256x256 seed that won the target workloads.
+        if config.split_k != 1 or (
+            config.tile_m,
+            config.tile_n,
+            config.is_dynamic_persistent,
+            config.cluster_m,
+            config.cluster_n,
+            config.cluster_k,
+            config.swap_ab,
+        ) != (256, 256, False, 2, 1, 1, False):
+            continue
+        cta_tile_m = config.tile_m // config.cluster_m
+        tile_m, tile_n = (
+            (cta_tile_m, config.tile_n)
+            if not config.swap_ab
+            else (config.tile_n, cta_tile_m)
+        )
+        output_tiles = (
+            (m + tile_m - 1) // tile_m
+            * ((n + tile_n - 1) // tile_n)
+            * batch_size
+        )
+        k_tiles = (k + (config.tile_k or 64) - 1) // (config.tile_k or 64)
+        for split_k in (2, 4):
+            fills_device = (
+                output_tiles < 2 * sm_count
+                and output_tiles * split_k <= 8 * sm_count
+            )
+            enough_k_work = 2 * split_k <= k_tiles
+            valid_grid_z = batch_size * split_k <= 65535
+            if fills_device and enough_k_work and valid_grid_z:
+                expanded.append(
+                    replace(
+                        config,
+                        split_k=split_k,
+                        split_k_mode=int(quack_gemm_config.SplitKMode.PARALLEL),
+                    )
+                )
+    return tuple(expanded)
 
 
 def default_gemm_config_key(

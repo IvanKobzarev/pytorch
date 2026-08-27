@@ -189,8 +189,15 @@ def compile_gemm_kernel(
     use_tma_gather=False,
     concat_layout=None,
     num_warps=None,
+    split_k=1,
+    split_k_mode=0,
 ):
     """Build GemmCls instance, apply SM90 partial, and cute.compile with TVM-FFI."""
+    split_k_kwargs = {}
+    if split_k != 1:
+        if device_capacity[0] not in (10, 11):
+            raise NotImplementedError("FlexGEMM split-K currently requires SM100 or SM110")
+        split_k_kwargs = {"split_k": split_k, "split_k_mode": split_k_mode}
     if device_capacity[0] == 8:
         sm8x_kwargs = {"is_persistent": persistent, "num_warps": num_warps}
         sm8x_kwargs["arch"] = device_capacity[0] * 10 + device_capacity[1]
@@ -202,6 +209,7 @@ def compile_gemm_kernel(
             GemmCls,
             use_clc_persistence=is_dynamic_persistent,
             use_tma_gather=use_tma_gather,
+            **split_k_kwargs,
         )
     gemm_obj = GemmCls(
         Float32,

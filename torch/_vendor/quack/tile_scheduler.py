@@ -50,6 +50,42 @@ def get_raster_order_from_option(
     return raster_order
 
 
+class WorkTileInfo:
+    """Drop-in generalization of WorkTileInfo for split-K.
+
+    tile_idx is (pid_m, pid_n, split_idx, batch_idx), with split_idx a dynamic value
+    only when num_split_k > 1 (a static None otherwise, keeping the non-split case
+    identical to the DSL class). The DSL's WorkTileInfo asserts exactly 4 dynamic
+    loop-carried values in __new_from_mlir_values__; this one derives the counts from
+    the template so the decoded split-K coordinate can cross persistent-loop
+    boundaries.
+    """
+
+    def __init__(self, tile_idx: cute.Coord, is_valid_tile: Boolean):
+        self._tile_idx = tile_idx
+        self._is_valid_tile = Boolean(is_valid_tile)
+
+    @property
+    def tile_idx(self) -> cute.Coord:
+        return self._tile_idx
+
+    @property
+    def is_valid_tile(self) -> Boolean:
+        return self._is_valid_tile
+
+    def __extract_mlir_values__(self):
+        values = cutlass.extract_mlir_values(self._tile_idx)
+        values.extend(cutlass.extract_mlir_values(self._is_valid_tile))
+        return values
+
+    def __new_from_mlir_values__(self, values):
+        num_tile_idx_values = len(cutlass.extract_mlir_values(self._tile_idx))
+        return WorkTileInfo(
+            cutlass.new_from_mlir_values(self._tile_idx, values[:num_tile_idx_values]),
+            cutlass.new_from_mlir_values(self._is_valid_tile, values[num_tile_idx_values:]),
+        )
+
+
 # Grouping arguments together that should be passed to __call__
 @mlir_namedtuple
 class TileSchedulerOptions(NamedTuple):
@@ -69,6 +105,9 @@ class TileSchedulerArguments:
     tile_count_semaphore: Optional[cute.Pointer] = None
     batch_idx_permute: Optional[cute.Tensor] = None
     persistence_mode: cutlass.Constexpr[PersistenceMode] = PersistenceMode.NONE
+    # Split-K: the L (z) dimension of the work-id space is multiplied by num_split_k, with the
+    # split index as the fastest-varying component. problem_shape_ntile_mnl[2] stays the true L.
+    num_split_k: cutlass.Constexpr[int] = 1
 
 
 class TileScheduler:
@@ -85,6 +124,7 @@ class TileScheduler:
         batch_idx_permute: Optional[cute.Tensor]
         cluster_shape_mnk: cutlass.Constexpr[cute.Shape]
         persistence_mode: cutlass.Constexpr[PersistenceMode]
+        num_split_k: cutlass.Constexpr[int] = 1
 
         @staticmethod
         @cute.jit
@@ -132,6 +172,7 @@ class TileScheduler:
                 args.batch_idx_permute,
                 args.cluster_shape_mnk,
                 args.persistence_mode,
+                args.num_split_k,
             )
 
     def __init__(
@@ -248,12 +289,16 @@ class TileScheduler:
             return (
                 params.cluster_shape_mnk[0] * cute.size(params.problem_shape_ncluster_mnl[:2]),
                 params.cluster_shape_mnk[1],
-                params.cluster_shape_mnk[2] * params.problem_shape_ncluster_mnl[2],
+                params.cluster_shape_mnk[2]
+                * params.problem_shape_ncluster_mnl[2]
+                * params.num_split_k,
             )
         else:
-            num_ctas_in_problem = cute.size(
-                params.problem_shape_ncluster_mnl, loc=loc, ip=ip
-            ) * cute.size(params.cluster_shape_mnk)
+            num_ctas_in_problem = (
+                cute.size(params.problem_shape_ncluster_mnl, loc=loc, ip=ip)
+                * cute.size(params.cluster_shape_mnk)
+                * params.num_split_k
+            )
             num_ctas_per_cluster = cute.size(params.cluster_shape_mnk, loc=loc, ip=ip)
             # Total ctas that can run in one wave
             num_ctas_per_wave = max_active_clusters * num_ctas_per_cluster
@@ -319,7 +364,7 @@ class TileScheduler:
         block_zero_only: bool = False,
         loc=None,
         ip=None,
-    ) -> cutlass.utils.WorkTileInfo:
+    ) -> WorkTileInfo:
         params = self.params
         if const_expr(is_valid is None):
             if const_expr(params.persistence_mode == PersistenceMode.NONE):
@@ -327,8 +372,11 @@ class TileScheduler:
             elif const_expr(params.persistence_mode == PersistenceMode.CLC):
                 is_valid = work_idx < cute.size(params.problem_shape_ncluster_mnl[:2])
             else:
-                is_valid = work_idx < cute.size(params.problem_shape_ncluster_mnl)
+                is_valid = (
+                    work_idx < cute.size(params.problem_shape_ncluster_mnl) * params.num_split_k
+                )
         pid_m, pid_n, batch_idx = Int32(0), Int32(0), Int32(0)
+        split_idx = Int32(0) if const_expr(params.num_split_k != 1) else None
         if is_valid:
             if const_expr(params.persistence_mode in [PersistenceMode.NONE, PersistenceMode.CLC]):
                 cluster_id_in_problem = work_idx
@@ -338,23 +386,53 @@ class TileScheduler:
                     else cute.arch.cluster_idx()[2]
                 )
             else:
-                bidz_, cluster_id_in_problem = divmod(work_idx, params.num_clusters_per_problem_fdd)
+                if const_expr(params.num_split_k == 1):
+                    bidz_, cluster_id_in_problem = divmod(
+                        work_idx, params.num_clusters_per_problem_fdd
+                    )
+                else:
+                    work_idx_tile = work_idx // params.num_split_k
+                    split_idx = work_idx - work_idx_tile * params.num_split_k
+                    l_idx, cluster_id_in_problem = divmod(
+                        work_idx_tile, params.num_clusters_per_problem_fdd
+                    )
+                    bidz_ = l_idx * params.num_split_k + split_idx
             if const_expr(bidz is not None):
                 bidz_ = bidz
             cid_m, cid_n = self._swizzle_cta(cluster_id_in_problem, loc=loc, ip=ip)
             pid_m, pid_n = self._cluster_id_to_cta_id(
                 cid_m, cid_n, block_zero_only=block_zero_only, loc=loc, ip=ip
             )
-            batch_idx = (
-                bidz_
-                if const_expr(params.batch_idx_permute is None)
-                else params.batch_idx_permute[bidz_]
-            )
-        tile_coord_mnkl = (pid_m, pid_n, None, batch_idx)
-        return cutlass.utils.WorkTileInfo(tile_coord_mnkl, is_valid)
+            if const_expr(params.num_split_k == 1):
+                batch_idx = (
+                    bidz_
+                    if const_expr(params.batch_idx_permute is None)
+                    else params.batch_idx_permute[bidz_]
+                )
+            else:
+                l_idx = bidz_ // params.num_split_k
+                split_idx = bidz_ - l_idx * params.num_split_k
+                if const_expr(params.batch_idx_permute is not None):
+                    l_idx = params.batch_idx_permute[l_idx]
+                batch_idx = l_idx
+        tile_coord_mnkl = (pid_m, pid_n, split_idx, batch_idx)
+        return WorkTileInfo(tile_coord_mnkl, is_valid)
 
     @cute.jit
-    def get_current_work(self, *, loc=None, ip=None) -> cutlass.utils.WorkTileInfo:
+    def get_split_k_tile_range(
+        self, k_tile_total: Int32, split_idx: Optional[Int32], *, loc=None, ip=None
+    ) -> Tuple[Int32, Int32]:
+        num_split_k = self.params.num_split_k
+        if const_expr(num_split_k == 1):
+            return 0, k_tile_total
+        k_tiles_per_split = k_tile_total // num_split_k
+        remainder = k_tile_total - k_tiles_per_split * num_split_k
+        k_tile_start = split_idx * k_tiles_per_split + cutlass.min(split_idx, remainder)
+        k_tile_cnt = k_tiles_per_split + Int32(split_idx < remainder)
+        return k_tile_start, k_tile_cnt
+
+    @cute.jit
+    def get_current_work(self, *, loc=None, ip=None) -> WorkTileInfo:
         params = self.params
         pid_m, pid_n, batch_idx, is_valid = Int32(0), Int32(0), Int32(0), Boolean(False)
         if const_expr(params.persistence_mode == PersistenceMode.NONE):
@@ -375,11 +453,16 @@ class TileScheduler:
                 self._scheduler_pipeline.consumer_release(self._pipeline_state)
             self._pipeline_state.advance()
             is_valid = Boolean(is_valid_i32)
-        tile_coord_mnkl = (pid_m, pid_n, None, batch_idx)
-        return cutlass.utils.WorkTileInfo(tile_coord_mnkl, Boolean(is_valid))
+        split_idx = None
+        if const_expr(params.num_split_k != 1):
+            combined_idx = batch_idx
+            batch_idx = combined_idx // params.num_split_k
+            split_idx = combined_idx - batch_idx * params.num_split_k
+        tile_coord_mnkl = (pid_m, pid_n, split_idx, batch_idx)
+        return WorkTileInfo(tile_coord_mnkl, Boolean(is_valid))
 
     # @cute.jit
-    def initial_work_tile_info(self, *, loc=None, ip=None) -> cutlass.utils.WorkTileInfo:
+    def initial_work_tile_info(self, *, loc=None, ip=None) -> WorkTileInfo:
         return self._delinearize_work_idx(self._current_work_idx, loc=loc, ip=ip)
         # if is_scheduler_warp:
         # work_tile_info = self._delinearize_work_idx(block_zero_only=True, loc=loc, ip=ip)
@@ -412,7 +495,7 @@ class TileScheduler:
                 #                 # cute.printf("before atomicadd, tidx = {}, bidz = {}, idx = {}", cute.arch.thread_idx()[0], cute.arch.block_idx()[2], current_work_idx)
                 if const_expr(params.problem_shape_ncluster_mnl[0] is not None):
                     next_work_linear_idx = num_persistent_clusters + utils.atomic_inc_i32(
-                        cute.size(params.problem_shape_ncluster_mnl) - 1,
+                        cute.size(params.problem_shape_ncluster_mnl) * params.num_split_k - 1,
                         params.tile_count_semaphore,
                     )
                 else:  # varlen_m
@@ -445,9 +528,7 @@ class TileScheduler:
             return Int32(0)
 
     @cute.jit
-    def write_work_tile_to_smem(
-        self, work_tile_info: cutlass.utils.WorkTileInfo, *, loc=None, ip=None
-    ):
+    def write_work_tile_to_smem(self, work_tile_info: WorkTileInfo, *, loc=None, ip=None):
         params = self.params
         if const_expr(self._sched_smem is not None):
             # producer phase is always consumer_phase ^ 1
@@ -458,10 +539,13 @@ class TileScheduler:
                 self._pipeline_state.phase ^ 1,
             )
             self._scheduler_pipeline.producer_acquire(pipeline_state_producer)
+            batch_field = work_tile_info.tile_idx[3]
+            if const_expr(params.num_split_k != 1):
+                batch_field = batch_field * params.num_split_k + work_tile_info.tile_idx[2]
             sched_data = [
                 work_tile_info.tile_idx[0],
                 work_tile_info.tile_idx[1],
-                work_tile_info.tile_idx[3],
+                batch_field,
                 Int32(work_tile_info.is_valid_tile),
             ]
             lane_idx = cute.arch.lane_idx()
@@ -600,6 +684,7 @@ class TriangularTileScheduler(TileScheduler):
         tile_count_semaphore: Optional[cute.Pointer]
         cluster_shape_mnk: cutlass.Constexpr[cute.Shape]
         persistence_mode: cutlass.Constexpr[PersistenceMode]
+        num_split_k: cutlass.Constexpr[int] = 1
 
         @staticmethod
         @cute.jit
@@ -607,6 +692,8 @@ class TriangularTileScheduler(TileScheduler):
             args: TileSchedulerArguments, *, loc=None, ip=None
         ) -> "TriangularTileScheduler.Params":
             assert args.cluster_shape_mnk[2] == 1
+            if const_expr(args.num_split_k != 1):
+                raise AssertionError("split_k is not supported by TriangularTileScheduler")
             problem_shape_ntile_mn = cute.select(args.problem_shape_ntile_mnl, mode=[0, 1])
             problem_shape_ncluster_mn = (
                 cute.ceil_div(problem_shape_ntile_mn[0], args.cluster_shape_mnk[0]),
@@ -765,7 +852,7 @@ class TriangularTileScheduler(TileScheduler):
         block_zero_only: bool = False,
         loc=None,
         ip=None,
-    ) -> cutlass.utils.WorkTileInfo:
+    ) -> WorkTileInfo:
         params = self.params
         if const_expr(is_valid is None):
             if const_expr(params.persistence_mode == PersistenceMode.NONE):
@@ -800,7 +887,7 @@ class TriangularTileScheduler(TileScheduler):
         # if tidx == 0:
         #     cute.printf("bidx = {}, bidy = {}, group_id = {}, id_in_group = {}, group_size_actual = {}, group_col = {}, group_remainder = {}, cid_n_in_group = {}, cid_m_in_group = {}, cid_m = {}, cid_n = {}, is_valid = {}",
         #                 bidx, bidy, group_id, id_in_group, group_size_actual, group_col, group_remainder, cid_n_in_group, cid_m_in_group, cid_m, cid_n, is_valid)
-        return cutlass.utils.WorkTileInfo(tile_coord_mnkl, is_valid)
+        return WorkTileInfo(tile_coord_mnkl, is_valid)
 
 
 @dataclass
@@ -814,6 +901,7 @@ class VarlenMTileSchedulerArguments:
     cluster_shape_mnk: cutlass.Constexpr[cute.Shape]
     tile_count_semaphore: Optional[cute.Pointer] = None
     persistence_mode: cutlass.Constexpr[PersistenceMode] = PersistenceMode.NONE
+    num_split_k: cutlass.Constexpr[int] = 1
 
 
 class VarlenMTileScheduler(TileScheduler):
@@ -831,12 +919,15 @@ class VarlenMTileScheduler(TileScheduler):
         tile_count_semaphore: Optional[cute.Pointer]
         cluster_shape_mnk: cutlass.Constexpr[cute.Shape]
         persistence_mode: cutlass.Constexpr[PersistenceMode]
+        num_split_k: cutlass.Constexpr[int] = 1
 
         @staticmethod
         @cute.jit
         def create(
             args: TileSchedulerArguments, *, loc=None, ip=None
         ) -> "VarlenMTileScheduler.Params":
+            if const_expr(args.num_split_k != 1):
+                raise AssertionError("split_k is not supported by VarlenMTileScheduler")
             # problem_shape_ntile_mnl[0] will be None for VarlenM
             problem_shape_ntile_mn = cute.select(args.problem_shape_ntile_mnl, mode=[0, 1])
             problem_shape_ncluster_mn = (
@@ -1071,7 +1162,7 @@ class VarlenMTileScheduler(TileScheduler):
         block_zero_only: bool = False,
         loc=None,
         ip=None,
-    ) -> cutlass.utils.WorkTileInfo:
+    ) -> WorkTileInfo:
         assert bidz is None
         params = self.params
         lane_idx = cute.arch.lane_idx()
@@ -1137,4 +1228,4 @@ class VarlenMTileScheduler(TileScheduler):
         tile_coord_mnkl = (pid_m, pid_n, None, batch_idx)
         self._current_batch_idx = batch_idx
         self._num_work_idx_before_cur_batch = num_work_idx_before_cur_batch
-        return cutlass.utils.WorkTileInfo(tile_coord_mnkl, is_valid)
+        return WorkTileInfo(tile_coord_mnkl, is_valid)

@@ -319,6 +319,44 @@ def issue_clc_query_nomulticast(
     )
 
 
+@cute.jit
+def semaphore_wait_eq(lock_ptr: cute.Pointer, expected: Int32):
+    """Warp-cooperative gmem semaphore wait: spin until *lock_ptr == expected.
+
+    Lane 0 spins with gpu-scope acquire loads; all lanes are synchronized after the
+    wait, and a fence.proxy.async.global orders subsequent async-proxy (TMA) accesses
+    after the acquire so they observe the releaser's completed stores. Wait-for-equal
+    gives turnstile semantics: releasers passing monotonically increasing values
+    serialize waiters in a fixed order (e.g. CUTLASS-style serial split-K).
+    """
+    if cute.arch.lane_idx() == 0:
+        state = cute.arch.load(lock_ptr, Int32, sem="acquire", scope="gpu")
+        while state != expected:
+            state = cute.arch.load(lock_ptr, Int32, sem="acquire", scope="gpu")
+    cute.arch.sync_warp()
+    cute.arch.fence_proxy("async.global")
+
+
+@cute.jit
+def semaphore_release(lock_ptr: cute.Pointer, value: Int32):
+    """Warp-cooperative gmem semaphore release: store value to *lock_ptr.
+
+    All lanes synchronize before lane 0 publishes prior generic-proxy writes with a
+    gpu-scope release store.
+    """
+    cute.arch.sync_warp()
+    if cute.arch.lane_idx() == 0:
+        cute.arch.store(lock_ptr, value, sem="release", scope="gpu")
+
+
+@cute.jit
+def semaphore_arrive_inc(lock_ptr: cute.Pointer, value: Int32 = 1):
+    """Release-increment a split-K arrival counter from one lane of a warp."""
+    cute.arch.sync_warp()
+    if cute.arch.lane_idx() == 0:
+        cute.arch.atomic_add(lock_ptr, Int32(value), sem="release", scope="gpu")
+
+
 @dsl_user_op
 def domain_offset_aligned(
     coord: cute.Coord, tensor: cute.Tensor, *, loc=None, ip=None
