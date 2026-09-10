@@ -209,6 +209,7 @@ def quack_rmsnorm_bwd(
         _read_only(dout),
         None,
         _read_only(rstd_flat),
+        None,
         dx,
         dw_partial,
         None,
