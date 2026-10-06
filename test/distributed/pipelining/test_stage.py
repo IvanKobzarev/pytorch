@@ -5,6 +5,7 @@ import copy
 import os
 import tempfile
 import weakref
+from collections import OrderedDict
 from contextlib import contextmanager, nullcontext
 from dataclasses import FrozenInstanceError
 from unittest import mock
@@ -163,7 +164,9 @@ class PipelineStageMetadataInferenceTest(TestCase):
             ):
                 backward_stage._prepare_backward_infra(1)
 
-    def test_dynamic_metadata_inference_restores_module_buffers(self):
+    def test_dynamic_metadata_inference_restores_module_and_external_state(self):
+        external_counter = 0
+
         class BufferMutatingModule(torch.nn.Module):
             def __init__(self) -> None:
                 super().__init__()
@@ -172,16 +175,20 @@ class PipelineStageMetadataInferenceTest(TestCase):
                 self.register_buffer("scale", torch.ones(4))
 
             def forward(self, x):
+                nonlocal external_counter
                 with torch.no_grad():
                     self.counter.add_(1)
+                    external_counter += 1
                 out = self.linear(x) * self.scale
                 if out.requires_grad:
                     out.register_hook(self._backward_hook)
                 return out
 
             def _backward_hook(self, grad):
+                nonlocal external_counter
                 with torch.no_grad():
                     self.counter.add_(10)
+                    external_counter += 10
                 return grad
 
         device = torch.device("cpu")
@@ -198,6 +205,14 @@ class PipelineStageMetadataInferenceTest(TestCase):
                 n_microbatches=1,
                 loss_fn=lambda out, target: out.sum() + target.sum() * 0,
             )
+            restored_external_counters = []
+
+            def restore_external_state():
+                nonlocal external_counter
+                restored_external_counters.append(external_counter)
+                external_counter = 0
+
+            stage.register_metadata_inference_state_restorer(restore_external_state)
 
             initial_counter = mod.counter.clone()
             initial_scale = mod.scale.clone()
@@ -211,6 +226,40 @@ class PipelineStageMetadataInferenceTest(TestCase):
 
             self.assertEqual(mod.counter, initial_counter)
             self.assertEqual(mod.scale, initial_scale)
+            self.assertEqual(restored_external_counters, [11])
+            self.assertEqual(external_counter, 0)
+
+    def test_metadata_inference_state_restorers_are_removable_and_all_run(self):
+        stage = PipelineStage.__new__(PipelineStage)
+        stage._inference_mode = InferenceMode.DYNAMIC
+        stage._registered_metadata_inference_state_restorers = OrderedDict()
+        stage._metadata_inference_buffer_backup = None
+        stage._fwd_outputs_for_bwd_meta = None
+        stage._fwd_inputs_for_bwd_meta = None
+        stage._fwd_kwargs_tensors_for_bwd_meta = None
+        stage.submod = torch.nn.Identity()
+
+        removed_restore = mock.Mock()
+        handle = stage.register_metadata_inference_state_restorer(removed_restore)
+        handle.remove()
+
+        restore_order = []
+
+        def failing_restore():
+            restore_order.append("first")
+            raise RuntimeError("restore failed")
+
+        def later_restore():
+            restore_order.append("second")
+
+        stage.register_metadata_inference_state_restorer(failing_restore)
+        stage.register_metadata_inference_state_restorer(later_restore)
+
+        with self.assertRaisesRegex(RuntimeError, "restore failed"):
+            stage._post_metadata_inference_cleanup()
+
+        removed_restore.assert_not_called()
+        self.assertEqual(restore_order, ["first", "second"])
 
 
 class PipelineStageForwardContextTest(TestCase):

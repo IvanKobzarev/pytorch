@@ -6,7 +6,7 @@ import warnings
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from collections.abc import Callable
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -1936,6 +1936,9 @@ class PipelineStage(_PipelineStageBase):
         self._metadata_inference_buffer_backup: (
             list[tuple[torch.Tensor, torch.Tensor]] | None
         ) = None
+        self._registered_metadata_inference_state_restorers: OrderedDict[
+            int, Callable[[], None]
+        ] = OrderedDict()
 
         # Validate and normalize args to tuples
         inputs = validate_and_normalize_to_tuple(input_args)
@@ -2077,6 +2080,28 @@ class PipelineStage(_PipelineStageBase):
             (buffer, buffer.detach().clone())
             for _, buffer in self.submod.named_buffers(remove_duplicate=False)
         ]
+
+    def register_metadata_inference_state_restorer(
+        self,
+        restore: Callable[[], None],
+    ) -> RemovableHandle:
+        """Register external state restoration after dynamic metadata inference.
+
+        Dynamic metadata inference restores module buffers automatically, but
+        a stage may also use mutable state owned outside its module hierarchy.
+        Registered callbacks run after the representative forward and backward,
+        even when module cleanup or an earlier callback raises.
+
+        Args:
+            restore: Callable that restores external state to its pre-inference
+                value.
+
+        Returns:
+            A handle that removes the registration.
+        """
+        handle = RemovableHandle(self._registered_metadata_inference_state_restorers)
+        self._registered_metadata_inference_state_restorers[handle.id] = restore
+        return handle
 
     def _forward_metadata_inference(
         self,
@@ -2327,25 +2352,32 @@ class PipelineStage(_PipelineStageBase):
         backward metadata inference. Restoring immediately after forward can
         bump autograd version counters for buffers saved by the forward graph.
         """
-        buffer_backup = self._metadata_inference_buffer_backup
-        if buffer_backup is not None:
-            with torch.no_grad():
-                for buffer, saved_buffer in buffer_backup:
-                    buffer.copy_(saved_buffer)
-            self._metadata_inference_buffer_backup = None
+        with ExitStack() as restore_stack:
+            if self._inference_mode == InferenceMode.DYNAMIC:
+                for restore in reversed(
+                    self._registered_metadata_inference_state_restorers.values()
+                ):
+                    restore_stack.callback(restore)
 
-        # Clear stored inference tensors (frees autograd graph + activations)
-        self._fwd_outputs_for_bwd_meta = None
-        self._fwd_inputs_for_bwd_meta = None
-        self._fwd_kwargs_tensors_for_bwd_meta = None
+            buffer_backup = self._metadata_inference_buffer_backup
+            if buffer_backup is not None:
+                with torch.no_grad():
+                    for buffer, saved_buffer in buffer_backup:
+                        buffer.copy_(saved_buffer)
+                self._metadata_inference_buffer_backup = None
 
-        # Metadata inference runs real fwd/bwd, which unshards FSDP params and
-        # accumulates grads.  Reshard to free memory and clear stale grads.
-        for module in self.submod.modules():
-            if isinstance(module, FSDPModule):
-                module.reshard()
-                for param in module.parameters():
-                    param.grad = None
+            # Clear stored inference tensors (frees autograd graph + activations)
+            self._fwd_outputs_for_bwd_meta = None
+            self._fwd_inputs_for_bwd_meta = None
+            self._fwd_kwargs_tensors_for_bwd_meta = None
+
+            # Metadata inference runs real fwd/bwd, which unshards FSDP params and
+            # accumulates grads.  Reshard to free memory and clear stale grads.
+            for module in self.submod.modules():
+                if isinstance(module, FSDPModule):
+                    module.reshard()
+                    for param in module.parameters():
+                        param.grad = None
 
     def _prepare_backward_infra(
         self,
