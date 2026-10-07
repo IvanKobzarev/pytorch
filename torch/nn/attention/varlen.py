@@ -137,6 +137,12 @@ def _cudnn_rejection_reasons(
     needs_backward = torch.is_grad_enabled() and any(
         tensor.requires_grad for tensor in (query, key, value)
     )
+    if (
+        needs_backward
+        and torch.are_deterministic_algorithms_enabled()
+        and not torch.is_deterministic_algorithms_warn_only_enabled()
+    ):
+        reasons.append("cuDNN attention backward has no deterministic implementation")
     if not _cudnn_supports_head_dims(query, value, needs_backward):
         phase = "backward" if needs_backward else "forward"
         reasons.append(

@@ -29,6 +29,7 @@ from torch.testing._internal.common_device_type import instantiate_device_type_t
 from torch.testing._internal.common_nn import NNTestCase
 from torch.testing._internal.common_utils import (
     decorateIf,
+    DeterministicGuard,
     HardwareClassification,
     parametrize,
     run_tests,
@@ -995,6 +996,38 @@ class TestVarlenAttention(NNTestCase):
 
         self.assertEqual(cudnn_forward.call_count, 0)
         self.assertEqual(cudnn_backward.call_count, 0)
+
+    @skipIfRocm
+    @unittest.skipIf(
+        not PLATFORM_SUPPORTS_FLASH_ATTENTION, "Flash Attention not supported"
+    )
+    def test_cudnn_varlen_rejected_for_strict_deterministic_backward(self, device):
+        _check_cudnn_varlen_supported(device)
+        q, k, v, cu_seq = _make_causal_varlen_inputs(device, requires_grad=True)
+        seq_len = q.size(0)
+
+        with (
+            DeterministicGuard(True),
+            _use_cudnn_varlen(True, device),
+            patch.object(
+                torch.ops.aten,
+                "_cudnn_attention_forward",
+                wraps=torch.ops.aten._cudnn_attention_forward,
+            ) as cudnn_forward,
+        ):
+            out = varlen_attn(
+                q,
+                k,
+                v,
+                cu_seq,
+                cu_seq,
+                seq_len,
+                seq_len,
+                window_size=(-1, 0),
+            )
+
+        self.assertEqual(cudnn_forward.call_count, 0)
+        torch.autograd.grad(out.sum(), (q, k, v))
 
     @skipIfRocm
     @parametrize("different_kv_stride", [False, True])
