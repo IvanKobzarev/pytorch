@@ -533,16 +533,23 @@ def is_fsdp_all_gather(
     node: torch.fx.Node,
     all_node_ancestors: BitsetAncestors | None = None,
 ) -> bool:
-    """Check if an all_gather derives from exactly one placeholder (parameter).
+    """Check if an all_gather tensor input derives from one placeholder.
 
     When all_node_ancestors is provided, uses it for O(|ancestors|) lookup.
     Otherwise delegates to the BFS implementation in fsdp.py.
     """
     if not is_all_gather_into_tensor(node):
         return False
+    tensor_input = node.args[0]
+    if not isinstance(tensor_input, torch.fx.Node):
+        return False
     if all_node_ancestors is not None:
+        if tensor_input.op == "placeholder":
+            return True
         phs = (
-            a for a in all_node_ancestors.iter_ancestors(node) if a.op == "placeholder"
+            ancestor
+            for ancestor in all_node_ancestors.iter_ancestors(tensor_input)
+            if ancestor.op == "placeholder"
         )
         return next(phs, None) is not None and next(phs, None) is None
     from torch._inductor.fx_passes.fsdp import is_fsdp_all_gather as _is_fsdp_all_gather

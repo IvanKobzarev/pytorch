@@ -34,14 +34,17 @@ logger.setLevel(logging.INFO)
 def is_fsdp_all_gather(n: torch.fx.Node) -> bool:
     """Check if an all_gather derives from exactly one placeholder (parameter).
 
-    Uses backward BFS to count placeholder ancestors across all input branches.
+    Uses backward BFS to count placeholder ancestors of the tensor input.
     Handles multi-input chains (e.g. cat(param, zeros) for padding) that the old
     single-input-chain walk would miss.
     """
     if not is_all_gather(n):
         raise AssertionError(f"expected an all_gather node, got {n}")
+    tensor_input = n.args[0]
+    if not isinstance(tensor_input, torch.fx.Node):
+        return False
     visited: OrderedSet[torch.fx.Node] = OrderedSet()
-    queue = list(n.all_input_nodes)
+    queue = [tensor_input]
     placeholders = 0
     while queue:
         node = queue.pop()

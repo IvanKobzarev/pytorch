@@ -1,5 +1,6 @@
 # Owner(s): ["module: inductor"]
 import json
+import operator
 import os
 import sys
 import tempfile
@@ -3066,6 +3067,59 @@ class TestPreBucketingFsdpCollectives(InductorTestCase):
 instantiate_device_type_tests(
     TestPreBucketingFsdpCollectives, globals(), except_for="cpu"
 )
+
+
+class TestFsdpAllGatherClassification(TestCase):
+    hw_classification = HardwareClassification.GENERIC
+
+    @parametrize(
+        "tensor_input_kind, expected",
+        [
+            ("parameter", True),
+            ("padded_parameter", True),
+            ("multiple_parameters", False),
+            ("non_node", False),
+        ],
+    )
+    def test_ignores_dynamic_process_group_ancestry(self, tensor_input_kind, expected):
+        from torch._inductor.fx_passes.bucketing import (
+            is_fsdp_all_gather as is_fsdp_all_gather_bitset,
+        )
+        from torch._inductor.fx_passes.fsdp import (
+            is_fsdp_all_gather as is_fsdp_all_gather_bfs,
+        )
+        from torch._inductor.fx_passes.utils import BitsetAncestors
+
+        graph = fx.Graph()
+        parameter = graph.placeholder("parameter")
+        mesh = graph.placeholder("mesh")
+        process_group = graph.call_function(operator.getitem, (mesh, 0))
+        if tensor_input_kind == "parameter":
+            tensor_input = parameter
+        elif tensor_input_kind == "padded_parameter":
+            padding = graph.call_function(torch.ops.aten.zeros.default, ([4],))
+            tensor_input = graph.call_function(
+                torch.ops.aten.cat.default, ([parameter, padding],)
+            )
+        elif tensor_input_kind == "multiple_parameters":
+            second_parameter = graph.placeholder("second_parameter")
+            tensor_input = graph.call_function(
+                torch.ops.aten.cat.default, ([parameter, second_parameter],)
+            )
+        else:
+            tensor_input = 1.0
+        all_gather = graph.call_function(
+            torch.ops._c10d_functional.all_gather_into_tensor.default,
+            (tensor_input, 2, process_group),
+        )
+        graph.output(all_gather)
+
+        ancestors = BitsetAncestors(list(graph.nodes))
+        self.assertEqual(is_fsdp_all_gather_bitset(all_gather, ancestors), expected)
+        self.assertEqual(is_fsdp_all_gather_bfs(all_gather), expected)
+
+
+instantiate_parametrized_tests(TestFsdpAllGatherClassification)
 
 
 class TestBitsetAncestors(TestCase):
