@@ -7,7 +7,7 @@ import pickle
 import weakref
 from abc import abstractmethod
 from collections.abc import Callable, Generator
-from typing import Any, NewType, TypeVar
+from typing import Any, NewType, TypeAlias, TypeVar
 from typing_extensions import override, Self
 
 from torch.utils._import_utils import import_dill
@@ -39,6 +39,9 @@ from torch.utils._mode_utils import no_dispatch
 
 
 _SymNodeT = TypeVar("_SymNodeT", torch.SymInt, torch.SymFloat)
+_MapLocation: TypeAlias = (
+    str | torch.device | dict[str, str] | Callable[[torch.device], torch.device] | None
+)
 
 
 def _ops_filter_safe(name: str) -> bool:
@@ -217,17 +220,37 @@ class GraphPickler(pickle.Pickler):
             return stream.getvalue()
 
     @staticmethod
-    def loads(data: bytes, fake_mode: FakeTensorMode) -> object:
+    def loads(
+        data: bytes,
+        fake_mode: FakeTensorMode,
+        *,
+        map_location: _MapLocation = None,
+    ) -> object:
         """
-        Unpickle an object.
+        Unpickle an object, remapping real and fake tensors to new devices.
+
+        ``map_location`` may be a device, a device string, a dictionary mapping
+        serialized device strings to device strings, or a callable mapping a
+        :class:`torch.device` to a :class:`torch.device`. Unlike
+        :func:`torch.load`, the callable receives a device rather than a storage
+        because GraphPickler also remaps FakeTensors, which have no real storage.
         """
         from torch._dynamo.utils import dynamo_timed
 
         with patch_pytree_map_over_slice(), dynamo_timed("GraphPickler.loads"):
-            state = _UnpickleState(fake_mode)
+            state = _UnpickleState(fake_mode, map_location)
             with io.BytesIO(data) as stream:
                 unpickler = _GraphUnpickler(stream, state)
-                return unpickler.load()
+                map_location_adapter = state.map_location_adapter
+                serialization_tls = torch.serialization._serialization_tls
+                previous_map_location = serialization_tls.map_location
+                if map_location_adapter is not None:
+                    serialization_tls.map_location = map_location_adapter
+                try:
+                    return unpickler.load()
+                finally:
+                    if map_location_adapter is not None:
+                        serialization_tls.map_location = previous_map_location
 
     @classmethod
     def debug_dumps(
@@ -419,9 +442,70 @@ class GraphPickler(pickle.Pickler):
 
 
 class _UnpickleState:
-    def __init__(self, fake_mode: FakeTensorMode) -> None:
+    def __init__(
+        self,
+        fake_mode: FakeTensorMode,
+        map_location: _MapLocation = None,
+    ) -> None:
         self.fake_mode = fake_mode
         self.meta_converter: MetaConverter[FakeTensor] = MetaConverter()
+        self.map_location = map_location
+        self.map_location_adapter = (
+            _MapLocationAdapter(self) if map_location is not None else None
+        )
+        self._meta_tensor_memo: dict[int, MetaTensorDesc[Any]] = {}
+
+    def map_device(self, device: torch.device | str) -> torch.device:
+        device = torch.device(device)
+        if self.map_location is None:
+            return device
+        if isinstance(self.map_location, dict):
+            return torch.device(self.map_location.get(str(device), str(device)))
+        if isinstance(self.map_location, (str, torch.device)):
+            return torch.device(self.map_location)
+        return torch.device(self.map_location(device))
+
+    def map_meta_tensor(self, metadata: MetaTensorDesc[Any]) -> MetaTensorDesc[Any]:
+        if self.map_location is None:
+            return metadata
+        if mapped := self._meta_tensor_memo.get(id(metadata)):
+            return mapped
+
+        def map_optional(
+            value: MetaTensorDesc[Any] | None,
+        ) -> MetaTensorDesc[Any] | None:
+            return self.map_meta_tensor(value) if value is not None else None
+
+        mapped = dataclasses.replace(
+            metadata,
+            device=self.map_device(metadata.device),
+            crow_indices=map_optional(metadata.crow_indices),
+            col_indices=map_optional(metadata.col_indices),
+            ccol_indices=map_optional(metadata.ccol_indices),
+            row_indices=map_optional(metadata.row_indices),
+            values=map_optional(metadata.values),
+            unwrapped=map_optional(metadata.unwrapped),
+            base=map_optional(metadata.base),
+            attrs={
+                key: self.map_meta_tensor(value)
+                for key, value in metadata.attrs.items()
+            }
+            if metadata.attrs is not None
+            else None,
+            grad=map_optional(metadata.grad),
+        )
+        self._meta_tensor_memo[id(metadata)] = mapped
+        return mapped
+
+
+class _MapLocationAdapter(dict[str, str]):
+    def __init__(self, unpickle_state: _UnpickleState) -> None:
+        super().__init__()
+        self._unpickle_state = unpickle_state
+
+    # pyrefly: ignore [bad-override]
+    def get(self, saved: Any, default: Any = None) -> str:
+        return str(self._unpickle_state.map_device(saved))
 
 
 # This token is passed when pickling to indicate that we want to use the
@@ -431,9 +515,35 @@ _UnpickleStateToken = NewType("_UnpickleStateToken", object)
 
 # pyrefly: ignore [invalid-inheritance]
 class _GraphUnpickler(pickle.Unpickler):
-    def __init__(self, stream: io.BytesIO, unpickle_state: _UnpickleState) -> None:
+    def __init__(
+        self,
+        stream: io.BytesIO,
+        unpickle_state: _UnpickleState,
+    ) -> None:
         super().__init__(stream)
         self._unpickle_state = unpickle_state
+
+    def _load_storage_from_bytes(self, data: bytes) -> object:
+        map_location = self._unpickle_state.map_location_adapter
+        try:
+            return torch.load(
+                io.BytesIO(data),
+                map_location=map_location,
+                weights_only=False,
+            )
+        finally:
+            torch.serialization._serialization_tls.map_location = map_location
+
+    @override
+    # pyrefly: ignore [bad-override]
+    def find_class(self, mod_name: str, name: str) -> Any:
+        if (
+            self._unpickle_state.map_location is not None
+            and mod_name == "torch.storage"
+            and name == "_load_from_bytes"
+        ):
+            return self._load_storage_from_bytes
+        return super().find_class(mod_name, name)
 
     @override
     # pyrefly: ignore [bad-override]
@@ -561,7 +671,7 @@ class _TensorPickleData:
     def unpickle(self, unpickle_state: _UnpickleState) -> FakeTensor:
         # TODO: make common w/ _output_from_cache_entry() in fake_tensor.py?
         metadata = dataclasses.replace(
-            self.metadata,
+            unpickle_state.map_meta_tensor(self.metadata),
             fake_mode=unpickle_state.fake_mode,
         )
 

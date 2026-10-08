@@ -60,6 +60,14 @@ def make_test_cls(cls, xfail_prop="_expected_failure_graph_pickler"):
 GraphPicklerCommonTemplate = make_test_cls(CommonTemplate)
 
 
+class _NoStorageTensor:
+    def __reduce__(self):
+        return (
+            torch._utils._rebuild_device_tensor_from_numpy,
+            (torch.arange(4).numpy(), torch.float32, "meta", False),
+        )
+
+
 if HAS_CPU and HAS_DILL:
 
     class GraphPicklerCpuTests(TestCase):
@@ -96,6 +104,146 @@ class TestGraphPickler(TestCase):
             return a + b
 
         check_model(self, fn, (torch.tensor([False, True]), torch.tensor([True, True])))
+
+
+@unittest.skipUnless(HAS_DILL, "dill not available")
+class TestGraphPicklerMapLocation(TestCase):
+    def setUp(self):
+        super().setUp()
+        from torch.fx._graph_pickler import GraphPickler
+
+        self.GraphPickler = GraphPickler
+
+    def test_omitted_map_location_uses_default_storage_loader(self):
+        data = self.GraphPickler.dumps(torch.arange(4))
+        load_from_bytes = torch.storage._load_from_bytes
+
+        with patch(
+            "torch.storage._load_from_bytes", wraps=load_from_bytes
+        ) as storage_loader:
+            restored = self.GraphPickler.loads(
+                data,
+                torch._subclasses.FakeTensorMode(),
+            )
+
+        self.assertEqual(restored, torch.arange(4))
+        storage_loader.assert_called_once()
+
+    def test_callable_preserves_cpu_tensors(self):
+        base = torch.arange(20).reshape(4, 5).clone()
+        view = base[1:, 1::2]
+        locations = []
+
+        def map_location(device):
+            locations.append(device)
+            return device
+
+        restored_base, restored_duplicate, restored_view = self.GraphPickler.loads(
+            self.GraphPickler.dumps((base, base, view)),
+            torch._subclasses.FakeTensorMode(),
+            map_location=map_location,
+        )
+
+        self.assertIs(restored_base, restored_duplicate)
+        self.assertEqual(locations, [torch.device("cpu"), torch.device("cpu")])
+        self.assertEqual(restored_base.device, torch.device("cpu"))
+        self.assertEqual(restored_view.device, torch.device("cpu"))
+        self.assertEqual(restored_view.shape, view.shape)
+        self.assertEqual(restored_view.stride(), view.stride())
+        self.assertEqual(restored_view.storage_offset(), view.storage_offset())
+
+    def test_equal_storages_remain_distinct(self):
+        first = torch.zeros(4)
+        second = torch.zeros(4)
+
+        restored_first, restored_second = self.GraphPickler.loads(
+            self.GraphPickler.dumps((first, second)),
+            torch._subclasses.FakeTensorMode(),
+            map_location="cpu",
+        )
+
+        self.assertNotEqual(
+            restored_first.untyped_storage()._cdata,
+            restored_second.untyped_storage()._cdata,
+        )
+
+    def test_cuda_tag_maps_real_tensors_to_meta(self):
+        base = torch.arange(20).reshape(4, 5).clone()
+        view = base[1:, 1::2]
+        with patch("torch.serialization.location_tag", return_value="cuda:0"):
+            data = self.GraphPickler.dumps((base, view))
+
+        restored_base, restored_view = self.GraphPickler.loads(
+            data,
+            torch._subclasses.FakeTensorMode(),
+            map_location="meta",
+        )
+
+        self.assertEqual(restored_base.device, torch.device("meta"))
+        self.assertEqual(restored_view.device, torch.device("meta"))
+        self.assertEqual(restored_view.shape, view.shape)
+        self.assertEqual(restored_view.stride(), view.stride())
+        self.assertEqual(restored_view.storage_offset(), view.storage_offset())
+
+    def test_callable_maps_fake_tensor_view_and_base(self):
+        source_mode = torch._subclasses.FakeTensorMode()
+        base = torch._subclasses.FakeTensor(
+            source_mode,
+            torch.empty(4, 5, device="meta"),
+            torch.device("cuda:0"),
+        )
+        view = base[1:, 1::2]
+
+        restored_base, restored_duplicate, restored_view = self.GraphPickler.loads(
+            self.GraphPickler.dumps((base, base, view)),
+            torch._subclasses.FakeTensorMode(),
+            map_location=lambda device: torch.device("cpu")
+            if device.type == "cuda"
+            else device,
+        )
+
+        self.assertIs(restored_base, restored_duplicate)
+        self.assertEqual(restored_base.device, torch.device("cpu"))
+        self.assertEqual(restored_view.device, torch.device("cpu"))
+        self.assertIs(restored_view._base, restored_base)
+        self.assertEqual(restored_view.shape, view.shape)
+        self.assertEqual(restored_view.stride(), view.stride())
+        self.assertEqual(restored_view.storage_offset(), view.storage_offset())
+
+    def test_dict_maps_fake_tensor_device_once(self):
+        source = torch._subclasses.FakeTensor(
+            torch._subclasses.FakeTensorMode(),
+            torch.empty(2, device="meta"),
+            torch.device("cuda:0"),
+        )
+
+        restored = self.GraphPickler.loads(
+            self.GraphPickler.dumps(source),
+            torch._subclasses.FakeTensorMode(),
+            map_location={"cuda:0": "cuda:1", "cuda:1": "cuda:2"},
+        )
+
+        self.assertEqual(restored.device, torch.device("cuda:1"))
+
+    def test_no_storage_rebuild_uses_map_location_after_storage_load(self):
+        data = self.GraphPickler.dumps((torch.ones(1), _NoStorageTensor()))
+        serialization_tls = torch.serialization._serialization_tls
+        previous_map_location = serialization_tls.map_location
+        sentinel = {"cpu": "meta"}
+        serialization_tls.map_location = sentinel
+
+        try:
+            _, restored = self.GraphPickler.loads(
+                data,
+                torch._subclasses.FakeTensorMode(),
+                map_location={"meta": "cpu"},
+            )
+            self.assertIs(serialization_tls.map_location, sentinel)
+        finally:
+            serialization_tls.map_location = previous_map_location
+
+        self.assertEqual(restored.device, torch.device("cpu"))
+        self.assertEqual(restored, torch.arange(4, dtype=torch.float32))
 
 
 @unittest.skipUnless(HAS_DILL, "dill not available")
