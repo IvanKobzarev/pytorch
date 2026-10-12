@@ -66,6 +66,28 @@ class AutoFunctionalizeTests(torch._inductor.test_case.TestCase):
 
             f(x, out)
 
+    @unittest.skipIf(not torch.cuda.is_available(), "requires CUDA")
+    @torch._inductor.config.patch(enable_auto_functionalized_v2=True)
+    def test_auto_functionalize_unsupported_auxiliary_input(self):
+        with torch.library._scoped_library("mylib", "FRAGMENT") as lib:
+            lib.define("mutate_(Tensor(a!) out, Tensor scale) -> ()")
+
+            def mutate_impl(out, scale):
+                del scale
+                out.add_(1)
+
+            lib.impl("mutate_", mutate_impl, "CUDA")
+            lib.impl("mutate_", lambda out, scale: None, "Meta")
+
+            def f(out, scale):
+                torch.ops.mylib.mutate_(out, scale)
+                return out
+
+            out = torch.zeros(4, device="cuda", dtype=torch.bfloat16)
+            scale = torch.empty(1, device="cuda", dtype=torch.float8_e8m0fnu)
+            torch.compile(f, backend="inductor", fullgraph=True)(out, scale)
+            self.assertEqual(out, torch.ones_like(out))
+
     def test_auto_functionalize_self_as_mutate_arg(self):
         with torch.library._scoped_library("mylib", "FRAGMENT") as lib:
             lib.define("foo(Tensor(a!) self) -> None")

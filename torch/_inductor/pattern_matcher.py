@@ -2711,6 +2711,8 @@ class PatternMatcherPass:
         self,
         pass_name: str | None = None,
         subsystem: str | None = None,
+        *,
+        skip_unsupported_types: bool = True,
     ) -> None:
         super().__init__()
         self.patterns: defaultdict[
@@ -2718,6 +2720,7 @@ class PatternMatcherPass:
         ] = defaultdict(list)
         self.pass_name = pass_name
         self.subsystem = subsystem
+        self.skip_unsupported_types = skip_unsupported_types
 
         # For a particular generated pattern repr, store all of the str representations
         # of the graph used to generate them. Because we ignore certain patterns
@@ -2769,7 +2772,12 @@ class PatternMatcherPass:
                 # conservatively not applying pattern for cpu input,
                 # since some of the patterns induce codegen and split nodes.
                 # Note: we will only skip cpu compute if disable_cpp_codegen=True
-                if fallback_node_due_to_unsupported_type(node, allow_cpu_inputs=False):
+                if (
+                    self.skip_unsupported_types
+                    and fallback_node_due_to_unsupported_type(
+                        node, allow_cpu_inputs=False
+                    )
+                ):
                     continue
 
                 for entry in self.patterns[(node.op, target)]:

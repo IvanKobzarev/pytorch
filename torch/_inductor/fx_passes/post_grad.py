@@ -1795,7 +1795,9 @@ def decompose_auto_functionalized(graph):
     """
     apply_pass_to_control_deps_subgraphs(decompose_auto_functionalized, graph)
 
-    graph_pass = PatternMatcherPass()
+    # This pass eliminates the higher-order op before lowering, so unsupported
+    # types on the wrapped op's inputs must not prevent the pattern from firing.
+    graph_pass = PatternMatcherPass(skip_unsupported_types=False)
 
     @register_graph_pattern(
         CallFunctionVarArgs(torch.ops.higher_order.auto_functionalized),
